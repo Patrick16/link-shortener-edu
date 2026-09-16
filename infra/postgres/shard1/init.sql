@@ -1,0 +1,1 @@
+-- TODO: схема шарда 1 (таблица Links: hash PK, originLink, shortenLink, userId).

@@ -1,0 +1,4 @@
+services:
+  # TODO: nginx (балансировщик), auth-api, link-api, redirect-api,
+  # shortener-service, traffic-service, rabbitmq, redis, mongo,
+  # postgres-users, postgres-clicks — плюс шарды из docker-compose.shard*.yml
