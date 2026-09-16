@@ -481,5 +481,18 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 
-#local notes
-.notes/*
+# Claude Code & AI assistant files
+# (local configuration, memory files, temporary instructions, etc.)
+.claude/
+.codeium/
+.notes/
+claude-*.md
+CLAUDE.md
+
+# Local AI assistant state
+.ai-*
+*.claude-*
+
+# Temporary files from Claude Code sessions
+.scratchpad/
+*.tmp.claude
