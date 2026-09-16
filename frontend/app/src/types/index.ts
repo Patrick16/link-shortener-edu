@@ -1,2 +1,2 @@
-// TODO: типы User, Link, ClickStat — держать в синхроне с Shared/Contracts.
+// TODO: User, Link, ClickStat types — keep in sync with Shared/Contracts.
 export {}

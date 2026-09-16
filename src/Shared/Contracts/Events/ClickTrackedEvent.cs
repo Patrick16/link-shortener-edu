@@ -1,7 +1,7 @@
 namespace Contracts.Events;
 
-// TODO: событие "клик по короткой ссылке" — публикуется RedirectApi в RabbitMQ,
-// потребляется TrafficService для записи в Postgres Clicks и Mongo ClicksMeta.
+// TODO: "short link clicked" event — published by RedirectApi to RabbitMQ,
+// consumed by TrafficService to write to Postgres Clicks and Mongo ClicksMeta.
 public record ClickTrackedEvent
 {
 }

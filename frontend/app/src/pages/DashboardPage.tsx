@@ -1,2 +1,2 @@
-// TODO: список ссылок пользователя + статистика кликов.
+// TODO: user's link list + click stats.
 export {}

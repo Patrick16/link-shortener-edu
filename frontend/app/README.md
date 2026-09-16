@@ -1,12 +1,12 @@
 # Link Shortener — Demo App
 
-Небольшое веб-приложение поверх бэкенда: создание коротких ссылок, логин, просмотр статистики кликов.
+A small web app on top of the backend: create short links, log in, view click stats.
 
-Подключается к `AuthApi` / `LinkApi` / `RedirectApi` (см. `.env.example`).
+Connects to `AuthApi` / `LinkApi` / `RedirectApi` (see `.env.example`).
 
-Стек: React + TypeScript + Vite.
+Stack: React + TypeScript + Vite.
 
-## Разработка
+## Development
 
 ```bash
 npm install

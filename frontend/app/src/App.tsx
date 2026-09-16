@@ -1,7 +1,7 @@
 import './App.css'
 
-// TODO: маршрутизация (создание ссылки, логин, дашборд статистики кликов),
-// вызовы AuthApi / LinkApi / RedirectApi через src/api.
+// TODO: routing (create link, login, click-stats dashboard),
+// calls to AuthApi / LinkApi / RedirectApi via src/api.
 function App() {
   return (
     <main>

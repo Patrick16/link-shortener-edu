@@ -1,6 +1,6 @@
 namespace Infrastructure;
 
-// TODO: обёртка над подключением к Redis (кэш Links для RedirectApi).
+// TODO: connection wrapper around Redis (Links cache for RedirectApi).
 public class RedisClient
 {
 }

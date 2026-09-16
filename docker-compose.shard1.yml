@@ -1,2 +1,2 @@
 services:
-  # TODO: postgres-shard1 (+ реплика) и pgcat-shard1, конфиг из infra/pgcat/shard1.toml
+  # TODO: postgres-shard1 (+ replica) and pgcat-shard1, config from infra/pgcat/shard1.toml

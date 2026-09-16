@@ -1,1 +1,1 @@
-# TODO: конфиг pgcat/pgbouncer для шарда 2 Postgres Links (пул соединений, primary+реплики).
+# TODO: pgcat/pgbouncer config for Postgres Links shard 2 (connection pool, primary+replicas).

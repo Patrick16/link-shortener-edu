@@ -1,2 +1,2 @@
-// TODO: карточка с деталями связи (протокол, формат, sync/async).
+// TODO: connection details card (protocol, format, sync/async).
 export {}

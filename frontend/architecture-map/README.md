@@ -1,14 +1,14 @@
 # Architecture Map
 
-Интерактивная образовательная диаграмма архитектуры проекта: клик по узлу/связи открывает карточку
-с деталями (стек, конфиг, ссылки на код), переключатель показывает сценарии 1-5 (от минимального
-стека до шардирования и масштабирования pgcat).
+An interactive educational diagram of the project's architecture: clicking a node/connection opens
+a details card (stack, config, links to code); a scenario switcher shows scenarios 1-5 (from the
+minimal stack up to pgcat sharding and pooler scaling).
 
-План/схема данных: `.notes/ARCHITECTURE_MAP_PLAN.md`.
+Plan/data schema: `.notes/ARCHITECTURE_MAP_PLAN.md`.
 
-Стек: React + TypeScript + Vite.
+Stack: React + TypeScript + Vite.
 
-## Разработка
+## Development
 
 ```bash
 npm install

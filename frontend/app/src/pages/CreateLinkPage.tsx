@@ -1,2 +1,2 @@
-// TODO: форма создания короткой ссылки (POST -> LinkApi).
+// TODO: short link creation form (POST -> LinkApi).
 export {}

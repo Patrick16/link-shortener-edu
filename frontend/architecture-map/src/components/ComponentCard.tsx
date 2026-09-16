@@ -1,2 +1,2 @@
-// TODO: карточка с деталями узла (purpose, tech stack, config, ссылки на код).
+// TODO: node details card (purpose, tech stack, config, links to code).
 export {}

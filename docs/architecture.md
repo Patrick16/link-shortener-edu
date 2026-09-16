@@ -1,30 +1,30 @@
-# Архитектура
+# Architecture
 
-## Компоненты
+## Components
 
-- **AuthApi** — регистрация / логин, пишет в `Postgres users`. Отдаёт `UserAuth` остальным сервисам.
-- **LinkApi** — приём запроса на создание короткой ссылки. Если пользователь авторизован — `userId` пишется в hash. Публикует `origin link` в RabbitMQ для `ShortenerService`.
-- **ShortenerService** (воркер) — слушает RabbitMQ, генерирует hash, пишет короткую ссылку в `Postgres Links` (шардированную).
-- **RedirectApi** — принимает короткую ссылку, резолвит origin link через `Redis Links` (кэш) либо напрямую, отдаёт редирект, публикует событие клика в RabbitMQ.
-- **TrafficService** (воркер) — слушает RabbitMQ, пишет клики в `Postgres Clicks Users` и метаданные (user-agent, referrer, headers) в `Mongo Clicks meta`.
+- **AuthApi** — registration / login, writes to `Postgres users`. Provides `UserAuth` to other services.
+- **LinkApi** — accepts requests to create a short link. If the user is authenticated, `userId` is written into the hash. Publishes `origin link` to RabbitMQ for `ShortenerService`.
+- **ShortenerService** (worker) — listens on RabbitMQ, generates the hash, writes the short link to `Postgres Links` (sharded).
+- **RedirectApi** — accepts a short link, resolves the origin link via `Redis Links` (cache) or directly, returns the redirect, publishes a click event to RabbitMQ.
+- **TrafficService** (worker) — listens on RabbitMQ, writes clicks to `Postgres Clicks Users` and metadata (user-agent, referrer, headers) to `Mongo Clicks meta`.
 
-## Хранилища
+## Storage
 
 - `Postgres users` — Users(id, name, email, passwordHash, sault)
-- `Postgres Links` — **шардирована** (см. `infra/pgcat/shard1.toml`, `shard2.toml`): Links(hash PK, originLink, shortenLink, userId?)
-- `Redis Links` — кэш hash → originLink для быстрого редиректа
+- `Postgres Links` — **sharded** (see `infra/pgcat/shard1.toml`, `shard2.toml`): Links(hash PK, originLink, shortenLink, userId?)
+- `Redis Links` — cache of hash → originLink for fast redirects
 - `Postgres Clicks Users` — Clicks(id, clickedAt, inboundLink, outboundLink, hash)
 - `Mongo Clicks meta` — ClicksMeta(id, clickedAt, userAgent, referrer, origin, headers)
 
-## Инфраструктура для практики хайлоада
+## Infrastructure for High-Load Practice
 
-- **Шардирование** Postgres Links по hash(key) % N через `ShardResolver` + pgcat-пулы на шард
-- **Реплики** сервисов (несколько инстансов каждого API/воркера за nginx)
-- **Партиционирование** Clicks/ClicksMeta по времени
-- **Шина** RabbitMQ между API и воркерами (LinkApi → ShortenerService, RedirectApi → TrafficService)
-- **pgcat/pgbouncer** — пулинг соединений к каждому шарду Postgres
-- **nginx** — балансировщик нагрузки перед API-сервисами
+- **Sharding** of Postgres Links via hash(key) % N through `ShardResolver` + pgcat pools per shard
+- **Service replicas** (multiple instances of each API/worker behind nginx)
+- **Partitioning** of Clicks/ClicksMeta by time
+- **Message bus** RabbitMQ between APIs and workers (LinkApi → ShortenerService, RedirectApi → TrafficService)
+- **pgcat/pgbouncer** — connection pooling to each Postgres shard
+- **nginx** — load balancer in front of the API services
 
 ## TODO
 
-Детали (schema, конфиги pgcat/nginx/rabbitmq, docker-compose) заполняются по ходу практики — см. `infra/` и корневые `docker-compose*.yml`.
+Details (schema, pgcat/nginx/rabbitmq configs, docker-compose) are filled in as the project progresses — see `infra/` and the root `docker-compose*.yml` files.

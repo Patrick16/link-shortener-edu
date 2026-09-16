@@ -1,6 +1,6 @@
 namespace Infrastructure;
 
-// TODO: обёртка над подключением/publish-consume к RabbitMQ, общая для всех сервисов.
+// TODO: shared connection/publish-consume wrapper around RabbitMQ, used by all services.
 public class RabbitMqClient
 {
 }

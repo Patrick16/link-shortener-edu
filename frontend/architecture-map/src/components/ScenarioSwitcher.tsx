@@ -1,2 +1,2 @@
-// TODO: переключатель сценариев 1-5, управляет тем какие узлы/связи показаны.
+// TODO: scenario switcher 1-5, controls which nodes/connections are shown.
 export {}

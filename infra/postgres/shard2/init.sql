@@ -1,1 +1,1 @@
--- TODO: схема шарда 2 (таблица Links: hash PK, originLink, shortenLink, userId).
+-- TODO: shard 2 schema (Links table: hash PK, originLink, shortenLink, userId).

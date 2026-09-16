@@ -1,2 +1,2 @@
-// TODO: форма логина/регистрации -> AuthApi.
+// TODO: login/register form -> AuthApi.
 export {}

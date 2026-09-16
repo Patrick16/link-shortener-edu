@@ -1,7 +1,7 @@
 namespace Contracts.Events;
 
-// TODO: событие "ссылка создана" — публикуется LinkApi в RabbitMQ,
-// потребляется ShortenerService для генерации hash и записи в Postgres Links.
+// TODO: "link created" event — published by LinkApi to RabbitMQ,
+// consumed by ShortenerService to generate the hash and write to Postgres Links.
 public record LinkCreatedEvent
 {
 }

@@ -1,8 +1,8 @@
 import './App.css'
 
-// TODO: интерактивная диаграмма архитектуры (узлы = сервисы/хранилища,
-// клик по узлу/связи -> карточка с деталями, переключатель сценариев 1-5).
-// См. data/architecture.json и .notes/ARCHITECTURE_MAP_PLAN.md.
+// TODO: interactive architecture diagram (nodes = services/storage,
+// click on a node/connection -> details card, scenario switcher 1-5).
+// See data/architecture.json and .notes/ARCHITECTURE_MAP_PLAN.md.
 function App() {
   return (
     <main>

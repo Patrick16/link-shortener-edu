@@ -1,2 +1,2 @@
-// TODO: общий fetch-обёртка (base URL из env, обработка ошибок, JWT header).
+// TODO: shared fetch wrapper (base URL from env, error handling, JWT header).
 export {}

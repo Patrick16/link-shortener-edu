@@ -1,2 +1,2 @@
-// TODO: SVG/canvas-диаграмма компонентов и связей (кандидат: reactflow).
+// TODO: SVG/canvas diagram of components and connections (candidate: reactflow).
 export {}

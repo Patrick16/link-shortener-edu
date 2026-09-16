@@ -1,2 +1,2 @@
-// TODO: register/login -> AuthApi (см. src/Services/AuthApi).
+// TODO: register/login -> AuthApi (see src/Services/AuthApi).
 export {}

@@ -1,3 +1,3 @@
-// TODO: типы Component, Connection, Scenario — соответствуют data/architecture.json.
-// Полная схема с примерами — в .notes/ARCHITECTURE_MAP_PLAN.md
+// TODO: Component, Connection, Scenario types — mirror data/architecture.json.
+// Full schema with examples — see .notes/ARCHITECTURE_MAP_PLAN.md
 export {}

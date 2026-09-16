@@ -1,2 +1,2 @@
-// TODO: статистика кликов по ссылке (источник данных уточним при реализации TrafficService).
+// TODO: click stats per link (data source TBD once TrafficService is implemented).
 export {}
