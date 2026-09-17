@@ -1,13 +1,20 @@
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
 namespace Infrastructure;
 
-public sealed class RabbitMqConsumer(IRabbitMqConnection connection) : IMessageConsumer
+public sealed class RabbitMqConsumer(
+    IRabbitMqConnection connection,
+    ILogger<RabbitMqConsumer> logger) : IMessageConsumer
 {
+    private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
+
     private readonly IRabbitMqConnection _connection = connection;
+    private readonly ILogger<RabbitMqConsumer> _logger = logger;
 
     public async Task ConsumeAsync<TMessage>(
         string queueName,
@@ -19,30 +26,12 @@ public sealed class RabbitMqConsumer(IRabbitMqConnection connection) : IMessageC
         ArgumentException.ThrowIfNullOrEmpty(routingKey);
         ArgumentNullException.ThrowIfNull(handler);
 
-        var channel = await _connection.CreateChannelAsync(cancellationToken);
+        // The broker being briefly unreachable at startup (a container health check that passed
+        // before the AMQP listener actually opened, a restart, ...) shouldn't crash this worker —
+        // that's exactly the kind of transient condition retrying should absorb.
+        var channel = await SetUpChannelWithRetryAsync(queueName, routingKey, cancellationToken).ConfigureAwait(false);
         await using (channel.ConfigureAwait(false))
         {
-            await channel.ExchangeDeclareAsync(
-                MessagingConstants.EventsExchange,
-                ExchangeType.Topic,
-                durable: true,
-                cancellationToken: cancellationToken);
-
-            await channel.QueueDeclareAsync(
-                queueName,
-                durable: true,
-                exclusive: false,
-                autoDelete: false,
-                cancellationToken: cancellationToken);
-
-            await channel.QueueBindAsync(
-                queueName,
-                MessagingConstants.EventsExchange,
-                routingKey,
-                cancellationToken: cancellationToken);
-
-            await channel.BasicQosAsync(0, prefetchCount: 10, global: false, cancellationToken: cancellationToken);
-
             var consumer = new AsyncEventingBasicConsumer(channel);
             consumer.ReceivedAsync += async (_, ea) =>
             {
@@ -69,6 +58,55 @@ public sealed class RabbitMqConsumer(IRabbitMqConnection connection) : IMessageC
             var stopped = new TaskCompletionSource();
             await using var registration = cancellationToken.Register(() => stopped.TrySetResult());
             await stopped.Task.ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IChannel> SetUpChannelWithRetryAsync(
+        string queueName,
+        string routingKey,
+        CancellationToken cancellationToken)
+    {
+        var delay = InitialRetryDelay;
+        while (true)
+        {
+            try
+            {
+                var channel = await _connection.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+
+                await channel.ExchangeDeclareAsync(
+                    MessagingConstants.EventsExchange,
+                    ExchangeType.Topic,
+                    durable: true,
+                    cancellationToken: cancellationToken);
+
+                await channel.QueueDeclareAsync(
+                    queueName,
+                    durable: true,
+                    exclusive: false,
+                    autoDelete: false,
+                    cancellationToken: cancellationToken);
+
+                await channel.QueueBindAsync(
+                    queueName,
+                    MessagingConstants.EventsExchange,
+                    routingKey,
+                    cancellationToken: cancellationToken);
+
+                await channel.BasicQosAsync(0, prefetchCount: 10, global: false, cancellationToken: cancellationToken);
+
+                return channel;
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to set up RabbitMQ consumer for queue {QueueName}, retrying in {Delay}",
+                    queueName,
+                    delay);
+
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 2, MaxRetryDelay.TotalSeconds));
+            }
         }
     }
 }

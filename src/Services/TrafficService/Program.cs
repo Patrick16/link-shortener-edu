@@ -13,4 +13,13 @@ builder.Services.AddPooledDbContextFactory<DatabaseContext>(
     }));
 
 var host = builder.Build();
-host.Run();
+
+// Apply pending EF Core migrations on startup — this service owns the traffic-service schema.
+await using (var scope = host.Services.CreateAsyncScope())
+{
+    var dbContextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<DatabaseContext>>();
+    await using var db = await dbContextFactory.CreateDbContextAsync();
+    await db.Database.MigrateAsync();
+}
+
+await host.RunAsync();

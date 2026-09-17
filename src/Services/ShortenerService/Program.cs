@@ -19,4 +19,14 @@ builder.Services.AddSingleton<IMessageConsumer, RabbitMqConsumer>();
 builder.Services.AddHostedService<LinkCreatedConsumer>();
 
 var host = builder.Build();
-host.Run();
+
+// Apply pending EF Core migrations on startup — this service owns the shortener-service schema
+// (it's the only one that writes Links; LinkApi/RedirectApi only read the same table).
+await using (var scope = host.Services.CreateAsyncScope())
+{
+    var dbContextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<DatabaseContext>>();
+    await using var db = await dbContextFactory.CreateDbContextAsync();
+    await db.Database.MigrateAsync();
+}
+
+await host.RunAsync();

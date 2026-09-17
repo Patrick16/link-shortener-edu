@@ -22,6 +22,13 @@ builder.Services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
 
 var app = builder.Build();
 
+// Apply pending EF Core migrations on startup — this service owns the auth-service schema.
+await using (var scope = app.Services.CreateAsyncScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+    await db.Database.MigrateAsync();
+}
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
