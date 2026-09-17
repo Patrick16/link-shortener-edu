@@ -1,19 +1,20 @@
-<Project Sdk="Microsoft.NET.Sdk.Worker">
+﻿<Project Sdk="Microsoft.NET.Sdk.Worker">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <UserSecretsId>dotnet-ShortenerService-0c476122-cd2f-468f-9cc6-ff17e034d110</UserSecretsId>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<UserSecretsId>dotnet-ShortenerService-0c476122-cd2f-468f-9cc6-ff17e034d110</UserSecretsId>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
-  </ItemGroup>
+	<ItemGroup>
+		<PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
+		<PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+	</ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\..\Shared\Contracts\Contracts.csproj" />
-    <ProjectReference Include="..\..\Shared\Infrastructure\Infrastructure.csproj" />
-    <ProjectReference Include="..\..\Shared\Common\Common.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\..\Shared\Contracts\Contracts.csproj" />
+		<ProjectReference Include="..\..\Shared\Infrastructure\Infrastructure.csproj" />
+		<ProjectReference Include="..\..\Shared\Common\Common.csproj" />
+	</ItemGroup>
 </Project>
