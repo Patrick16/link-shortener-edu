@@ -1,3 +1,7 @@
+# Shared dev-only JWT signing key — AuthApi issues tokens with it, LinkApi validates them with the
+# same key. A single anchor means the two can't accidentally drift onto different values.
+x-jwt-signing-key: &jwt-signing-key "dev-only-signing-key-do-not-use-in-production-1234567890"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -69,8 +73,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
-      # Dev-only secret — never reuse this for anything but local docker-compose.
-      Jwt__SigningKey: "dev-only-signing-key-do-not-use-in-production-1234567890"
+      Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
@@ -89,6 +92,7 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
@@ -110,11 +114,14 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
@@ -141,9 +148,12 @@ services:
       dockerfile: src/Services/TrafficService/Dockerfile
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started

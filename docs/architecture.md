@@ -9,15 +9,17 @@ right now.
 
 - **AuthApi** — registration / login, writes to `Postgres users`. Issues a JWT.
 - **LinkApi** — accepts requests to create a short link, generates the hash itself and returns it
-  synchronously. Publishes the created link (with hash) to RabbitMQ for `ShortenerService`. Once
-  auth is wired through end-to-end, an authenticated request will carry `userId` into the event.
+  synchronously. If the request carries a valid Bearer token, `userId` comes from its `sub` claim;
+  otherwise it's `null` — no authentication is required. Publishes the created link (with hash and
+  `userId?`) to RabbitMQ for `ShortenerService`.
 - **ShortenerService** (worker) — listens on RabbitMQ, persists the already-hashed short link to
   `Postgres Links` (sharded, in the target design).
 - **RedirectApi** — accepts a short link, resolves the origin link via `Redis Links` (cache) or
-  directly from Postgres, returns the redirect. Target design: also publishes a click event to
-  RabbitMQ for `TrafficService`.
-- **TrafficService** (worker) — target design: listens on RabbitMQ, writes clicks to
-  `Postgres Clicks` and metadata (user-agent, referrer, headers) to `Mongo Clicks meta`.
+  directly from Postgres, returns the redirect, and publishes a click event to RabbitMQ for
+  `TrafficService`.
+- **TrafficService** (worker) — listens on RabbitMQ, writes clicks to `Postgres Clicks`. Target
+  design also has it writing metadata (user-agent, referrer, headers) to `Mongo Clicks meta` — that
+  part isn't built (Mongo isn't in the stack yet).
 
 ## Storage
 
@@ -25,7 +27,7 @@ right now.
 - `Postgres Links` (schema `shortener-service`) — target: **sharded** (see `infra/pgcat/shard1.toml`,
   `shard2.toml`): Links(hash PK, originLink, shortenLink, createdAt, userId?)
 - `Redis Links` — cache of hash → link for fast redirects (shared key format across LinkApi/RedirectApi)
-- `Postgres Clicks` (schema `traffic-service`) — target: Clicks(id, clickedAt, inboundLink, outboundLink, hash)
+- `Postgres Clicks` (schema `traffic-service`) — Clicks(id, clickedAt, inboundLink, outboundLink, hash)
 - `Mongo Clicks meta` — target: ClicksMeta(id, clickedAt, userAgent, referrer, origin, headers) — not built yet
 
 ## Infrastructure for High-Load Practice
@@ -33,7 +35,7 @@ right now.
 - **Sharding** of Postgres Links via hash(key) % N through `ShardResolver` + pgcat pools per shard — scenario 4
 - **Service replicas** (multiple instances of each API/worker behind nginx) — cross-cutting, not scenario-bound
 - **Partitioning** of Clicks/ClicksMeta by time — scenario 2+
-- **Message bus** RabbitMQ between APIs and workers (LinkApi → ShortenerService now; RedirectApi → TrafficService planned)
+- **Message bus** RabbitMQ between APIs and workers (LinkApi → ShortenerService, RedirectApi → TrafficService — both live)
 - **pgcat/pgbouncer** — connection pooling to each Postgres shard — scenario 4
 - **nginx** — load balancer in front of the API services — cross-cutting, not built yet
 
@@ -44,13 +46,21 @@ right now.
 **Scenario 1 is fully implemented and verified end-to-end** (backend, infra, frontend). Detailed
 walkthrough, request flow, and things to try by hand: **[`docs/scenarios/01-minimal.md`](scenarios/01-minimal.md)**.
 
+**Scenario 2's backend and infra are also done** — click tracking works end to end (`RedirectApi` →
+RabbitMQ → `TrafficService` → Postgres Clicks), verified live including the linked trace in the
+dashboard. Its frontend piece and write-up doc aren't done yet.
+
 Short version of what's real today:
 
 - `AuthApi`, `LinkApi`, `RedirectApi` — all live, all tested through a real browser (not just curl)
-- `LinkApi` → RabbitMQ → `ShortenerService` → Postgres is a real, working async write path, with a
-  SQLite fallback queue if RabbitMQ is briefly unreachable
+- `LinkApi` → RabbitMQ → `ShortenerService` → Postgres and `RedirectApi` → RabbitMQ →
+  `TrafficService` → Postgres are both real, working async paths, each with a SQLite fallback queue
+  if RabbitMQ is briefly unreachable
+- `LinkApi` optionally validates a Bearer token (no `[Authorize]` — anonymous still works) and
+  stores the caller's `userId` on the link when one is present
 - One Postgres instance holds all three schemas (no sharding yet — that's scenario 4)
-- `TrafficService`/click-tracking/Mongo are **not built** — that's scenario 2
+- Click *metadata* (user-agent, referrer, headers → Mongo) is still not built — Mongo isn't in the
+  stack. Only the Postgres `Clicks` row (hash, in/outbound link, timestamp) exists.
 - RabbitMQ's exchange/queue/binding topology is declared by the application itself at connection
   time (`RabbitMqPublisher`/`RabbitMqConsumer`), not loaded from `infra/rabbitmq/definitions.json` —
   that file is a placeholder for a possible future static-provisioning approach, unused right now
@@ -59,9 +69,9 @@ Short version of what's real today:
 - **Observability:** every .NET service ships logs/metrics/traces (OpenTelemetry SDK, OTLP) to a
   standalone `aspire-dashboard` container — the dashboard half of .NET Aspire, not the full AppHost
   orchestrator (docker-compose still orchestrates everything). RabbitMQ publish/consume spans are
-  manually instrumented so a trace shows the full `LinkApi` → `ShortenerService` path across the
-  async boundary. `redisinsight` gives a GUI over the Redis cache. See
-  `docs/scenarios/01-minimal.md#observability`.
+  manually instrumented so a trace shows the full path across the async boundary for both
+  `LinkApi` → `ShortenerService` and `RedirectApi` → `TrafficService`. `redisinsight` gives a GUI
+  over the Redis cache. See `docs/scenarios/01-minimal.md#observability`.
 
 ## TODO
 

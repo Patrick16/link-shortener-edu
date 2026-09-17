@@ -1,7 +1,10 @@
+using System.Text;
 using Common;
 using Infrastructure;
 using LinkApi;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
@@ -55,6 +58,30 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader());
 });
 
+// Authentication is optional here — nothing in this service has [Authorize], so an anonymous
+// request is never rejected. This only lets CreateLink read the caller's userId from a valid
+// Bearer token when one is present. Same signing key/issuer/audience config keys AuthApi issues
+// with (see Common.Constants) — they have to match or every token would fail validation here.
+var jwtSigningKey = builder.Configuration[Constants.JwtSigningKeySection];
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        // Without this, the handler silently renames the "sub" claim to the legacy
+        // ClaimTypes.NameIdentifier URI, and User.FindFirst(JwtRegisteredClaimNames.Sub) in
+        // LinksController would never find it. Keep claim types exactly as the token declares them.
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = builder.Configuration[Constants.JwtIssuerSection],
+            ValidateAudience = true,
+            ValidAudience = builder.Configuration[Constants.JwtAudienceSection],
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSigningKey ?? string.Empty)),
+        };
+    });
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -68,6 +95,7 @@ app.UseHttpsRedirection();
 
 app.UseCors(Constants.FrontendCorsPolicy);
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();

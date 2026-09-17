@@ -1,11 +1,11 @@
 using Common;
+using Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using ServiceDefaults;
 using TrafficService;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.AddServiceDefaults();
-builder.Services.AddHostedService<Worker>();
 
 var connectionString = builder.Configuration.GetConnectionString(Constants.PostgresConnectionString);
 builder.Services.AddPooledDbContextFactory<DatabaseContext>(
@@ -13,6 +13,12 @@ builder.Services.AddPooledDbContextFactory<DatabaseContext>(
     {
         options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(4L), null);
     }));
+
+var rabbitMqConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqConnectionString);
+builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbitMqConnectionString!));
+builder.Services.AddSingleton<IMessageConsumer, RabbitMqConsumer>();
+
+builder.Services.AddHostedService<ClickTrackedConsumer>();
 
 var host = builder.Build();
 

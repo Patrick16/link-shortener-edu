@@ -1,4 +1,5 @@
 using Common;
+using Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
@@ -36,6 +37,14 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString(Constants.RedisConnectionString);
     options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
 });
+
+var rabbitMqConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqConnectionString);
+var rabbitMqFallbackConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqFallbackConnectionString);
+
+builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbitMqConnectionString!));
+builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallbackStore(rabbitMqFallbackConnectionString!));
+builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
+builder.Services.AddHostedService<RabbitMqRetryWorker>();
 
 // A plain <a href> click to a short link is a top-level navigation, not subject to CORS — this is
 // here for consistency with AuthApi/LinkApi and for any future script-initiated call (link preview,

@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Common;
 using Common.Models;
 using Microsoft.IdentityModel.Tokens;
 
@@ -12,11 +13,11 @@ public class JwtTokenGenerator(IConfiguration configuration) : IJwtTokenGenerato
 
     public (string Token, DateTime ExpiresAt) GenerateToken(User user)
     {
-        var signingKey = _configuration["Jwt:SigningKey"];
+        var signingKey = _configuration[Constants.JwtSigningKeySection];
         ArgumentException.ThrowIfNullOrEmpty(signingKey);
 
-        var issuer = _configuration["Jwt:Issuer"];
-        var audience = _configuration["Jwt:Audience"];
+        var issuer = _configuration[Constants.JwtIssuerSection];
+        var audience = _configuration[Constants.JwtAudienceSection];
         var expiryMinutes = _configuration.GetValue("Jwt:ExpiryMinutes", 60);
 
         var claims = new[]

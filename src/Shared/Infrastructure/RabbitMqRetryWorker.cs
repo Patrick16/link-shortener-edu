@@ -1,8 +1,11 @@
-using Infrastructure;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
-namespace LinkApi;
+namespace Infrastructure;
 
-// Periodically retries messages that were saved to the SQLite fallback because RabbitMQ was unavailable.
+// Periodically retries messages that were saved to the SQLite fallback because RabbitMQ was
+// unavailable. Generic — used by any service that publishes (LinkApi, RedirectApi), not tied to
+// a specific event type.
 public class RabbitMqRetryWorker(
     IMessageFallbackStore fallbackStore,
     IMessagePublisher publisher,

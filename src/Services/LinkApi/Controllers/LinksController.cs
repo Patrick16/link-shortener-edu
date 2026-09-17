@@ -1,4 +1,5 @@
-﻿using Common;
+﻿using System.IdentityModel.Tokens.Jwt;
+using Common;
 using Common.Models;
 using Contracts.Events;
 using Infrastructure;
@@ -31,13 +32,19 @@ public class LinksController(
         var hash = _hashGenerator.Generate(request.OriginalLink);
         var createdAt = DateTime.UtcNow;
 
+        // Anonymous callers are fine — nothing here requires [Authorize]. If a valid Bearer token
+        // is present, ASP.NET Core's auth middleware has already populated User from its claims;
+        // if not (missing, expired, wrong signature), User just isn't authenticated and this is null.
+        var userIdClaim = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : (Guid?)null;
+
         var linkCreatedEvent = new LinkCreatedEvent
         {
             Hash = hash,
             OriginalLink = request.OriginalLink,
             ShortenLink = hash,
             CreatedAt = createdAt,
-            UserId = null
+            UserId = userId
         };
 
         await _publisher.PublishAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);

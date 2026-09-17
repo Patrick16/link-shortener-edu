@@ -38,25 +38,31 @@ only one that runs `Database.MigrateAsync()` for it, applied automatically on st
 2. Password hashed with `Microsoft.AspNetCore.Identity.PasswordHasher<T>` (PBKDF2, salt embedded in
    the hash — no separate salt column needed, even though `User.Sault` still exists on the model)
 3. On success, a JWT is returned (`HS256`, claims: `sub`, `email`, `name`) — the frontend stores it
-   in `localStorage` and decodes it client-side just to show the signed-in email; nothing validates
-   it server-side yet (see [Known limitations](#known-limitations))
+   in `localStorage` and decodes it client-side just to show the signed-in email. `LinkApi` also
+   validates this same token (see the next section) — same signing key, checked in `Common.Constants`.
 
 **Create a short link** (`LinkApi` → RabbitMQ → `ShortenerService`)
-1. `POST /links` with `{ originalLink }`
+1. `POST /links` with `{ originalLink }`, optionally with `Authorization: Bearer <token>`
 2. `LinkApi` generates the hash itself (`Sha256Base62HashGenerator` — SHA-256 of the URL salted with
    a fresh GUID, base62-encoded, 8 chars) and returns `{ shortenLink, createdAt }` **immediately** —
-   this part is synchronous
-3. In the background, `LinkApi` published a `LinkCreatedEvent` to RabbitMQ. If the broker was
-   unreachable, it's queued in a local SQLite fallback file instead and retried every 30s
-   (`RabbitMqRetryWorker`) — the HTTP response to the caller doesn't wait on any of this
+   this part is synchronous. If the request carried a valid token, its `sub` claim becomes the
+   link's `userId`; no token (or an invalid/expired one) just means `userId` stays `null` — the
+   request never gets rejected for it, there's no `[Authorize]` on this endpoint
+3. In the background, `LinkApi` published a `LinkCreatedEvent` (including `userId?`) to RabbitMQ.
+   If the broker was unreachable, it's queued in a local SQLite fallback file instead and retried
+   every 30s (`RabbitMqRetryWorker`, shared with `RedirectApi` — see `Shared/Infrastructure/`) — the
+   HTTP response to the caller doesn't wait on any of this
 4. `ShortenerService` consumes the event and writes the row into `shortener-service.links`. This is
    the step that's genuinely asynchronous — see the timing note below
 
-**Visit a short link** (`RedirectApi`)
+**Visit a short link** (`RedirectApi` → RabbitMQ → `TrafficService`)
 1. `GET /{hash}`
 2. Redis cache lookup (key `link:{hash}`, shared format with `LinkApi` — see `Shared/Common/LinkCacheService.cs`)
-3. On a cache miss, reads Postgres directly, caches the result, then responds
-4. `302 Found` to the original URL, or `404` if the hash doesn't exist
+3. On a cache miss, reads Postgres directly, caches the result
+4. Publishes a `ClickTrackedEvent` (hash, the short URL visited, the resolved destination,
+   timestamp) — same publish-or-fall-back-to-SQLite pattern as link creation
+5. `302 Found` to the original URL, or `404` if the hash doesn't exist (a 404 never gets a click event)
+6. `TrafficService` consumes the event and writes the row into `traffic-service.clicks`
 
 ## Try it yourself
 
@@ -105,13 +111,15 @@ eventual consistency, which gets more interesting once replicas and sharding are
 Every .NET service exports logs, metrics, and traces (OpenTelemetry SDK, OTLP over gRPC) to the
 `aspire-dashboard` container — the lightweight half of the .NET Aspire pattern (a standalone
 dashboard, not the full AppHost orchestrator; docker-compose stays in charge of orchestration).
-Open `http://localhost:18888` after creating a link and look at Traces: you'll see one trace named
-`LinkApi: POST Links` that spans **both** `LinkApi` and `ShortenerService` — the `MSG rabbitmq
-events` span on the consumer side is nested under the producer's, because the trace context is
-carried across the async boundary in a `traceparent` message header (there's no mainstream
-auto-instrumentation for `RabbitMQ.Client`, so this part — `Shared/Infrastructure/RabbitMqPublisher.cs`
-and `RabbitMqConsumer.cs` — is hand-rolled). Worth clicking into once: it's one of the more concrete
-ways to *see* what "decoupled write path" actually means end to end.
+Open `http://localhost:18888` after creating a link (or visiting one) and look at Traces: you'll
+see traces named `LinkApi: POST Links` and `RedirectApi: GET {hash}`, each spanning **both** the
+API and the worker that ends up doing the write (`ShortenerService`, `TrafficService`) — the `MSG
+rabbitmq events` span on the consumer side is nested under the producer's, because the trace
+context is carried across the async boundary in a `traceparent` message header (there's no
+mainstream auto-instrumentation for `RabbitMQ.Client`, so this part —
+`Shared/Infrastructure/RabbitMqPublisher.cs` and `RabbitMqConsumer.cs` — is hand-rolled). Worth
+clicking into once: it's one of the more concrete ways to *see* what "decoupled write path"
+actually means end to end.
 
 `redisinsight` (`http://localhost:5540`) gives a GUI over the same Redis cache — on first open, add
 a connection with host `redis`, port `6379`, and you can watch `link:{hash}` keys appear as you
@@ -119,14 +127,15 @@ create/visit links, with their TTL counting down.
 
 ## Known limitations (by design, for now)
 
-- **JWT isn't enforced anywhere.** `AuthApi` issues tokens; nothing validates them. `LinkApi` always
-  writes `UserId = null` regardless of whether a caller is logged in. Wiring this up is tracked as
-  follow-up work, not scenario 1 scope.
 - **No rate limiting, no input validation beyond "is it well-formed JSON".** Fine for a learning
   project's first scenario; not something you'd want unguarded on the open internet.
 - **Single Postgres instance, no replicas, no sharding.** That's scenarios 3 and 4.
-- **Click tracking doesn't exist yet.** `TrafficService` is running but its consumer is a stub;
-  `RedirectApi` doesn't publish anything when it resolves a link. Scenario 2.
+- **Click *metadata* doesn't exist yet.** The `Clicks` row itself (hash, in/outbound link, timestamp)
+  is real — but user-agent/referrer/headers → Mongo `ClicksMeta` isn't built (Mongo isn't in the
+  stack). See `docs/architecture.md`.
+- **No dead-letter queue.** Both consumers (`ShortenerService`, `TrafficService`) nack-and-requeue
+  forever on a persistent processing failure — a poison message would loop indefinitely rather than
+  landing somewhere for inspection.
 - **`infra/rabbitmq/definitions.json` is not used.** The exchange/queue/binding topology is declared
   by the application itself (see `Shared/Infrastructure/RabbitMqPublisher.cs` and `RabbitMqConsumer.cs`),
   not loaded from a static file.
@@ -136,9 +145,10 @@ create/visit links, with their TTL counting down.
 | What | Path |
 |---|---|
 | AuthApi | `src/Services/AuthApi/` |
-| LinkApi | `src/Services/LinkApi/` |
+| LinkApi (incl. JWT validation) | `src/Services/LinkApi/` |
 | RedirectApi | `src/Services/RedirectApi/` |
 | ShortenerService | `src/Services/ShortenerService/` |
+| TrafficService | `src/Services/TrafficService/` |
 | Shared event contracts | `src/Shared/Contracts/Events/` |
 | RabbitMQ client/publisher/consumer | `src/Shared/Infrastructure/` |
 | OpenTelemetry wiring (shared) | `src/Shared/ServiceDefaults/` |
