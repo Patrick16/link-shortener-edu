@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Starts the full Link Shortener stack: the docker-compose backend (Postgres, Redis, RabbitMQ,
     and all 5 .NET services) plus the frontend dev server.
@@ -87,14 +87,14 @@ try {
         Write-Step 'Building backend images (docker compose build)'
         docker compose build
         if ($LASTEXITCODE -ne 0) {
-            Write-Error 'docker compose build failed — see output above.'
+            Write-Error 'docker compose build failed - see output above.'
         }
     }
 
     Write-Step 'Starting backend (postgres, redis, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service)'
     docker compose up -d
     if ($LASTEXITCODE -ne 0) {
-        Write-Error 'docker compose up failed — see output above.'
+        Write-Error 'docker compose up failed - see output above.'
     }
 
     Write-Step 'Waiting for the web APIs to start listening'
@@ -107,7 +107,7 @@ try {
         if (Wait-ForPort -Port $api.Port) {
             Write-Host "  $($api.Name) is listening on port $($api.Port)" -ForegroundColor Green
         } else {
-            Write-Warning "  $($api.Name) didn't come up within the timeout — check 'docker compose logs $($api.Name.ToLower())'"
+            Write-Warning "  $($api.Name) didn't come up within the timeout - check 'docker compose logs $($api.Name.ToLower())'"
         }
     }
 } finally {
@@ -136,7 +136,7 @@ if (-not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
     try {
         npm install
         if ($LASTEXITCODE -ne 0) {
-            Write-Error 'npm install failed — see output above.'
+            Write-Error 'npm install failed - see output above.'
         }
     } finally {
         Pop-Location

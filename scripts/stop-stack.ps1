@@ -1,7 +1,7 @@
-<#
+﻿<#
 .SYNOPSIS
     Stops the backend (docker compose down). Postgres data survives (named volume) unless -Wipe
-    is passed. Doesn't touch the frontend dev server — close its own window or Ctrl+C it.
+    is passed. Doesn't touch the frontend dev server - close its own window or Ctrl+C it.
 
 .PARAMETER Wipe
     Also remove the Postgres data volume (fresh database next start).
