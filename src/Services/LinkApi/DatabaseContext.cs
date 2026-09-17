@@ -1,7 +1,5 @@
-﻿using Common;
-using Common.Models;
+﻿using Common.Models;
 using Microsoft.EntityFrameworkCore;
-using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 
 namespace LinkApi;
 

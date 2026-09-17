@@ -37,6 +37,14 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
 });
 
+var corsOrigins = builder.Configuration.GetSection(Constants.CorsAllowedOriginsSection).Get<string[]>()
+    ?? ["http://localhost:5173"];
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(Constants.FrontendCorsPolicy, policy =>
+        policy.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader());
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -47,6 +55,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCors(Constants.FrontendCorsPolicy);
 
 app.UseAuthorization();
 

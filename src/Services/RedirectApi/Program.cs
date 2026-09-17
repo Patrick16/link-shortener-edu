@@ -27,6 +27,17 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
 });
 
+// A plain <a href> click to a short link is a top-level navigation, not subject to CORS — this is
+// here for consistency with AuthApi/LinkApi and for any future script-initiated call (link preview,
+// existence check, ...).
+var corsOrigins = builder.Configuration.GetSection(Constants.CorsAllowedOriginsSection).Get<string[]>()
+    ?? ["http://localhost:5173"];
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(Constants.FrontendCorsPolicy, policy =>
+        policy.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader());
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -37,6 +48,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCors(Constants.FrontendCorsPolicy);
 
 app.UseAuthorization();
 

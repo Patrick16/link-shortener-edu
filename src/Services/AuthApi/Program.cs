@@ -20,6 +20,14 @@ builder.Services.AddDbContextPool<DatabaseContext>(
 
 builder.Services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
 
+var corsOrigins = builder.Configuration.GetSection(Constants.CorsAllowedOriginsSection).Get<string[]>()
+    ?? ["http://localhost:5173"];
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(Constants.FrontendCorsPolicy, policy =>
+        policy.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader());
+});
+
 var app = builder.Build();
 
 // Apply pending EF Core migrations on startup — this service owns the auth-service schema.
@@ -37,6 +45,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.UseCors(Constants.FrontendCorsPolicy);
 
 app.UseAuthorization();
 

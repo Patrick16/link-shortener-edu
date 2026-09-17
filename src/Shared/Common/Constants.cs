@@ -8,4 +8,7 @@ public static class Constants
     public const string RabbitMqConnectionString = "RabbitMq";
     public const string RabbitMqFallbackConnectionString = "RabbitMqFallback";
     public const string MongoDbConnectionString = "Mongo";
+
+    public const string FrontendCorsPolicy = "Frontend";
+    public const string CorsAllowedOriginsSection = "Cors:AllowedOrigins";
 }
