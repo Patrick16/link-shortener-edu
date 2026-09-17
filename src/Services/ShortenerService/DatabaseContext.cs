@@ -1,25 +1,17 @@
-﻿using Common;
 using Common.Models;
 using Microsoft.EntityFrameworkCore;
-using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
 
 namespace ShortenerService;
 
-public class DatabaseContext(IConfiguration configuration) : DbContext
+// Constructed via IDbContextFactory<DatabaseContext> (see Program.cs) — this is a worker service,
+// not a request-scoped API, so pooled-as-scoped-service (AddDbContextPool) doesn't fit; a factory
+// producing one short-lived context per consumed message does.
+public class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbContext(options)
 {
-    private readonly IConfiguration _configuration = configuration;
     private const string Schema = "shortener-service";
     private const string LinksTable = "links";
 
     internal DbSet<Link> Links { get; set; }
-
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-    {
-        optionsBuilder.UseNpgsql(_configuration.GetConnectionString(Constants.PostgresConnectionString), delegate (NpgsqlDbContextOptionsBuilder options)
-        {
-            options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(4L), null);
-        });
-    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

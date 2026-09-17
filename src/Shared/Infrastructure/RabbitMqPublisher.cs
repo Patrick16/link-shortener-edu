@@ -8,8 +8,6 @@ public sealed class RabbitMqPublisher(
     IRabbitMqConnection connection,
     IMessageFallbackStore fallbackStore) : IMessagePublisher
 {
-    private const string ExchangeName = "events";
-
     private readonly IRabbitMqConnection _connection = connection;
     private readonly IMessageFallbackStore _fallbackStore = fallbackStore;
 
@@ -41,7 +39,7 @@ public sealed class RabbitMqPublisher(
             await using (channel.ConfigureAwait(false))
             {
                 await channel.ExchangeDeclareAsync(
-                    ExchangeName,
+                    MessagingConstants.EventsExchange,
                     ExchangeType.Topic,
                     durable: true,
                     cancellationToken: cancellationToken);
@@ -54,7 +52,7 @@ public sealed class RabbitMqPublisher(
                 };
 
                 await channel.BasicPublishAsync(
-                    exchange: ExchangeName,
+                    exchange: MessagingConstants.EventsExchange,
                     routingKey: topic,
                     mandatory: false,
                     basicProperties: properties,

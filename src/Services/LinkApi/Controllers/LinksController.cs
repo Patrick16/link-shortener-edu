@@ -16,8 +16,6 @@ public class LinksController(
     IMessagePublisher publisher,
     IHashGenerator hashGenerator) : Controller
 {
-    private const string LinkCreatedTopic = "link.created";
-
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _service = service;
     private readonly IMessagePublisher _publisher = publisher;
@@ -42,7 +40,7 @@ public class LinksController(
             UserId = null
         };
 
-        await _publisher.PublishAsync(linkCreatedEvent, LinkCreatedTopic, cancellationToken);
+        await _publisher.PublishAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
 
         return new LinkResponse(hash, createdAt);
     }
