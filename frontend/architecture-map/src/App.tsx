@@ -2,7 +2,7 @@ import './App.css'
 
 // TODO: interactive architecture diagram (nodes = services/storage,
 // click on a node/connection -> details card, scenario switcher 1-5).
-// See data/architecture.json and .notes/ARCHITECTURE_MAP_PLAN.md.
+// See data/architecture.json for the data this renders.
 function App() {
   return (
     <main>

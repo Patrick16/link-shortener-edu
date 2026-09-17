@@ -1,6 +1,278 @@
 {
-  "_comment": "TODO: fill in as scenarios are implemented. Schema and full example — see .notes/ARCHITECTURE_MAP_PLAN.md",
-  "components": [],
-  "connections": [],
-  "scenarios": []
+  "_comment": "Filled in as scenarios are actually implemented, not ahead of reality — see docs/scenarios/ for what's actually built.",
+  "components": [
+    {
+      "id": "frontend-app",
+      "name": "Frontend App",
+      "type": "frontend",
+      "icon": "🖥️",
+      "description": "Demo UI — register/login, create a short link, visit it",
+      "position": { "x": 40, "y": 260 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "The only thing an actual person interacts with in this whole stack",
+        "technologies": ["React 19", "TypeScript", "Vite", "react-router-dom"],
+        "port": 5173,
+        "links": {
+          "code": "frontend/app/",
+          "dockerfile": "frontend/app/Dockerfile"
+        }
+      }
+    },
+    {
+      "id": "auth-api",
+      "name": "AuthApi",
+      "type": "service",
+      "icon": "🔑",
+      "description": "Registration / login, issues a JWT",
+      "position": { "x": 320, "y": 60 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "Owns the auth-service.users schema; the only writer to it",
+        "technologies": [".NET 10", "ASP.NET Core", "EF Core", "PasswordHasher<T>", "System.IdentityModel.Tokens.Jwt"],
+        "port": 8081,
+        "links": {
+          "code": "src/Services/AuthApi/",
+          "dockerfile": "src/Services/AuthApi/Dockerfile",
+          "migrations": "src/Services/AuthApi/Migrations/"
+        }
+      }
+    },
+    {
+      "id": "link-api",
+      "name": "LinkApi",
+      "type": "service",
+      "icon": "🌐",
+      "description": "Creates short links (hash generated here), reads them back through a cache",
+      "position": { "x": 320, "y": 260 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "POST /links generates the hash and publishes it; GET /links/{hash} is a cached read against Postgres",
+        "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis"],
+        "port": 8082,
+        "links": {
+          "code": "src/Services/LinkApi/",
+          "dockerfile": "src/Services/LinkApi/Dockerfile"
+        }
+      }
+    },
+    {
+      "id": "redirect-api",
+      "name": "RedirectApi",
+      "type": "service",
+      "icon": "↪️",
+      "description": "Resolves a short link and issues a 302",
+      "position": { "x": 320, "y": 460 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "Cache-first read of the same Links table LinkApi writes; 404 on unknown hash",
+        "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis"],
+        "port": 8083,
+        "links": {
+          "code": "src/Services/RedirectApi/",
+          "dockerfile": "src/Services/RedirectApi/Dockerfile"
+        }
+      }
+    },
+    {
+      "id": "rabbitmq",
+      "name": "RabbitMQ",
+      "type": "infrastructure",
+      "icon": "🐰",
+      "description": "Durable queue between LinkApi and ShortenerService",
+      "position": { "x": 600, "y": 260 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "Decouples the synchronous hash response from the actual Postgres write",
+        "technologies": ["RabbitMQ 3", "AMQP 0-9-1"],
+        "port": 5672,
+        "managementPort": 15672,
+        "topology": "topic exchange \"events\", queue \"shortener-service.link-created\" bound to routing key \"link.created\" — declared by the app itself, not a static definitions.json",
+        "links": {
+          "config": "infra/rabbitmq/definitions.json (unused placeholder, see its own comment)",
+          "publisher": "src/Shared/Infrastructure/RabbitMqPublisher.cs",
+          "consumer": "src/Shared/Infrastructure/RabbitMqConsumer.cs"
+        }
+      }
+    },
+    {
+      "id": "shortener-service",
+      "name": "ShortenerService",
+      "type": "worker",
+      "icon": "⚙️",
+      "description": "Consumes LinkCreatedEvent, persists the link to Postgres",
+      "position": { "x": 880, "y": 160 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "Owns the shortener-service.links schema; the only writer, redelivery-safe (skips if the hash is already stored)",
+        "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client"],
+        "links": {
+          "code": "src/Services/ShortenerService/",
+          "dockerfile": "src/Services/ShortenerService/Dockerfile",
+          "migrations": "src/Services/ShortenerService/Migrations/"
+        }
+      }
+    },
+    {
+      "id": "traffic-service",
+      "name": "TrafficService",
+      "type": "worker",
+      "icon": "📊",
+      "description": "Running, but idle — click-tracking consumer is scenario 2 work",
+      "position": { "x": 880, "y": 360 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "Owns the traffic-service.clicks schema (migrated, unused). No consumer wired up yet.",
+        "technologies": [".NET 10 Worker Service", "EF Core"],
+        "links": {
+          "code": "src/Services/TrafficService/",
+          "dockerfile": "src/Services/TrafficService/Dockerfile",
+          "migrations": "src/Services/TrafficService/Migrations/"
+        }
+      }
+    },
+    {
+      "id": "redis",
+      "name": "Redis",
+      "type": "infrastructure",
+      "icon": "🗄️",
+      "description": "Cache of hash → link, shared key format between LinkApi and RedirectApi",
+      "position": { "x": 600, "y": 460 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "Cache-aside: read-through on miss, populated by whichever service reads or creates first",
+        "technologies": ["Redis 7"],
+        "port": 6379,
+        "keyFormat": "link:{hash}",
+        "links": {
+          "code": "src/Shared/Common/LinkCacheService.cs"
+        }
+      }
+    },
+    {
+      "id": "postgres",
+      "name": "Postgres",
+      "type": "database",
+      "icon": "🐘",
+      "description": "Single instance, one linkshortener DB, 3 schemas — no sharding yet",
+      "position": { "x": 880, "y": 260 },
+      "scenarios": ["1"],
+      "details": {
+        "purpose": "auth-service.users, shortener-service.links, traffic-service.clicks — one schema per owning service",
+        "technologies": ["PostgreSQL 16"],
+        "port": 5432,
+        "links": {
+          "compose": "docker-compose.yml#postgres"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "frontend-app",
+      "to": "auth-api",
+      "label": "Register / login",
+      "protocol": "HTTP (fetch)",
+      "format": "JSON",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "frontend-app",
+      "to": "link-api",
+      "label": "Create / look up a link",
+      "protocol": "HTTP (fetch)",
+      "format": "JSON",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "frontend-app",
+      "to": "redirect-api",
+      "label": "Visit the short link",
+      "protocol": "HTTP (browser navigation, not fetch — not subject to CORS)",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "auth-api",
+      "to": "postgres",
+      "label": "Write / read user",
+      "protocol": "PostgreSQL wire (Npgsql)",
+      "format": "auth-service.users",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "link-api",
+      "to": "redis",
+      "label": "Cache read-through on GET",
+      "protocol": "RESP",
+      "format": "link:{hash} → JSON",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "link-api",
+      "to": "postgres",
+      "label": "Read on cache miss",
+      "protocol": "PostgreSQL wire (Npgsql)",
+      "format": "shortener-service.links (read-only from this service)",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "link-api",
+      "to": "rabbitmq",
+      "label": "Publish LinkCreatedEvent",
+      "protocol": "AMQP 0-9-1",
+      "format": "{ hash, originalLink, shortenLink, createdAt, userId? } → JSON, routing key \"link.created\"",
+      "synchronous": false,
+      "notes": "Falls back to a local SQLite queue if the broker is unreachable; retried every 30s.",
+      "scenarios": ["1"]
+    },
+    {
+      "from": "rabbitmq",
+      "to": "shortener-service",
+      "label": "Consume LinkCreatedEvent",
+      "protocol": "AMQP 0-9-1",
+      "synchronous": false,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "shortener-service",
+      "to": "postgres",
+      "label": "Persist the link",
+      "protocol": "PostgreSQL wire (Npgsql)",
+      "format": "shortener-service.links (this is the only writer)",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "redirect-api",
+      "to": "redis",
+      "label": "Cache lookup",
+      "protocol": "RESP",
+      "format": "link:{hash} → JSON",
+      "synchronous": true,
+      "scenarios": ["1"]
+    },
+    {
+      "from": "redirect-api",
+      "to": "postgres",
+      "label": "Read on cache miss",
+      "protocol": "PostgreSQL wire (Npgsql)",
+      "format": "shortener-service.links (read-only from this service)",
+      "synchronous": true,
+      "scenarios": ["1"]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "1",
+      "name": "Minimal stack",
+      "description": "Register/login, create a short link, resolve it. RabbitMQ already decouples the write; no sharding, replicas, or click tracking yet.",
+      "focus": "Cache-aside reads, eventual consistency on the write path, connection pooling patterns (AddDbContextPool vs AddPooledDbContextFactory)"
+    }
+  ]
 }

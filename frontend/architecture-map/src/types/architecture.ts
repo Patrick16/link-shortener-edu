@@ -1,3 +1,3 @@
-// TODO: Component, Connection, Scenario types — mirror data/architecture.json.
-// Full schema with examples — see .notes/ARCHITECTURE_MAP_PLAN.md
+// TODO: Component, Connection, Scenario types — mirror data/architecture.json,
+// which already has real (scenario 1) data to type against.
 export {}

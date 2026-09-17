@@ -1,3 +1,3 @@
 {
-  "_comment": "TODO: exchanges/queues/bindings — origin-link (LinkApi -> ShortenerService), click-tracked (RedirectApi -> TrafficService)"
+  "_comment": "Not currently loaded by docker-compose.yml. Exchange/queue/binding topology is declared by the application itself at connection time (Infrastructure/RabbitMqPublisher.cs, Infrastructure/RabbitMqConsumer.cs) — durable, idempotent, no separate provisioning step needed. This file is a placeholder in case a static-provisioning approach (RabbitMQ management plugin definitions import) is wanted later."
 }
