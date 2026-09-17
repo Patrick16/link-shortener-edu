@@ -39,6 +39,27 @@ services:
       timeout: 5s
       retries: 10
 
+  redisinsight:
+    image: redis/redisinsight:latest
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    # No database is pre-registered — on first open, add one with host "redis", port 6379.
+
+  aspire-dashboard:
+    image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
+    ports:
+      - "18888:18888" # dashboard UI
+      - "18889:18889" # OTLP gRPC endpoint — services send logs/metrics/traces here
+    environment:
+      # Dev-only: disables the dashboard's own login and OTLP API-key check. Never do this outside
+      # a local learning setup.
+      DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
+
   auth-api:
     build:
       context: .
@@ -50,9 +71,12 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
       # Dev-only secret — never reuse this for anything but local docker-compose.
       Jwt__SigningKey: "dev-only-signing-key-do-not-use-in-production-1234567890"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
         condition: service_healthy
+      aspire-dashboard:
+        condition: service_started
 
   link-api:
     build:
@@ -65,6 +89,7 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +97,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      aspire-dashboard:
+        condition: service_started
 
   redirect-api:
     build:
@@ -83,11 +110,14 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      aspire-dashboard:
+        condition: service_started
 
   shortener-service:
     build:
@@ -96,11 +126,14 @@ services:
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      aspire-dashboard:
+        condition: service_started
 
   traffic-service:
     build:
@@ -108,9 +141,13 @@ services:
       dockerfile: src/Services/TrafficService/Dockerfile
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=linkshortener;Username=postgres;Password=postgres"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       postgres:
         condition: service_healthy
+      aspire-dashboard:
+        condition: service_started
 
 volumes:
   postgres-data:
+  redisinsight-data:

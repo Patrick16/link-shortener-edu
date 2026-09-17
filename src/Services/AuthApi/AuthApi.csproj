@@ -13,6 +13,7 @@
 			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
 			<PrivateAssets>all</PrivateAssets>
 		</PackageReference>
+		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
 		<PackageReference Include="Scalar.AspNetCore" Version="2.17.4" />
 		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.17.0" />
 	</ItemGroup>
@@ -21,6 +22,7 @@
 		<ProjectReference Include="..\..\Shared\Contracts\Contracts.csproj" />
 		<ProjectReference Include="..\..\Shared\Infrastructure\Infrastructure.csproj" />
 		<ProjectReference Include="..\..\Shared\Common\Common.csproj" />
+		<ProjectReference Include="..\..\Shared\ServiceDefaults\ServiceDefaults.csproj" />
 	</ItemGroup>
 
 </Project>

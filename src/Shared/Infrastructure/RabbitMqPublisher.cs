@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using RabbitMQ.Client;
@@ -33,6 +34,12 @@ public sealed class RabbitMqPublisher(
 
     private async Task<bool> TryPublishAsync(string messageId, string topic, string payload, CancellationToken cancellationToken)
     {
+        using var activity = MessagingActivitySource.Instance.StartActivity($"{topic} publish", ActivityKind.Producer);
+        activity?.SetTag("messaging.system", "rabbitmq");
+        activity?.SetTag("messaging.destination.name", MessagingConstants.EventsExchange);
+        activity?.SetTag("messaging.rabbitmq.routing_key", topic);
+        activity?.SetTag("messaging.message.id", messageId);
+
         try
         {
             var channel = await _connection.CreateChannelAsync(cancellationToken);
@@ -51,6 +58,13 @@ public sealed class RabbitMqPublisher(
                     DeliveryMode = DeliveryModes.Persistent
                 };
 
+                // Carries the trace context across the async boundary so the consumer's span
+                // links back to this one (see RabbitMqConsumer.TryExtractParentContext).
+                if (activity?.Id is { } traceParent)
+                {
+                    properties.Headers = new Dictionary<string, object?> { ["traceparent"] = traceParent };
+                }
+
                 await channel.BasicPublishAsync(
                     exchange: MessagingConstants.EventsExchange,
                     routingKey: topic,
@@ -62,8 +76,9 @@ public sealed class RabbitMqPublisher(
 
             return true;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
             return false;
         }
     }

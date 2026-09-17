@@ -156,10 +156,12 @@ if (-not $NoBrowser) {
 }
 
 Write-Host "`nFull stack is up:" -ForegroundColor Cyan
-Write-Host '  Frontend:    http://localhost:5173'
-Write-Host '  AuthApi:     http://localhost:8081/scalar/v1'
-Write-Host '  LinkApi:     http://localhost:8082/scalar/v1'
-Write-Host '  RedirectApi: http://localhost:8083/scalar/v1'
-Write-Host '  RabbitMQ UI: http://localhost:15672  (guest / guest)'
+Write-Host '  Frontend:         http://localhost:5173'
+Write-Host '  AuthApi:          http://localhost:8081/scalar/v1'
+Write-Host '  LinkApi:          http://localhost:8082/scalar/v1'
+Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'
+Write-Host '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
+Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis", port 6379)'
+Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
 Write-Host "`nStop the backend with: docker compose down"
 Write-Host "Stop the frontend by closing its window (or Ctrl+C in it)."

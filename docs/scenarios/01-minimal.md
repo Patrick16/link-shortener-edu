@@ -17,6 +17,8 @@ click tracking yet — those are later scenarios.
 | `redirect-api`       | .NET API | 8083  | `GET /{hash}` → 302 to the original URL                       |
 | `shortener-service`  | worker  | —     | consumes `LinkCreatedEvent`, persists the link to Postgres    |
 | `traffic-service`    | worker  | —     | running, but idle — its consumer is scenario 2 work           |
+| `redisinsight`       | infra   | 5540  | Redis GUI — browse keys/TTLs, run commands (add a DB manually: host `redis`, port 6379) |
+| `aspire-dashboard`   | infra   | 18888 / 18889 (OTLP) | logs, metrics, and traces from every .NET service |
 | `frontend/app`       | Vite dev server | 5173 | the demo UI (create a link, log in)                     |
 
 Each of `auth-api`/`shortener-service`/`traffic-service` **owns** one Postgres schema and is the
@@ -98,6 +100,23 @@ up. The demo doesn't hide this — the frontend shows a small note about it afte
 This is the actual point of scenario 1 having a bus already: it's a small, honest example of
 eventual consistency, which gets more interesting once replicas and sharding are in the picture.
 
+## Observability
+
+Every .NET service exports logs, metrics, and traces (OpenTelemetry SDK, OTLP over gRPC) to the
+`aspire-dashboard` container — the lightweight half of the .NET Aspire pattern (a standalone
+dashboard, not the full AppHost orchestrator; docker-compose stays in charge of orchestration).
+Open `http://localhost:18888` after creating a link and look at Traces: you'll see one trace named
+`LinkApi: POST Links` that spans **both** `LinkApi` and `ShortenerService` — the `MSG rabbitmq
+events` span on the consumer side is nested under the producer's, because the trace context is
+carried across the async boundary in a `traceparent` message header (there's no mainstream
+auto-instrumentation for `RabbitMQ.Client`, so this part — `Shared/Infrastructure/RabbitMqPublisher.cs`
+and `RabbitMqConsumer.cs` — is hand-rolled). Worth clicking into once: it's one of the more concrete
+ways to *see* what "decoupled write path" actually means end to end.
+
+`redisinsight` (`http://localhost:5540`) gives a GUI over the same Redis cache — on first open, add
+a connection with host `redis`, port `6379`, and you can watch `link:{hash}` keys appear as you
+create/visit links, with their TTL counting down.
+
 ## Known limitations (by design, for now)
 
 - **JWT isn't enforced anywhere.** `AuthApi` issues tokens; nothing validates them. `LinkApi` always
@@ -122,6 +141,7 @@ eventual consistency, which gets more interesting once replicas and sharding are
 | ShortenerService | `src/Services/ShortenerService/` |
 | Shared event contracts | `src/Shared/Contracts/Events/` |
 | RabbitMQ client/publisher/consumer | `src/Shared/Infrastructure/` |
+| OpenTelemetry wiring (shared) | `src/Shared/ServiceDefaults/` |
 | Frontend | `frontend/app/` |
 | docker-compose | `docker-compose.yml` |
 | Start/stop scripts | `scripts/start-stack.ps1`, `scripts/stop-stack.ps1` |

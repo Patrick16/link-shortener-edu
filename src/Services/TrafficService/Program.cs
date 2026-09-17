@@ -1,8 +1,10 @@
 using Common;
 using Microsoft.EntityFrameworkCore;
+using ServiceDefaults;
 using TrafficService;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.AddServiceDefaults();
 builder.Services.AddHostedService<Worker>();
 
 var connectionString = builder.Configuration.GetConnectionString(Constants.PostgresConnectionString);

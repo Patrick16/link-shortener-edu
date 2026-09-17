@@ -1,9 +1,11 @@
 using Common;
 using Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using ServiceDefaults;
 using ShortenerService;
 
 var builder = Host.CreateApplicationBuilder(args);
+builder.AddServiceDefaults();
 
 var connectionString = builder.Configuration.GetConnectionString(Constants.PostgresConnectionString);
 builder.Services.AddPooledDbContextFactory<DatabaseContext>(

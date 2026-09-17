@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -35,6 +36,7 @@ public sealed class RabbitMqConsumer(
             var consumer = new AsyncEventingBasicConsumer(channel);
             consumer.ReceivedAsync += async (_, ea) =>
             {
+                using var activity = StartConsumerActivity(routingKey, ea);
                 try
                 {
                     var json = Encoding.UTF8.GetString(ea.Body.Span);
@@ -46,8 +48,9 @@ public sealed class RabbitMqConsumer(
 
                     await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, cancellationToken);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                     await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true, cancellationToken);
                 }
             };
@@ -108,5 +111,33 @@ public sealed class RabbitMqConsumer(
                 delay = TimeSpan.FromSeconds(Math.Min(delay.TotalSeconds * 2, MaxRetryDelay.TotalSeconds));
             }
         }
+    }
+
+    private static Activity? StartConsumerActivity(string routingKey, BasicDeliverEventArgs ea)
+    {
+        var parentContext = TryExtractParentContext(ea.BasicProperties);
+        var activity = parentContext is { } context
+            ? MessagingActivitySource.Instance.StartActivity($"{routingKey} consume", ActivityKind.Consumer, context)
+            : MessagingActivitySource.Instance.StartActivity($"{routingKey} consume", ActivityKind.Consumer);
+
+        activity?.SetTag("messaging.system", "rabbitmq");
+        activity?.SetTag("messaging.destination.name", MessagingConstants.EventsExchange);
+        activity?.SetTag("messaging.rabbitmq.routing_key", routingKey);
+        activity?.SetTag("messaging.message.id", ea.BasicProperties.MessageId);
+        return activity;
+    }
+
+    // The publisher sends the trace context as a "traceparent" header (W3C format) so this span
+    // links back to the one that published the message, instead of starting an unrelated trace.
+    private static ActivityContext? TryExtractParentContext(IReadOnlyBasicProperties properties)
+    {
+        if (properties.Headers?.TryGetValue("traceparent", out var raw) == true &&
+            raw is byte[] bytes &&
+            ActivityContext.TryParse(Encoding.UTF8.GetString(bytes), null, out var context))
+        {
+            return context;
+        }
+
+        return null;
     }
 }

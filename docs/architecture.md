@@ -56,6 +56,12 @@ Short version of what's real today:
   that file is a placeholder for a possible future static-provisioning approach, unused right now
 - Whole stack: `docker compose up -d` (backend) + `frontend/app` dev server — see
   `scripts/start-stack.ps1` for a one-command version of both
+- **Observability:** every .NET service ships logs/metrics/traces (OpenTelemetry SDK, OTLP) to a
+  standalone `aspire-dashboard` container — the dashboard half of .NET Aspire, not the full AppHost
+  orchestrator (docker-compose still orchestrates everything). RabbitMQ publish/consume spans are
+  manually instrumented so a trace shows the full `LinkApi` → `ShortenerService` path across the
+  async boundary. `redisinsight` gives a GUI over the Redis cache. See
+  `docs/scenarios/01-minimal.md#observability`.
 
 ## TODO
 

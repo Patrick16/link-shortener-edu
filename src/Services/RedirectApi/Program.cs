@@ -1,10 +1,20 @@
 using Common;
-using Common.Models;
 using Microsoft.EntityFrameworkCore;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 using RedirectApi;
 using Scalar.AspNetCore;
+using ServiceDefaults;
+// OpenTelemetry.Trace also has a "Link" type (a span link) — alias ours to avoid the clash.
+using Link = Common.Models.Link;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddServiceDefaults();
+
+// AspNetCore OTel instrumentation lives here, not in ServiceDefaults — see the comment in
+// ServiceDefaults.csproj for why (worker services can't carry an ASP.NET Core dependency).
+builder.Services.ConfigureOpenTelemetryMeterProvider(metrics => metrics.AddAspNetCoreInstrumentation());
+builder.Services.ConfigureOpenTelemetryTracerProvider(tracing => tracing.AddAspNetCoreInstrumentation());
 
 // Add services to the container.
 
