@@ -18,6 +18,8 @@ builder.Services.AddDbContextPool<DatabaseContext>(
         options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(4L), null);
     }));
 
+builder.Services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.

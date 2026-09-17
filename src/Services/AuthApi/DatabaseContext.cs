@@ -16,5 +16,8 @@ public class DatabaseContext(DbContextOptions options) : DbContext(options)
         modelBuilder.Entity<User>().ToTable(UsersTable);
         modelBuilder.Entity<User>()
             .HasKey(x => x.Id);
+        modelBuilder.Entity<User>()
+            .HasIndex(x => x.Email)
+            .IsUnique();
     }
 }
