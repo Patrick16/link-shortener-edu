@@ -1,5 +1,6 @@
 using Common;
 using Common.Models;
+using Infrastructure;
 using LinkApi;
 using Microsoft.EntityFrameworkCore;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Infrastructure;
@@ -13,13 +14,21 @@ builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
 var connectionString = builder.Configuration.GetConnectionString(Constants.PostgresConnectionString);
-builder.Services.AddPooledDbContextFactory<DatabaseContext>(
+builder.Services.AddDbContextPool<DatabaseContext>(
     op => op.UseNpgsql(connectionString, options=>
     {
         options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(4L), null);
     }));
 
 builder.Services.AddSingleton<IEntityCacheService<Link>, LinkCacheService>();
+
+var rabbitMqConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqConnectionString);
+var rabbitMqFallbackConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqFallbackConnectionString);
+
+builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbitMqConnectionString!));
+builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallbackStore(rabbitMqFallbackConnectionString!));
+builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
+builder.Services.AddSingleton<IHashGenerator, Sha256Base62HashGenerator>();
 
 builder.Services.AddStackExchangeRedisCache(options =>
 {

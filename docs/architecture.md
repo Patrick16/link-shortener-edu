@@ -3,8 +3,8 @@
 ## Components
 
 - **AuthApi** — registration / login, writes to `Postgres users`. Provides `UserAuth` to other services.
-- **LinkApi** — accepts requests to create a short link. If the user is authenticated, `userId` is written into the hash. Publishes `origin link` to RabbitMQ for `ShortenerService`.
-- **ShortenerService** (worker) — listens on RabbitMQ, generates the hash, writes the short link to `Postgres Links` (sharded).
+- **LinkApi** — accepts requests to create a short link, generates the hash itself and returns it synchronously. If the user is authenticated, `userId` is written into the event. Publishes the created link (with hash) to RabbitMQ for `ShortenerService`.
+- **ShortenerService** (worker) — listens on RabbitMQ, persists the already-hashed short link to `Postgres Links` (sharded).
 - **RedirectApi** — accepts a short link, resolves the origin link via `Redis Links` (cache) or directly, returns the redirect, publishes a click event to RabbitMQ.
 - **TrafficService** (worker) — listens on RabbitMQ, writes clicks to `Postgres Clicks Users` and metadata (user-agent, referrer, headers) to `Mongo Clicks meta`.
 
