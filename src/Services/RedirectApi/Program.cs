@@ -1,3 +1,7 @@
+using Common;
+using Common.Models;
+using Microsoft.EntityFrameworkCore;
+using RedirectApi;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -7,6 +11,21 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+var connectionString = builder.Configuration.GetConnectionString(Constants.PostgresConnectionString);
+builder.Services.AddDbContextPool<DatabaseContext>(
+    op => op.UseNpgsql(connectionString, options =>
+    {
+        options.EnableRetryOnFailure(3, TimeSpan.FromSeconds(4L), null);
+    }));
+
+builder.Services.AddSingleton<IEntityCacheService<Link>, LinkCacheService>();
+
+builder.Services.AddStackExchangeRedisCache(options =>
+{
+    options.Configuration = builder.Configuration.GetConnectionString(Constants.RedisConnectionString);
+    options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
+});
 
 var app = builder.Build();
 
