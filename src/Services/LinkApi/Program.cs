@@ -29,6 +29,7 @@ builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbi
 builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallbackStore(rabbitMqFallbackConnectionString!));
 builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
 builder.Services.AddSingleton<IHashGenerator, Sha256Base62HashGenerator>();
+builder.Services.AddHostedService<RabbitMqRetryWorker>();
 
 builder.Services.AddStackExchangeRedisCache(options =>
 {

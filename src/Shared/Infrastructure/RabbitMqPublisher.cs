@@ -21,6 +21,20 @@ public sealed class RabbitMqPublisher(
         var messageId = Guid.NewGuid().ToString();
         var payload = JsonSerializer.Serialize(message);
 
+        var published = await TryPublishAsync(messageId, topic, payload, cancellationToken);
+        if (!published)
+        {
+            await _fallbackStore.SaveAsync(
+                new FallbackMessage(messageId, topic, payload, DateTime.UtcNow),
+                cancellationToken);
+        }
+    }
+
+    public Task<bool> TryRepublishAsync(FallbackMessage message, CancellationToken cancellationToken) =>
+        TryPublishAsync(message.MessageId, message.Topic, message.Payload, cancellationToken);
+
+    private async Task<bool> TryPublishAsync(string messageId, string topic, string payload, CancellationToken cancellationToken)
+    {
         try
         {
             var channel = await _connection.CreateChannelAsync(cancellationToken);
@@ -47,12 +61,12 @@ public sealed class RabbitMqPublisher(
                     body: Encoding.UTF8.GetBytes(payload),
                     cancellationToken: cancellationToken);
             }
+
+            return true;
         }
         catch (Exception)
         {
-            await _fallbackStore.SaveAsync(
-                new FallbackMessage(messageId, topic, payload, DateTime.UtcNow),
-                cancellationToken);
+            return false;
         }
     }
 }
