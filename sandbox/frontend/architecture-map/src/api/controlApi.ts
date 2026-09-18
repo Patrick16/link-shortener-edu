@@ -1,4 +1,14 @@
-import type { ChaosRequest, ChaosAction, ManagedContainer, ResourceSample, ScaleResult, TrafficRequest, TrafficScenarioInfo } from '../types/controlApi'
+import type {
+  ChaosRequest,
+  ChaosAction,
+  CustomScenario,
+  InfraStatus,
+  ManagedContainer,
+  ResourceSample,
+  ScaleResult,
+  TrafficRequest,
+  TrafficScenarioInfo,
+} from '../types/controlApi'
 
 const BASE_URL = import.meta.env.VITE_CONTROL_API_URL || 'http://localhost:5299'
 
@@ -12,7 +22,7 @@ export class ControlApiError extends Error {
   }
 }
 
-async function send(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Response> {
+async function send(path: string, method: 'GET' | 'POST' | 'DELETE', body?: unknown): Promise<Response> {
   const response = await fetch(`${BASE_URL}${path}`, {
     method,
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
@@ -27,7 +37,7 @@ async function send(path: string, method: 'GET' | 'POST', body?: unknown): Promi
   return response
 }
 
-async function request<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown): Promise<T> {
+async function request<T>(path: string, method: 'GET' | 'POST' | 'DELETE' = 'GET', body?: unknown): Promise<T> {
   return (await send(path, method, body)).json() as Promise<T>
 }
 
@@ -61,4 +71,15 @@ export const controlApi = {
   },
 
   flushRedisCache: () => request<{ flushed: string }>('/api/containers/redis/flush-cache', 'POST'),
+
+  listEndpoints: () => request<string[]>('/api/endpoints'),
+
+  getInfraStatus: () => request<InfraStatus>('/api/infra/status'),
+  setNginxEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/nginx', 'POST', { enabled }),
+  setPgcatEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/pgcat', 'POST', { enabled }),
+  setCacheEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/cache', 'POST', { enabled }),
+
+  listScenarios: () => request<CustomScenario[]>('/api/scenarios'),
+  saveScenario: (scenario: CustomScenario) => request<CustomScenario>('/api/scenarios', 'POST', scenario),
+  deleteScenario: (name: string) => send(`/api/scenarios/${encodeURIComponent(name)}`, 'DELETE'),
 }

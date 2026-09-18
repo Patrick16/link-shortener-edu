@@ -29,12 +29,31 @@ public class DockerService : IDockerService
     // an option to try by mistake.
     private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api"];
 
+    // Every DB-touching service - pgcat's toggle recreates all of them, since "the system without
+    // connection pooling" means the whole system, not just the two APIs a k6 test happens to hit.
+    private static readonly IReadOnlyList<string> DbTouchingServices =
+        ["auth-api", "link-api", "redirect-api", "shortener-service", "traffic-service"];
+
+    // Only these two actually read/populate the Redis cache (see LinkCacheService) - shortener-
+    // service/traffic-service/auth-api have no cache to disable.
+    private static readonly IReadOnlyList<string> CacheUsingServices = ["link-api", "redirect-api"];
+
+    // Endpoint keys k6-scripts/custom.js understands - kept here (not just in the script) so
+    // Program.cs can validate a request before ever starting a k6 container.
+    private static readonly IReadOnlyList<string> KnownEndpoints = ["create", "redirect", "register"];
+
     private readonly DockerClient _client;
     private readonly string _composeProject;
     private readonly string _composeNetwork;
     private readonly string _composeFile;
     private readonly string _k6ScriptsDir;
     private readonly ILogger<DockerService> _logger;
+
+    // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
+    // tool despite not surviving a control-api restart.
+    private bool _nginxBypassed;
+    private bool _pgcatEnabled = true;
+    private bool _cacheEnabled = true;
 
     public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
     {
@@ -194,17 +213,29 @@ public class DockerService : IDockerService
 
         return Directory.GetFiles(_k6ScriptsDir, "*.js")
             .Select(Path.GetFileNameWithoutExtension)
-            .Where(name => name is not null)
+            // custom.js isn't picked by name - it's what an Endpoints-driven request runs
+            // regardless of Scenario, so it has no place in a by-name picker.
+            .Where(name => name is not null and not "custom")
             .Select(name => new TrafficScenarioInfo(name!, ScenarioDescriptions.GetValueOrDefault(name!, "No description available.")))
             .OrderBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
     }
 
-    private static readonly Regex K6ProgressLine = new(@"running \((\d+(?:\.\d+)?)s\), (\d+)/(\d+) VUs, (\d+) complete", RegexOptions.Compiled);
+    // k6 picks the elapsed-time format by the *total configured test duration*, not the current
+    // elapsed value: under a minute it's plain "12.3s" for the whole run, but a run configured for
+    // 60s or more prints "0m01.0s", "1m05.0s", etc. from the very first line onward - confirmed
+    // against real runs at 10s vs 65s (identical scripts, only --duration differed). Groups:
+    // 1=hours (optional), 2=minutes (optional), 3=seconds, 4=active VUs, 5=max VUs, 6=iterations.
+    private static readonly Regex K6ProgressLine =
+        new(@"running \((?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s\), (\d+)/(\d+) VUs, (\d+) complete", RegexOptions.Compiled);
 
     public async Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
-        var scriptPath = Path.Combine(_k6ScriptsDir, $"{request.Scenario}.js");
+        // Endpoints present means "custom" mode: one generic script picks a random selected
+        // endpoint each iteration, instead of looking up {Scenario}.js - Scenario is just a label
+        // in this mode (a saved custom scenario's own name, shown in the report).
+        var isCustom = request.Endpoints is { Count: > 0 };
+        var scriptPath = Path.Combine(_k6ScriptsDir, isCustom ? "custom.js" : $"{request.Scenario}.js");
         if (!File.Exists(scriptPath))
         {
             return null;
@@ -214,9 +245,9 @@ public class DockerService : IDockerService
 
         // A custom ramp profile replaces flat --vus/--duration with k6's own --stage flags (one
         // per segment of the UI's point graph) - --vus still sets the starting VU count k6 ramps
-        // from, it just no longer sets a constant. k6's periodic "running (Ns), X/Y VUs, N
-        // complete" status line has the same shape either way (confirmed against a real run before
-        // relying on it), so K6ProgressLine/StreamLogsWithProgressAsync need no changes for this.
+        // from, it just no longer sets a constant. k6's periodic "running (...), X/Y VUs, N
+        // complete" status line keeps the same overall shape either way - only the elapsed-time
+        // formatting itself depends on total duration, handled by K6ProgressLine above.
         var cmd = new List<string> { "run", "--no-color", "--summary-export", "/scripts/summary.json", "--vus", request.Vus.ToString() };
         int totalSeconds;
         if (request.Stages is { Count: > 0 } stages)
@@ -238,6 +269,25 @@ public class DockerService : IDockerService
 
         cmd.Add("/scripts/scenario.js");
 
+        // Nginx bypass only changes where k6 itself sends requests (LINK_API_URL/REDIRECT_API_URL
+        // env vars the scripts already read - see smoke.js) - nginx keeps running either way, so
+        // the frontend app's own manual use of it is unaffected. Bypassing means requests go
+        // straight to the compose service name, which Docker's embedded DNS still round-robins
+        // across replicas per-connection, but k6 keeps a connection alive per VU, so in practice
+        // one VU sticks to whichever replica it first resolved - a fair demonstration of "no real
+        // load balancing", not a trick. AuthApi was never behind nginx (see nginx.conf), so its URL
+        // doesn't depend on the toggle at all.
+        var env = new List<string>
+        {
+            $"LINK_API_URL=http://{(_nginxBypassed ? "link-api:8080" : "nginx:8082")}",
+            $"REDIRECT_API_URL=http://{(_nginxBypassed ? "redirect-api:8080" : "nginx:8083")}",
+            "AUTH_API_URL=http://auth-api:8080",
+        };
+        if (isCustom)
+        {
+            env.Add($"ENDPOINTS={string.Join(',', request.Endpoints!)}");
+        }
+
         var created = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
         {
             Image = K6Image,
@@ -248,6 +298,7 @@ public class DockerService : IDockerService
             // container with no docker.sock access, so it's a low-risk place to do it.
             User = "0:0",
             Cmd = cmd,
+            Env = env,
             Labels = new Dictionary<string, string> { ["com.docker.compose.project"] = _composeProject },
             HostConfig = new HostConfig { NetworkMode = _composeNetwork },
         }, ct);
@@ -318,7 +369,10 @@ public class DockerService : IDockerService
                     continue;
                 }
 
-                var elapsed = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+                var hours = match.Groups[1].Success ? double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+                var minutes = match.Groups[2].Success ? double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture) : 0;
+                var seconds = double.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
+                var elapsed = hours * 3600 + minutes * 60 + seconds;
                 if (elapsed > totalSeconds)
                 {
                     // k6 prints one extra status line during its graceful-stop tail, past the
@@ -327,8 +381,8 @@ public class DockerService : IDockerService
                     continue;
                 }
 
-                var activeVus = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
-                var iterations = long.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
+                var activeVus = int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
+                var iterations = long.Parse(match.Groups[6].Value, CultureInfo.InvariantCulture);
                 var elapsedDelta = elapsed - lastElapsed;
                 var rate = elapsedDelta > 0 ? (iterations - lastIterations) / elapsedDelta : 0;
                 lastElapsed = elapsed;
@@ -385,6 +439,24 @@ public class DockerService : IDockerService
             return new ScaleResult(serviceId, replicas, false, $"'{serviceId}' is not a scalable service");
         }
 
+        var (exitCode, output) = await RunComposeAsync(
+            ["up", "-d", "--scale", $"{serviceId}={replicas}", "--no-recreate", serviceId], null, ct);
+
+        if (exitCode != 0)
+        {
+            _logger.LogWarning("Scaling {ServiceId} failed (exit {ExitCode}): {Output}", serviceId, exitCode, output);
+        }
+
+        return new ScaleResult(serviceId, replicas, exitCode == 0, output);
+    }
+
+    // Shared by ScaleAsync and the pgcat/cache infra toggles - all three are "shell out to the real
+    // `docker compose` CLI rather than reimplement its logic", just with different args/env.
+    // extraEnv is merged into the child process's own environment so docker compose's `${VAR}`
+    // interpolation in docker-compose.yml picks it up when re-rendering the target services' config
+    // - that's what makes toggling DB_HOST/CACHE_ENABLED actually take effect on recreate.
+    private async Task<(int ExitCode, string Output)> RunComposeAsync(IEnumerable<string> args, IDictionary<string, string>? extraEnv, CancellationToken ct)
+    {
         var psi = new ProcessStartInfo
         {
             FileName = "docker",
@@ -392,25 +464,25 @@ public class DockerService : IDockerService
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        foreach (var arg in new[] { "compose", "-p", _composeProject, "-f", _composeFile, "up", "-d", "--scale", $"{serviceId}={replicas}", "--no-recreate", serviceId })
+        foreach (var arg in new[] { "compose", "-p", _composeProject, "-f", _composeFile }.Concat(args))
         {
             psi.ArgumentList.Add(arg);
         }
 
-        _logger.LogWarning("Scaling {ServiceId} to {Replicas} replicas", serviceId, replicas);
+        if (extraEnv is not null)
+        {
+            foreach (var (key, value) in extraEnv)
+            {
+                psi.Environment[key] = value;
+            }
+        }
 
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start the docker compose process");
         var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
         var output = await stdoutTask + await stderrTask;
-
-        if (process.ExitCode != 0)
-        {
-            _logger.LogWarning("Scaling {ServiceId} failed (exit {ExitCode}): {Output}", serviceId, process.ExitCode, output);
-        }
-
-        return new ScaleResult(serviceId, replicas, process.ExitCode == 0, output);
+        return (process.ExitCode, output);
     }
 
     public async Task<string?> FlushRedisAsync(CancellationToken ct)
@@ -435,6 +507,62 @@ public class DockerService : IDockerService
 
         return string.IsNullOrWhiteSpace(stdout) ? stderr.Trim() : stdout.Trim();
     }
+
+    public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled);
+
+    public InfraStatus SetNginxBypass(bool bypassed)
+    {
+        _logger.LogWarning("Nginx bypass for load-test traffic: {Bypassed}", bypassed);
+        _nginxBypassed = bypassed;
+        return GetInfraStatus();
+    }
+
+    // --no-deps is load-bearing, not cosmetic: --force-recreate on named services also recreates
+    // their whole depends_on chain unless told not to (found by hitting it - a pgcat toggle here
+    // once cascaded into recreating postgres/redis/rabbitmq/pgcat itself too). That's doubly bad
+    // for any service with a *relative* bind mount (pgcat's own pgcat.toml): this docker compose
+    // process runs INSIDE control-api, so a path like "./infra/pgcat/pgcat.toml" resolves against
+    // control-api's own /workspace view, but the actual container is created by the host's Docker
+    // daemon over the socket, which resolves that same string against the real host filesystem -
+    // where it doesn't exist, so Docker silently creates it as an empty directory and the mount
+    // fails. --no-deps keeps this to exactly the named services, none of which have any volumes.
+    public async Task<InfraStatus> SetPgcatEnabledAsync(bool enabled, CancellationToken ct)
+    {
+        var env = new Dictionary<string, string>
+        {
+            ["DB_HOST"] = enabled ? "pgcat" : "postgres",
+            ["DB_PORT"] = enabled ? "6432" : "5432",
+        };
+
+        _logger.LogWarning("Switching DB routing for {Services} to {Host} (pgcat enabled: {Enabled})", string.Join(", ", DbTouchingServices), env["DB_HOST"], enabled);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. DbTouchingServices], env, ct);
+        if (exitCode != 0)
+        {
+            _logger.LogWarning("Toggling pgcat failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+
+        _pgcatEnabled = enabled;
+        return GetInfraStatus();
+    }
+
+    public async Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct)
+    {
+        var env = new Dictionary<string, string> { ["CACHE_ENABLED"] = enabled ? "true" : "false" };
+
+        _logger.LogWarning("Switching Cache__Enabled for {Services} to {Enabled}", string.Join(", ", CacheUsingServices), enabled);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. CacheUsingServices], env, ct);
+        if (exitCode != 0)
+        {
+            _logger.LogWarning("Toggling cache failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+
+        _cacheEnabled = enabled;
+        return GetInfraStatus();
+    }
+
+    public IReadOnlyList<string> ListKnownEndpoints() => KnownEndpoints;
 
     private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, long exitCode, string rawOutput, CancellationToken ct)
     {

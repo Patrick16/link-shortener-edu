@@ -3,11 +3,12 @@ import { ComponentCard } from './ComponentCard'
 import { ServiceControls } from './ServiceControls'
 import { ScaleControl } from './ScaleControl'
 import { FlushCacheControl } from './FlushCacheControl'
+import { InfraToggleControl } from './InfraToggleControl'
 import { Sparkline } from './Sparkline'
-import { controlApi } from '../api/controlApi'
+import { controlApi, ControlApiError } from '../api/controlApi'
 import { statusColor } from '../utils/statusColor'
 import type { ArchComponent } from '../types/architecture'
-import type { ManagedContainer, ResourceSample } from '../types/controlApi'
+import type { InfraStatus, ManagedContainer, ResourceSample } from '../types/controlApi'
 
 interface Props {
   component: ArchComponent
@@ -19,15 +20,36 @@ interface Props {
 
 export function NodePanel({ component, serviceId, instances, resourceHistory, onClose }: Props) {
   const [scalable, setScalable] = useState<string[]>([])
+  const [infraStatus, setInfraStatus] = useState<InfraStatus | null>(null)
+  const [infraBusy, setInfraBusy] = useState(false)
+  const [infraError, setInfraError] = useState<string | null>(null)
   const cpuValues = resourceHistory.map((s) => s.cpuPercent)
   const memValuesMb = resourceHistory.map((s) => s.memoryUsageBytes / (1024 * 1024))
   const cpuMax = Math.max(5, ...cpuValues) * 1.4
   const memMax = Math.max(64, ...memValuesMb) * 1.3
   const primary = instances[0]
+  const showsInfraToggle = serviceId === 'nginx' || serviceId === 'pgcat' || serviceId === 'redis'
 
   useEffect(() => {
     controlApi.listScalableServices().then(setScalable).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    if (!showsInfraToggle) return
+    controlApi.getInfraStatus().then(setInfraStatus).catch(() => {})
+  }, [showsInfraToggle])
+
+  async function toggleInfra(apply: (enabled: boolean) => Promise<InfraStatus>, enabled: boolean) {
+    setInfraBusy(true)
+    setInfraError(null)
+    try {
+      setInfraStatus(await apply(enabled))
+    } catch (err) {
+      setInfraError(err instanceof ControlApiError ? err.message : String(err))
+    } finally {
+      setInfraBusy(false)
+    }
+  }
 
   return (
     <div className="side-panel">
@@ -62,6 +84,35 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
 
           {serviceId && scalable.includes(serviceId) && <ScaleControl serviceId={serviceId} currentReplicas={instances.length} />}
           {serviceId === 'redis' && <FlushCacheControl />}
+
+          {infraStatus && serviceId === 'nginx' && (
+            <InfraToggleControl
+              label="Load balancing"
+              description="Off routes load-test traffic straight to a single link-api/redirect-api container, bypassing nginx - shows the system without balancing across replicas. nginx itself keeps running, so the app UI is unaffected."
+              enabled={!infraStatus.nginxBypassed}
+              busy={infraBusy}
+              onToggle={(enabled) => toggleInfra(controlApi.setNginxEnabled, enabled)}
+            />
+          )}
+          {infraStatus && serviceId === 'pgcat' && (
+            <InfraToggleControl
+              label="Connection pooling"
+              description="Off reconnects every DB-touching service straight to Postgres, bypassing pgcat - shows the system without connection pooling. Recreates 5 containers, takes a few seconds."
+              enabled={infraStatus.pgcatEnabled}
+              busy={infraBusy}
+              onToggle={(enabled) => toggleInfra(controlApi.setPgcatEnabled, enabled)}
+            />
+          )}
+          {infraStatus && serviceId === 'redis' && (
+            <InfraToggleControl
+              label="Caching"
+              description="Off makes LinkApi/RedirectApi skip Redis entirely and always read Postgres - shows the system without caching. Recreates 2 containers, takes a few seconds."
+              enabled={infraStatus.cacheEnabled}
+              busy={infraBusy}
+              onToggle={(enabled) => toggleInfra(controlApi.setCacheEnabled, enabled)}
+            />
+          )}
+          {infraError && <p className="service-card-error">{infraError}</p>}
 
           {resourceHistory.length > 0 && (
             <div className="node-panel-charts">

@@ -4,6 +4,11 @@ import type { TrafficRunState } from '../hooks/useTrafficRun'
 import type { TrafficScenarioInfo, TrafficStage } from '../types/controlApi'
 import { AxisChart } from './AxisChart'
 import { StageGraphEditor, type StagePoint } from './StageGraphEditor'
+import { CustomScenarioControls } from './CustomScenarioControls'
+
+// Not a real k6-scripts/*.js name (custom.js is excluded from ListTrafficScenarios on purpose) -
+// picking it switches the panel into "choose your own endpoints" mode instead of a named script.
+const CUSTOM_VALUE = '__custom__'
 
 const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: string }> = [
   { key: 'avg', label: 'avg' },
@@ -66,6 +71,7 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
   const [scenario, setScenario] = useState('')
   const [totalDuration, setTotalDuration] = useState(DEFAULT_PRESET.totalDurationSeconds)
   const [points, setPoints] = useState<StagePoint[]>(DEFAULT_PRESET.points)
+  const [selectedEndpoints, setSelectedEndpoints] = useState<string[]>(['create', 'redirect'])
 
   useEffect(() => {
     controlApi
@@ -81,11 +87,15 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
   // first time it's set from the scenario list above.
   useEffect(() => {
     if (!scenario) return
+    if (scenario === CUSTOM_VALUE) {
+      setSelectedEndpoints(['create', 'redirect'])
+    }
     const preset = PRESETS[scenario] ?? DEFAULT_PRESET
     setTotalDuration(preset.totalDurationSeconds)
     setPoints(preset.points)
   }, [scenario])
 
+  const isCustom = scenario === CUSTOM_VALUE
   const maxLatency = report?.httpReqDuration ? Math.max(...LATENCY_ROWS.map((r) => report.httpReqDuration![r.key])) : 0
   const selectedDescription = scenarios.find((s) => s.name === scenario)?.description
   const totalSeconds = progress?.totalSeconds ?? totalDuration
@@ -102,23 +112,51 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
               {s.name}
             </option>
           ))}
+          <option value={CUSTOM_VALUE}>— Custom (choose endpoints) —</option>
         </select>
         <button
           onClick={() =>
             start({
-              scenario,
+              scenario: isCustom ? 'custom' : scenario,
               vus: points[0]?.vus ?? 0,
               durationSeconds: totalDuration,
               stages: pointsToStages(points),
+              endpoints: isCustom ? selectedEndpoints : undefined,
             })
           }
-          disabled={running || !scenario || points.length < 2}
+          disabled={running || !scenario || points.length < 2 || (isCustom && selectedEndpoints.length === 0)}
         >
-          {running ? `Running ${scenario}...` : 'Run traffic'}
+          {running ? `Running ${isCustom ? 'custom' : scenario}...` : 'Run traffic'}
         </button>
       </div>
 
-      {selectedDescription && <p className="scenario-description-text">{selectedDescription}</p>}
+      {isCustom ? (
+        <>
+          <p className="scenario-description-text">
+            Pick which endpoints to generate load against - each iteration hits a random one from your selection - then draw the
+            ramp below. Save a combination by name to reuse or tweak it later.
+          </p>
+          <CustomScenarioControls
+            disabled={running}
+            selectedEndpoints={selectedEndpoints}
+            onEndpointsChange={setSelectedEndpoints}
+            points={points}
+            totalDurationSeconds={totalDuration}
+            onLoad={(saved) => {
+              setSelectedEndpoints(saved.endpoints)
+              setPoints(saved.points.map((p) => ({ t: p.t, vus: p.vus })))
+              setTotalDuration(saved.totalDurationSeconds)
+            }}
+            onReset={() => {
+              setSelectedEndpoints(['create', 'redirect'])
+              setPoints(DEFAULT_PRESET.points)
+              setTotalDuration(DEFAULT_PRESET.totalDurationSeconds)
+            }}
+          />
+        </>
+      ) : (
+        selectedDescription && <p className="scenario-description-text">{selectedDescription}</p>
+      )}
 
       <StageGraphEditor points={points} onChange={setPoints} totalDurationSeconds={totalDuration} onTotalDurationChange={setTotalDuration} disabled={running} />
 

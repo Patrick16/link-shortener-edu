@@ -10,7 +10,17 @@ public record TrafficStage(int DurationSeconds, int TargetVus);
 // becomes k6's start-VUs (`--vus`) and DurationSeconds is ignored in favor of the stages' own
 // total. Kept both shapes on one request rather than two endpoints since everything downstream
 // (progress reporting, the report itself) is identical either way.
-public record TrafficRequest(string Scenario, int Vus, int DurationSeconds, IReadOnlyList<TrafficStage>? Stages = null);
+//
+// Endpoints, when present and non-empty, replace the named-script lookup ({Scenario}.js) with the
+// one generic k6-scripts/custom.js, which picks a random endpoint from this list each iteration -
+// see DockerService.KnownEndpoints for the allowed values. Scenario is still sent along in this
+// mode purely as a label for the report/UI (e.g. a saved custom scenario's name), not a script name.
+public record TrafficRequest(
+    string Scenario,
+    int Vus,
+    int DurationSeconds,
+    IReadOnlyList<TrafficStage>? Stages = null,
+    IReadOnlyList<string>? Endpoints = null);
 
 public record TrafficScenarioInfo(string Name, string Description);
 

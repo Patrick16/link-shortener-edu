@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.SignalR;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<IDockerService, DockerService>();
+builder.Services.AddSingleton<IScenarioStore, ScenarioStore>();
 builder.Services.AddSingleton<ResourceStatsStore>();
 builder.Services.AddSignalR();
 builder.Services.AddHostedService<StatusPollerService>();
@@ -130,7 +131,15 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHub
         return Results.BadRequest(new { error = "durationSeconds must be between 1 and 120" });
     }
 
-    if (!docker.ListTrafficScenarios().Any(s => s.Name == request.Scenario))
+    if (request.Endpoints is { Count: > 0 } endpoints)
+    {
+        var unknown = endpoints.Where(e => !docker.ListKnownEndpoints().Contains(e)).ToList();
+        if (unknown.Count > 0)
+        {
+            return Results.BadRequest(new { error = $"unknown endpoint(s): {string.Join(", ", unknown)}" });
+        }
+    }
+    else if (!docker.ListTrafficScenarios().Any(s => s.Name == request.Scenario))
     {
         return Results.NotFound(new { error = $"unknown scenario '{request.Scenario}'" });
     }
@@ -161,5 +170,68 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHub
 
     return Results.Accepted();
 });
+
+app.MapGet("/api/endpoints", (IDockerService docker) => Results.Ok(docker.ListKnownEndpoints()));
+
+app.MapGet("/api/infra/status", (IDockerService docker) => Results.Ok(docker.GetInfraStatus()));
+
+// "Enabled" is framed the same way for all three - true is the normal/default state, false is the
+// degraded one being demonstrated - even though nginx's own field name (NginxBypassed) is the
+// inverse of that, since bypassing is the interesting state worth naming directly there.
+app.MapPost("/api/infra/nginx", (InfraToggleRequest request, IDockerService docker) =>
+    Results.Ok(docker.SetNginxBypass(!request.Enabled)));
+
+app.MapPost("/api/infra/pgcat", async (InfraToggleRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await docker.SetPgcatEnabledAsync(request.Enabled, ct));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Toggling pgcat to {Enabled} failed", request.Enabled);
+        return Results.Problem(ex.Message);
+    }
+});
+
+app.MapPost("/api/infra/cache", async (InfraToggleRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
+{
+    try
+    {
+        return Results.Ok(await docker.SetCacheEnabledAsync(request.Enabled, ct));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Toggling cache to {Enabled} failed", request.Enabled);
+        return Results.Problem(ex.Message);
+    }
+});
+
+app.MapGet("/api/scenarios", async (IScenarioStore store, CancellationToken ct) => Results.Ok(await store.ListAsync(ct)));
+
+app.MapPost("/api/scenarios", async (CustomScenario scenario, IScenarioStore store, IDockerService docker, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(scenario.Name))
+    {
+        return Results.BadRequest(new { error = "name is required" });
+    }
+
+    var unknown = scenario.Endpoints.Where(e => !docker.ListKnownEndpoints().Contains(e)).ToList();
+    if (scenario.Endpoints.Count == 0 || unknown.Count > 0)
+    {
+        return Results.BadRequest(new { error = $"endpoints must be a non-empty subset of: {string.Join(", ", docker.ListKnownEndpoints())}" });
+    }
+
+    if (scenario.Points.Count < 2)
+    {
+        return Results.BadRequest(new { error = "at least 2 points are required" });
+    }
+
+    await store.SaveAsync(scenario, ct);
+    return Results.Ok(scenario);
+});
+
+app.MapDelete("/api/scenarios/{name}", async (string name, IScenarioStore store, CancellationToken ct) =>
+    await store.DeleteAsync(name, ct) ? Results.Ok() : Results.NotFound());
 
 app.Run();

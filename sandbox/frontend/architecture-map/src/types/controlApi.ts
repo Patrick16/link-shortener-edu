@@ -45,6 +45,29 @@ export interface TrafficRequest {
   vus: number
   durationSeconds: number
   stages?: TrafficStage[]
+  endpoints?: string[]
+}
+
+// Persisted exactly as the graph edits it (time + VUs at that point) - see ScenarioPoint on the
+// backend for why storing points beats pre-converting to k6 stages.
+export interface ScenarioPoint {
+  t: number
+  vus: number
+}
+
+export interface CustomScenario {
+  name: string
+  endpoints: string[]
+  totalDurationSeconds: number
+  points: ScenarioPoint[]
+}
+
+// NginxBypassed is the one field framed as "the interesting state", not "is it on" - see
+// InfraStatus on the backend.
+export interface InfraStatus {
+  nginxBypassed: boolean
+  pgcatEnabled: boolean
+  cacheEnabled: boolean
 }
 
 export interface TrafficScenarioInfo {

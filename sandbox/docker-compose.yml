@@ -92,7 +92,10 @@ services:
       - "8081:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=users_db;Username=postgres;Password=postgres"
+      # DB_HOST/DB_PORT default to pgcat - control-api's pgcat toggle re-runs `docker compose up`
+      # with these overridden to postgres:5432, recreating this service so it demonstrates running
+      # without connection pooling instead of just leaving pgcat unused.
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=users_db;Username=postgres;Password=postgres"
       Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
@@ -109,11 +112,15 @@ services:
     # bind the same host port. nginx is the external entry point on 8082 instead (see below).
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+      # Defaults to true - control-api's cache toggle recreates link-api/redirect-api with this set
+      # to false so the app skips Redis entirely (see EntityCacheService), a clean "no caching"
+      # demo rather than every request eating a failed-connection timeout against a stopped redis.
+      Cache__Enabled: "${CACHE_ENABLED:-true}"
     depends_on:
       pgcat:
         condition: service_healthy
@@ -131,10 +138,11 @@ services:
     # No host port mapping - see the note on link-api above; nginx exposes this on 8083 instead.
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+      Cache__Enabled: "${CACHE_ENABLED:-true}"
     depends_on:
       pgcat:
         condition: service_healthy
@@ -161,7 +169,7 @@ services:
       context: ..
       dockerfile: src/backend/Services/ShortenerService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
@@ -177,7 +185,7 @@ services:
       context: ..
       dockerfile: src/backend/Services/TrafficService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=clicks_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=clicks_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
@@ -200,6 +208,7 @@ services:
       Docker__ComposeFile: "/workspace/docker-compose.yml"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Cors__AllowedOrigins__1: "http://localhost:5174"
+      Scenarios__DataDir: "/data"
     volumes:
       # Lets this container talk to the Docker Engine managing the whole stack, so it can
       # stop/start/restart sibling containers on request. Local-stack-only tool - never point this
@@ -209,7 +218,12 @@ services:
       # can find docker-compose.yml to run `--scale`. Compose itself does the actual work against
       # the Docker Engine via the socket above; this mount is just so it can read its own file.
       - ./:/workspace:ro
+      # Saved custom traffic scenarios (endpoints + load ramp) - a real volume, not the read-only
+      # workspace mount above, so they survive a control-api rebuild the same way postgres-data
+      # survives one.
+      - control-api-data:/data
 
 volumes:
   postgres-data:
   redisinsight-data:
+  control-api-data:
