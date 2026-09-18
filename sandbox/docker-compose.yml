@@ -21,6 +21,24 @@ services:
       timeout: 5s
       retries: 10
 
+  pgcat:
+    image: ghcr.io/postgresml/pgcat:latest
+    ports:
+      - "6432:6432" # exposed for local psql/inspection, same as postgres's own 5432 below
+    volumes:
+      - ./infra/pgcat/pgcat.toml:/etc/pgcat/pgcat.toml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # pg_isready alone doesn't complete password auth, so pgcat logs a (harmless) warning per
+      # check - a real authenticated query against one of the actual pools both avoids the log
+      # noise and proves pooling itself works, not just that the port accepts TCP connections.
+      test: ["CMD-SHELL", "PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres -d links_db -c 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   redis:
     image: redis:7-alpine
     ports:
@@ -74,11 +92,11 @@ services:
       - "8081:8080"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=users_db;Username=postgres;Password=postgres"
       Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
-      postgres:
+      pgcat:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
@@ -91,13 +109,13 @@ services:
     # bind the same host port. nginx is the external entry point on 8082 instead (see below).
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
-      postgres:
+      pgcat:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -113,12 +131,12 @@ services:
     # No host port mapping - see the note on link-api above; nginx exposes this on 8083 instead.
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
-      postgres:
+      pgcat:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -143,11 +161,11 @@ services:
       context: ..
       dockerfile: src/backend/Services/ShortenerService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
-      postgres:
+      pgcat:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -159,11 +177,11 @@ services:
       context: ..
       dockerfile: src/backend/Services/TrafficService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=clicks_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=pgcat;Port=6432;Database=clicks_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
-      postgres:
+      pgcat:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy

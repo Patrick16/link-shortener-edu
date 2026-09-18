@@ -1,0 +1,78 @@
+#
+# PgCat in front of the single Postgres instance used by scenarios 1-3.
+#
+# One pool per physical database (see infra/postgres/init-databases.sql for why they're separate
+# databases, not schemas). Each pool has exactly one shard with a single "primary" server - there's
+# no replica or sharding yet, so this is pure connection pooling: every service talks to pgcat:6432
+# instead of postgres:5432 directly, and pgcat multiplexes many client connections onto a small
+# server-side pool per database.
+#
+# Sharding links_db (shard1.toml/shard2.toml, currently TODO stubs) is scenario 4, not this file.
+
+[general]
+host = "0.0.0.0"
+port = 6432
+enable_prometheus_exporter = false
+connect_timeout = 5000
+idle_timeout = 30000
+healthcheck_timeout = 1000
+healthcheck_delay = 30000
+shutdown_timeout = 5000
+ban_time = 20
+log_client_connections = false
+log_client_disconnections = false
+# Picks up connection-string/pool-size edits without a container restart while poking at this.
+autoreload = 15000
+worker_threads = 4
+admin_username = "admin_user"
+admin_password = "admin_pass"
+
+[pools.users_db]
+pool_mode = "transaction"
+default_role = "primary"
+query_parser_enabled = true
+primary_reads_enabled = true
+
+[pools.users_db.users.0]
+username = "postgres"
+password = "postgres"
+pool_size = 10
+statement_timeout = 0
+
+[pools.users_db.shards.0]
+servers = [["postgres", 5432, "primary"]]
+database = "users_db"
+
+[pools.links_db]
+pool_mode = "transaction"
+default_role = "primary"
+query_parser_enabled = true
+primary_reads_enabled = true
+
+[pools.links_db.users.0]
+username = "postgres"
+password = "postgres"
+# LinkApi + RedirectApi both read this pool and ShortenerService writes it - busiest of the three
+# under load, hence the bigger pool.
+pool_size = 20
+statement_timeout = 0
+
+[pools.links_db.shards.0]
+servers = [["postgres", 5432, "primary"]]
+database = "links_db"
+
+[pools.clicks_db]
+pool_mode = "transaction"
+default_role = "primary"
+query_parser_enabled = true
+primary_reads_enabled = true
+
+[pools.clicks_db.users.0]
+username = "postgres"
+password = "postgres"
+pool_size = 10
+statement_timeout = 0
+
+[pools.clicks_db.shards.0]
+servers = [["postgres", 5432, "primary"]]
+database = "clicks_db"

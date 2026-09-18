@@ -166,6 +166,24 @@
       }
     },
     {
+      "id": "pgcat",
+      "name": "PgCat",
+      "type": "infrastructure",
+      "icon": "🐈",
+      "description": "Connection pooler in front of Postgres - every service talks to pgcat, never to postgres directly",
+      "position": { "x": 990, "y": 260 },
+      "scenarios": ["1", "2"],
+      "details": {
+        "purpose": "One pool per physical database (users_db/links_db/clicks_db), each a single unsharded shard for now; multiplexes many short-lived app connections onto a small server-side pool per database",
+        "technologies": ["PgCat"],
+        "port": 6432,
+        "links": {
+          "config": "sandbox/infra/pgcat/pgcat.toml",
+          "compose": "sandbox/docker-compose.yml#pgcat"
+        }
+      }
+    },
+    {
       "id": "redis",
       "name": "Redis",
       "type": "infrastructure",
@@ -285,7 +303,7 @@
     },
     {
       "from": "auth-api",
-      "to": "users-db",
+      "to": "pgcat",
       "label": "Write / read user",
       "protocol": "PostgreSQL wire (Npgsql)",
       "synchronous": true,
@@ -302,7 +320,7 @@
     },
     {
       "from": "link-api",
-      "to": "links-db",
+      "to": "pgcat",
       "label": "Read on cache miss",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "read-only from this service — ShortenerService owns writes/migrations",
@@ -329,7 +347,7 @@
     },
     {
       "from": "shortener-service",
-      "to": "links-db",
+      "to": "pgcat",
       "label": "Persist the link",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "this is the only writer",
@@ -347,7 +365,7 @@
     },
     {
       "from": "redirect-api",
-      "to": "links-db",
+      "to": "pgcat",
       "label": "Read on cache miss",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "read-only from this service — ShortenerService owns writes/migrations",
@@ -374,10 +392,37 @@
     },
     {
       "from": "traffic-service",
-      "to": "clicks-db",
+      "to": "pgcat",
       "label": "Persist the click",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "this is the only writer",
+      "synchronous": true,
+      "scenarios": ["2"]
+    },
+    {
+      "from": "pgcat",
+      "to": "users-db",
+      "label": "Pooled connection",
+      "protocol": "PostgreSQL wire",
+      "format": "pool_mode = transaction, 1 unsharded shard",
+      "synchronous": true,
+      "scenarios": ["1", "2"]
+    },
+    {
+      "from": "pgcat",
+      "to": "links-db",
+      "label": "Pooled connection",
+      "protocol": "PostgreSQL wire",
+      "format": "pool_mode = transaction, 1 unsharded shard - see scenario 4 for sharding this one",
+      "synchronous": true,
+      "scenarios": ["1", "2"]
+    },
+    {
+      "from": "pgcat",
+      "to": "clicks-db",
+      "label": "Pooled connection",
+      "protocol": "PostgreSQL wire",
+      "format": "pool_mode = transaction, 1 unsharded shard",
       "synchronous": true,
       "scenarios": ["2"]
     }

@@ -2,7 +2,8 @@
 // and the redirect path (which also always publishes a click event, regardless of the k6 client's
 // own redirects:0 setting - that's a client-side option, RedirectApi processes the request fully
 // either way); read-heavy.js only exercises the redirect side. Traffic now goes through nginx
-// (see sandbox/infra/nginx/nginx.conf), not straight to link-api/redirect-api, so that hop is part
+// (see sandbox/infra/nginx/nginx.conf) on the way in and pgcat (see sandbox/infra/pgcat/pgcat.toml)
+// on the way to Postgres, not straight to link-api/redirect-api or postgres, so both hops are part
 // of the real path too. Used to highlight/animate the edges real traffic is flowing through while
 // a run is active, rather than animating the whole graph indiscriminately.
 export const TRAFFIC_FLOW_EDGES: ReadonlyArray<readonly [string, string]> = [
@@ -11,12 +12,14 @@ export const TRAFFIC_FLOW_EDGES: ReadonlyArray<readonly [string, string]> = [
   ['nginx', 'redirect-api'],
   ['link-api', 'rabbitmq'],
   ['rabbitmq', 'shortener-service'],
-  ['shortener-service', 'links-db'],
+  ['shortener-service', 'pgcat'],
+  ['pgcat', 'links-db'],
   ['redirect-api', 'redis'],
-  ['redirect-api', 'links-db'],
+  ['redirect-api', 'pgcat'],
   ['redirect-api', 'rabbitmq'],
   ['rabbitmq', 'traffic-service'],
-  ['traffic-service', 'clicks-db'],
+  ['traffic-service', 'pgcat'],
+  ['pgcat', 'clicks-db'],
 ]
 
 export function isTrafficFlowEdge(from: string, to: string): boolean {
