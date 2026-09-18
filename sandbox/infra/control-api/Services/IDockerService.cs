@@ -21,8 +21,9 @@ public interface IDockerService
     // Returns how many chaos containers were stopped.
     Task<int> HealAsync(string serviceId, CancellationToken ct);
 
-    // Names of the k6 scripts baked into this image (sandbox/infra/control-api/k6-scripts/*.js).
-    IReadOnlyList<string> ListTrafficScenarios();
+    // Metadata (name + short human description) for the k6 scripts baked into this image
+    // (sandbox/infra/control-api/k6-scripts/*.js).
+    IReadOnlyList<TrafficScenarioInfo> ListTrafficScenarios();
 
     // Runs the named k6 script against the real stack, calling onProgress roughly once a second
     // (parsed from k6's own periodic status lines) while it runs, then returns the final report.
@@ -39,4 +40,9 @@ public interface IDockerService
     // Shells out to `docker compose ... up -d --scale <serviceId>=<replicas>` - the actual
     // replica-management logic is Compose's own, not reimplemented against the raw Docker API.
     Task<ScaleResult> ScaleAsync(string serviceId, int replicas, CancellationToken ct);
+
+    // Runs `redis-cli FLUSHALL` inside the redis container via Docker's exec API - lets a demo
+    // show cold-cache behavior on demand. Returns the command's own output, or null if redis isn't
+    // running.
+    Task<string?> FlushRedisAsync(CancellationToken ct);
 }

@@ -2,6 +2,40 @@
   "_comment": "Filled in as scenarios are actually implemented, not ahead of reality — see docs/scenarios/ for what's actually built.",
   "components": [
     {
+      "id": "k6",
+      "name": "k6 (load test)",
+      "type": "infrastructure",
+      "icon": "🧪",
+      "description": "Traffic generator started from the control panel - not part of the deployed stack, only exists while a scenario is running",
+      "position": { "x": 40, "y": 160 },
+      "scenarios": ["1", "2"],
+      "details": {
+        "purpose": "One-off container per run (see the traffic panel); hits the same external entry point (nginx) real clients would",
+        "technologies": ["k6", "grafana/k6 docker image"],
+        "links": {
+          "code": "sandbox/infra/control-api/k6-scripts/"
+        }
+      }
+    },
+    {
+      "id": "nginx",
+      "name": "nginx",
+      "type": "infrastructure",
+      "icon": "🧭",
+      "description": "External entry point for LinkApi and RedirectApi - the only reason either can have more than one replica",
+      "position": { "x": 190, "y": 360 },
+      "scenarios": ["1", "2"],
+      "details": {
+        "purpose": "Reverse proxy in front of link-api/redirect-api; re-resolves their service name against Docker's embedded DNS on a short TTL so it picks up replicas added/removed via Scale without a config reload",
+        "technologies": ["nginx"],
+        "port": 8082,
+        "links": {
+          "config": "sandbox/infra/nginx/nginx.conf",
+          "compose": "sandbox/docker-compose.yml#nginx"
+        }
+      }
+    },
+    {
       "id": "frontend-app",
       "name": "Frontend App",
       "type": "frontend",
@@ -216,18 +250,36 @@
     },
     {
       "from": "frontend-app",
+      "to": "nginx",
+      "label": "Create / look up / visit a link",
+      "protocol": "HTTP (fetch + browser navigation)",
+      "format": "JSON / redirect",
+      "synchronous": true,
+      "scenarios": ["1", "2"]
+    },
+    {
+      "from": "k6",
+      "to": "nginx",
+      "label": "Generated load",
+      "protocol": "HTTP",
+      "synchronous": true,
+      "notes": "Only present while a scenario is running from the traffic panel.",
+      "scenarios": ["1", "2"]
+    },
+    {
+      "from": "nginx",
       "to": "link-api",
-      "label": "Create / look up a link",
-      "protocol": "HTTP (fetch)",
+      "label": "Proxy: create / look up a link",
+      "protocol": "HTTP",
       "format": "JSON",
       "synchronous": true,
       "scenarios": ["1", "2"]
     },
     {
-      "from": "frontend-app",
+      "from": "nginx",
       "to": "redirect-api",
-      "label": "Visit the short link",
-      "protocol": "HTTP (browser navigation, not fetch — not subject to CORS)",
+      "label": "Proxy: visit the short link",
+      "protocol": "HTTP",
       "synchronous": true,
       "scenarios": ["1", "2"]
     },

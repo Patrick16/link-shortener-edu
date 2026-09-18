@@ -361,8 +361,66 @@ button:disabled {
   gap: 12px;
 }
 
+.scenario-description-text {
+  font-size: 12px;
+  color: var(--text);
+  margin: 8px 0 0;
+}
+
 .traffic-progress {
   margin-top: 16px;
+}
+
+.live-charts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.axis-chart-title {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+
+.axis-chart-label {
+  font-size: 9px;
+  fill: var(--text);
+}
+
+.axis-chart-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.flush-cache-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.flush-cache-control button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.flush-cache-control button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.flush-cache-result {
+  font-size: 12px;
+  color: var(--text);
 }
 
 .progress-bar-track {

@@ -77,6 +77,12 @@ app.MapGet("/api/containers/{serviceId}/stats/history", (string serviceId, Resou
 
 app.MapGet("/api/containers/scalable", (IDockerService docker) => Results.Ok(docker.ListScalableServices()));
 
+app.MapPost("/api/containers/redis/flush-cache", async (IDockerService docker, CancellationToken ct) =>
+{
+    var result = await docker.FlushRedisAsync(ct);
+    return result is null ? Results.NotFound() : Results.Ok(new { flushed = result });
+});
+
 app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleRequest request, IDockerService docker, CancellationToken ct) =>
 {
     if (request.Replicas is < 1 or > 10)
@@ -92,9 +98,9 @@ app.MapGet("/api/traffic/scenarios", (IDockerService docker) => Results.Ok(docke
 
 app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
 {
-    if (request.Vus is < 1 or > 200)
+    if (request.Vus < 1)
     {
-        return Results.BadRequest(new { error = "vus must be between 1 and 200" });
+        return Results.BadRequest(new { error = "vus must be at least 1" });
     }
 
     if (request.DurationSeconds is < 1 or > 120)
@@ -102,7 +108,7 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHub
         return Results.BadRequest(new { error = "durationSeconds must be between 1 and 120" });
     }
 
-    if (!docker.ListTrafficScenarios().Contains(request.Scenario))
+    if (!docker.ListTrafficScenarios().Any(s => s.Name == request.Scenario))
     {
         return Results.NotFound(new { error = $"unknown scenario '{request.Scenario}'" });
     }

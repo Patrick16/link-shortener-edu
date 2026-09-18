@@ -1,10 +1,11 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 
-// Steady low-rate traffic against the real create-link -> redirect flow. Talks to the compose
-// service names directly (this container runs on the same compose network), not localhost.
-const LINK_API = __ENV.LINK_API_URL || 'http://link-api:8080';
-const REDIRECT_API = __ENV.REDIRECT_API_URL || 'http://redirect-api:8080';
+// Steady low-rate traffic against the real create-link -> redirect flow. Goes through nginx (not
+// straight to link-api/redirect-api) - that's the actual external entry point now that those
+// services can have multiple replicas, and it's what real traffic (a browser, this script) uses.
+const LINK_API = __ENV.LINK_API_URL || 'http://nginx:8082';
+const REDIRECT_API = __ENV.REDIRECT_API_URL || 'http://nginx:8083';
 
 export default function () {
   const originalLink = `https://example.com/${Math.random().toString(36).slice(2)}`;

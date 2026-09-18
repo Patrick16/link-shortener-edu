@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { controlApi } from '../api/controlApi'
 import type { TrafficRunState } from '../hooks/useTrafficRun'
-import { Sparkline } from './Sparkline'
+import type { TrafficScenarioInfo } from '../types/controlApi'
+import { AxisChart } from './AxisChart'
 
 const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: string }> = [
   { key: 'avg', label: 'avg' },
@@ -14,7 +15,7 @@ const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: s
 // Driven by a useTrafficRun() instance owned by App (not this component) - the graph needs to
 // know whether traffic is running too, to animate the edges the flow actually exercises.
 export function TrafficPanel({ running, progress, progressHistory, report, error, start }: TrafficRunState) {
-  const [scenarios, setScenarios] = useState<string[]>([])
+  const [scenarios, setScenarios] = useState<TrafficScenarioInfo[]>([])
   const [scenario, setScenario] = useState('')
   const [vus, setVus] = useState(3)
   const [duration, setDuration] = useState(10)
@@ -24,14 +25,16 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
       .listTrafficScenarios()
       .then((list) => {
         setScenarios(list)
-        if (list.length > 0) setScenario(list[0])
+        if (list.length > 0) setScenario(list[0].name)
       })
       .catch(() => {})
   }, [])
 
   const maxLatency = report?.httpReqDuration ? Math.max(...LATENCY_ROWS.map((r) => report.httpReqDuration![r.key])) : 0
-  const rateValues = progressHistory.map((p) => p.iterationsPerSecond)
-  const rateMax = Math.max(1, ...rateValues) * 1.3
+  const selectedDescription = scenarios.find((s) => s.name === scenario)?.description
+  const totalSeconds = progress?.totalSeconds ?? duration
+  const vusPoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.activeVus }))
+  const ratePoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.iterationsPerSecond }))
 
   return (
     <div className="traffic-panel">
@@ -39,14 +42,14 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
         <select value={scenario} onChange={(e) => setScenario(e.target.value)} disabled={running || scenarios.length === 0}>
           {scenarios.length === 0 && <option>No scenarios available</option>}
           {scenarios.map((s) => (
-            <option key={s} value={s}>
-              {s}
+            <option key={s.name} value={s.name}>
+              {s.name}
             </option>
           ))}
         </select>
         <label>
           VUs
-          <input type="number" value={vus} onChange={(e) => setVus(Number(e.target.value))} min={1} max={200} disabled={running} />
+          <input type="number" value={vus} onChange={(e) => setVus(Number(e.target.value))} min={1} disabled={running} />
         </label>
         <label>
           Duration (s)
@@ -56,6 +59,8 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
           {running ? `Running ${scenario}...` : 'Run traffic'}
         </button>
       </div>
+
+      {selectedDescription && <p className="scenario-description-text">{selectedDescription}</p>}
 
       {error && <p className="service-card-error">{error}</p>}
 
@@ -68,7 +73,10 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
             {progress ? `${progress.elapsedSeconds}s / ${progress.totalSeconds}s (${progress.percentComplete}%)` : 'starting...'}
           </div>
           {progressHistory.length > 1 && (
-            <Sparkline label="iterations/s" values={rateValues} max={rateMax} formatValue={(v) => v.toFixed(1)} />
+            <div className="live-charts">
+              <AxisChart title="Active VUs" points={vusPoints} totalSeconds={totalSeconds} formatY={(v) => v.toFixed(0)} />
+              <AxisChart title="Iterations/s" points={ratePoints} totalSeconds={totalSeconds} formatY={(v) => v.toFixed(0)} />
+            </div>
           )}
         </div>
       )}

@@ -6,8 +6,9 @@ import { check } from 'k6';
 // window (a link's hash is returned before ShortenerService has actually persisted it via
 // RabbitMQ), so a wave of "redirect works (302)" check failures here is expected behavior, not a
 // bug - that race is exactly what this scenario is for demonstrating.
-const LINK_API = __ENV.LINK_API_URL || 'http://link-api:8080';
-const REDIRECT_API = __ENV.REDIRECT_API_URL || 'http://redirect-api:8080';
+// Through nginx, same reasoning as smoke.js - it's the real external entry point.
+const LINK_API = __ENV.LINK_API_URL || 'http://nginx:8082';
+const REDIRECT_API = __ENV.REDIRECT_API_URL || 'http://nginx:8083';
 
 export default function () {
   const originalLink = `https://example.com/${Math.random().toString(36).slice(2)}`;

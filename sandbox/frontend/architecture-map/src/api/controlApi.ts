@@ -1,4 +1,4 @@
-import type { ChaosRequest, ChaosAction, ManagedContainer, ResourceSample, ScaleResult, TrafficRequest } from '../types/controlApi'
+import type { ChaosRequest, ChaosAction, ManagedContainer, ResourceSample, ScaleResult, TrafficRequest, TrafficScenarioInfo } from '../types/controlApi'
 
 const BASE_URL = import.meta.env.VITE_CONTROL_API_URL || 'http://localhost:5299'
 
@@ -52,11 +52,13 @@ export const controlApi = {
   scale: (serviceId: string, replicas: number) =>
     request<ScaleResult>(`/api/containers/${serviceId}/scale`, 'POST', { replicas }),
 
-  listTrafficScenarios: () => request<string[]>('/api/traffic/scenarios'),
+  listTrafficScenarios: () => request<TrafficScenarioInfo[]>('/api/traffic/scenarios'),
 
   // Fire-and-forget: the run itself is reported over SignalR (trafficProgress/trafficCompleted/
   // trafficFailed), not in this response - see useTrafficRun.
   startTraffic: async (traffic: TrafficRequest): Promise<void> => {
     await send('/api/traffic', 'POST', traffic)
   },
+
+  flushRedisCache: () => request<{ flushed: string }>('/api/containers/redis/flush-cache', 'POST'),
 }

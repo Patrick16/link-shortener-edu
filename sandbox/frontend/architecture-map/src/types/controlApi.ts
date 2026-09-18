@@ -41,6 +41,11 @@ export interface TrafficRequest {
   durationSeconds: number
 }
 
+export interface TrafficScenarioInfo {
+  name: string
+  description: string
+}
+
 export interface LatencyStats {
   avg: number
   min: number
@@ -75,6 +80,7 @@ export interface TrafficProgress {
   elapsedSeconds: number
   totalSeconds: number
   percentComplete: number
+  activeVus: number
   iterationsSoFar: number
   iterationsPerSecond: number
 }

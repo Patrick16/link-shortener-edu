@@ -175,7 +175,17 @@ public class DockerService : IDockerService
         return chaosContainers.Count;
     }
 
-    public IReadOnlyList<string> ListTrafficScenarios()
+    // Short descriptions shown in the UI next to the scenario picker - k6 scripts don't carry
+    // their own metadata format, so this is just a hand-maintained map by filename. A script
+    // without an entry here still works, just shows a generic fallback description.
+    private static readonly IReadOnlyDictionary<string, string> ScenarioDescriptions = new Dictionary<string, string>
+    {
+        ["smoke"] = "Happy-path check: a few VUs create a link then visit it, with a short pause between the two so the async persist has time to land. Use this to confirm the flow works at all.",
+        ["spike"] = "Same create-then-visit flow as smoke, but with no pause and meant to run at higher VUs - deliberately races LinkApi's response against ShortenerService's async write, so redirects failing under load here is expected, not a bug.",
+        ["read-heavy"] = "Creates one link up front, then every VU repeatedly visits that same link - a cache-hit-heavy read pattern, useful for seeing Redis's effect in isolation from the write path.",
+    };
+
+    public IReadOnlyList<TrafficScenarioInfo> ListTrafficScenarios()
     {
         if (!Directory.Exists(_k6ScriptsDir))
         {
@@ -185,12 +195,12 @@ public class DockerService : IDockerService
         return Directory.GetFiles(_k6ScriptsDir, "*.js")
             .Select(Path.GetFileNameWithoutExtension)
             .Where(name => name is not null)
-            .Select(name => name!)
-            .OrderBy(name => name, StringComparer.Ordinal)
+            .Select(name => new TrafficScenarioInfo(name!, ScenarioDescriptions.GetValueOrDefault(name!, "No description available.")))
+            .OrderBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
     }
 
-    private static readonly Regex K6ProgressLine = new(@"running \((\d+(?:\.\d+)?)s\), \d+/\d+ VUs, (\d+) complete", RegexOptions.Compiled);
+    private static readonly Regex K6ProgressLine = new(@"running \((\d+(?:\.\d+)?)s\), (\d+)/(\d+) VUs, (\d+) complete", RegexOptions.Compiled);
 
     public async Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
@@ -291,14 +301,15 @@ public class DockerService : IDockerService
                     continue;
                 }
 
-                var iterations = long.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+                var activeVus = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+                var iterations = long.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
                 var elapsedDelta = elapsed - lastElapsed;
                 var rate = elapsedDelta > 0 ? (iterations - lastIterations) / elapsedDelta : 0;
                 lastElapsed = elapsed;
                 lastIterations = iterations;
 
                 var percent = (int)Math.Min(100, elapsed / totalSeconds * 100);
-                await onProgress(new TrafficProgress((int)elapsed, totalSeconds, percent, iterations, rate));
+                await onProgress(new TrafficProgress((int)elapsed, totalSeconds, percent, activeVus, iterations, rate));
             }
 
             pendingLine.Clear();
@@ -374,6 +385,29 @@ public class DockerService : IDockerService
         }
 
         return new ScaleResult(serviceId, replicas, process.ExitCode == 0, output);
+    }
+
+    public async Task<string?> FlushRedisAsync(CancellationToken ct)
+    {
+        var container = await FindAsync("redis", ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var exec = await _client.Exec.ExecCreateContainerAsync(container.ID, new ContainerExecCreateParameters
+        {
+            Cmd = ["redis-cli", "FLUSHALL"],
+            AttachStdout = true,
+            AttachStderr = true,
+        }, ct);
+
+        using var stream = await _client.Exec.StartAndAttachContainerExecAsync(exec.ID, false, ct);
+        var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
+
+        _logger.LogWarning("Flushed Redis cache: {Output}", stdout.Trim());
+
+        return string.IsNullOrWhiteSpace(stdout) ? stderr.Trim() : stdout.Trim();
     }
 
     private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, long exitCode, string rawOutput, CancellationToken ct)

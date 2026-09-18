@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { ComponentCard } from './ComponentCard'
 import { ServiceControls } from './ServiceControls'
 import { ScaleControl } from './ScaleControl'
+import { FlushCacheControl } from './FlushCacheControl'
 import { Sparkline } from './Sparkline'
 import { controlApi } from '../api/controlApi'
 import { statusColor } from '../utils/statusColor'
@@ -60,6 +61,7 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
           <ServiceControls serviceId={primary.serviceId} state={primary.state} />
 
           {serviceId && scalable.includes(serviceId) && <ScaleControl serviceId={serviceId} currentReplicas={instances.length} />}
+          {serviceId === 'redis' && <FlushCacheControl />}
 
           {resourceHistory.length > 0 && (
             <div className="node-panel-charts">
