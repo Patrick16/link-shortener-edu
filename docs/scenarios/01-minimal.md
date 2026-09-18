@@ -1,35 +1,40 @@
 # Scenario 1 — Minimal Stack
 
-Auth, create a short link, resolve it. One Postgres instance, Redis cache, RabbitMQ already in the
-loop for durability (see the note in [`docs/architecture.md`](../architecture.md#current-status) on
-why the bus showed up a scenario earlier than originally planned). No sharding, no replicas, no
-click tracking yet — those are later scenarios.
+Auth, create a short link, resolve it. One Postgres server hosting three separate databases, Redis
+cache, RabbitMQ already in the loop for durability (see the note in
+[`docs/architecture.md`](../architecture.md#current-status) on why the bus showed up a scenario
+earlier than originally planned). No sharding, no replicas yet — those are later scenarios. (Click
+tracking — scenario 2 — is also live; see [`docs/scenarios/02-async.md`](02-async.md).)
 
 ## What's running
 
 | Service            | Kind    | Port  | Purpose                                                    |
 |---------------------|---------|-------|--------------------------------------------------------------|
-| `postgres`          | infra   | 5432  | one instance, one `linkshortener` DB, 3 schemas (see below)  |
+| `postgres`          | infra   | 5432  | one server, three databases (see below): `users_db`, `links_db`, `clicks_db` |
 | `redis`              | infra   | 6379  | cache for resolved links                                     |
-| `rabbitmq`           | infra   | 5672 / 15672 (UI) | durable queue between LinkApi and ShortenerService |
+| `rabbitmq`           | infra   | 5672 / 15672 (UI) | durable queue between the APIs and their workers  |
 | `auth-api`           | .NET API | 8081  | `POST /register`, `POST /login` — issues a JWT               |
 | `link-api`           | .NET API | 8082  | `POST /links`, `GET /links/{hash}`                            |
 | `redirect-api`       | .NET API | 8083  | `GET /{hash}` → 302 to the original URL                       |
 | `shortener-service`  | worker  | —     | consumes `LinkCreatedEvent`, persists the link to Postgres    |
-| `traffic-service`    | worker  | —     | running, but idle — its consumer is scenario 2 work           |
+| `traffic-service`    | worker  | —     | consumes `ClickTrackedEvent`, persists the click to Postgres  |
 | `redisinsight`       | infra   | 5540  | Redis GUI — browse keys/TTLs, run commands (add a DB manually: host `redis`, port 6379) |
 | `aspire-dashboard`   | infra   | 18888 / 18889 (OTLP) | logs, metrics, and traces from every .NET service |
 | `frontend/app`       | Vite dev server | 5173 | the demo UI (create a link, log in)                     |
 
-Each of `auth-api`/`shortener-service`/`traffic-service` **owns** one Postgres schema and is the
-only one that runs `Database.MigrateAsync()` for it, applied automatically on startup:
+Each of `auth-api`/`shortener-service`/`traffic-service` **owns** one physical database — a
+deliberate choice over schemas-in-one-database, closer to real microservice isolation and matching
+how `pgcat` pools get configured later (scenario 4: one pool per database, not per schema). Each
+owner is the only service that runs `Database.MigrateAsync()` for its database, applied
+automatically on startup (see `infra/postgres/init-databases.sql` for how the three databases get
+created in the first place):
 
-- `auth-service.users` — owned by AuthApi
-- `shortener-service.links` — owned by ShortenerService. LinkApi and RedirectApi each have their own
-  `DatabaseContext` for the same table (read-only from their side) but neither migrates it — letting
-  three different `DatabaseContext` types migrate the same table would race on `CREATE TABLE`, since
-  each has its own independent migration history
-- `traffic-service.clicks` — owned by TrafficService (exists, unused until scenario 2)
+- `users_db` — owned by AuthApi
+- `links_db` — owned by ShortenerService. LinkApi and RedirectApi each have their own
+  `DatabaseContext` pointed at the same database (read-only from their side) but neither migrates
+  it — letting three different `DatabaseContext` types migrate the same table would race on
+  `CREATE TABLE`, since each has its own independent migration history
+- `clicks_db` — owned by TrafficService
 
 ## Request flow
 
@@ -52,7 +57,7 @@ only one that runs `Database.MigrateAsync()` for it, applied automatically on st
    If the broker was unreachable, it's queued in a local SQLite fallback file instead and retried
    every 30s (`RabbitMqRetryWorker`, shared with `RedirectApi` — see `Shared/Infrastructure/`) — the
    HTTP response to the caller doesn't wait on any of this
-4. `ShortenerService` consumes the event and writes the row into `shortener-service.links`. This is
+4. `ShortenerService` consumes the event and writes the row into `links_db.links`. This is
    the step that's genuinely asynchronous — see the timing note below
 
 **Visit a short link** (`RedirectApi` → RabbitMQ → `TrafficService`)
@@ -62,7 +67,7 @@ only one that runs `Database.MigrateAsync()` for it, applied automatically on st
 4. Publishes a `ClickTrackedEvent` (hash, the short URL visited, the resolved destination,
    timestamp) — same publish-or-fall-back-to-SQLite pattern as link creation
 5. `302 Found` to the original URL, or `404` if the hash doesn't exist (a 404 never gets a click event)
-6. `TrafficService` consumes the event and writes the row into `traffic-service.clicks`
+6. `TrafficService` consumes the event and writes the row into `clicks_db.clicks`
 
 ## Try it yourself
 

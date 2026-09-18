@@ -17,7 +17,6 @@ namespace ShortenerService.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasDefaultSchema("shortener-service")
                 .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
@@ -44,7 +43,7 @@ namespace ShortenerService.Migrations
 
                     b.HasKey("Hash");
 
-                    b.ToTable("links", "shortener-service");
+                    b.ToTable("links", (string)null);
                 });
 #pragma warning restore 612, 618
         }

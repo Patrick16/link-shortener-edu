@@ -17,7 +17,6 @@ namespace AuthApi.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasDefaultSchema("auth-service")
                 .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
@@ -50,7 +49,7 @@ namespace AuthApi.Migrations
                     b.HasIndex("Email")
                         .IsUnique();
 
-                    b.ToTable("users", "auth-service");
+                    b.ToTable("users", (string)null);
                 });
 #pragma warning restore 612, 618
         }

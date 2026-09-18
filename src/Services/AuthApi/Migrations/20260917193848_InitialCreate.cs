@@ -11,12 +11,8 @@ namespace AuthApi.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.EnsureSchema(
-                name: "auth-service");
-
             migrationBuilder.CreateTable(
                 name: "users",
-                schema: "auth-service",
                 columns: table => new
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
@@ -32,7 +28,6 @@ namespace AuthApi.Migrations
 
             migrationBuilder.CreateIndex(
                 name: "IX_users_Email",
-                schema: "auth-service",
                 table: "users",
                 column: "Email",
                 unique: true);
@@ -42,8 +37,7 @@ namespace AuthApi.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
-                name: "users",
-                schema: "auth-service");
+                name: "users");
         }
     }
 }

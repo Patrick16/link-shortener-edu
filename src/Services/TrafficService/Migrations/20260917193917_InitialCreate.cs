@@ -11,12 +11,8 @@ namespace TrafficService.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.EnsureSchema(
-                name: "traffic-service");
-
             migrationBuilder.CreateTable(
                 name: "clicks",
-                schema: "traffic-service",
                 columns: table => new
                 {
                     Id = table.Column<Guid>(type: "uuid", nullable: false),
@@ -35,8 +31,7 @@ namespace TrafficService.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
-                name: "clicks",
-                schema: "traffic-service");
+                name: "clicks");
         }
     }
 }

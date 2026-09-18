@@ -11,8 +11,8 @@ the redirect itself.
 
 ## What's new since scenario 1
 
-- `traffic-service.clicks` now actually gets rows written to it (it existed since scenario 1 —
-  migrated, but nothing ever consumed into it)
+- `clicks_db.clicks` now actually gets rows written to it (the database and table existed since
+  scenario 1 — migrated, but nothing ever consumed into it)
 - `RedirectApi` publishes to RabbitMQ, same resilience pattern as `LinkApi`: SQLite fallback file +
   a background retry worker if the broker is briefly unreachable
 - `RabbitMqRetryWorker` moved from `LinkApi` to `Shared/Infrastructure` — it was never actually
@@ -38,7 +38,7 @@ A `404` (unknown hash) never publishes anything — there's no click to record.
 1. Consumes from queue `traffic-service.click-tracked`
 2. Checks whether a `Click` with the event's `Id` already exists — if so, this is a redelivery
    (e.g. after a nack), skip it rather than fail on the primary-key violation
-3. Otherwise inserts the row into `traffic-service.clicks` and acks
+3. Otherwise inserts the row into `clicks_db.clicks` and acks
 
 ## Try it yourself
 
@@ -52,8 +52,8 @@ curl -i http://localhost:8083/<hash>          # triggers the click event
 Or check the row directly:
 
 ```bash
-docker exec -it $(docker compose ps -q postgres) psql -U postgres -d linkshortener \
-  -c 'SELECT * FROM "traffic-service".clicks ORDER BY "ClickedAt" DESC LIMIT 5;'
+docker exec -it $(docker compose ps -q postgres) psql -U postgres -d clicks_db \
+  -c 'SELECT * FROM clicks ORDER BY "ClickedAt" DESC LIMIT 5;'
 ```
 
 Or open the Aspire Dashboard (`http://localhost:18888/traces`) right after visiting a link — look

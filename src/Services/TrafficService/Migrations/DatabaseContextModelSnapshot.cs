@@ -17,7 +17,6 @@ namespace TrafficService.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasDefaultSchema("traffic-service")
                 .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
@@ -46,7 +45,7 @@ namespace TrafficService.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("clicks", "traffic-service");
+                    b.ToTable("clicks", (string)null);
                 });
 #pragma warning restore 612, 618
         }

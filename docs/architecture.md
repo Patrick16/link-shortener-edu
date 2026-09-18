@@ -23,11 +23,16 @@ right now.
 
 ## Storage
 
-- `Postgres users` (schema `auth-service`) — Users(id, name, email, passwordHash, sault)
-- `Postgres Links` (schema `shortener-service`) — target: **sharded** (see `infra/pgcat/shard1.toml`,
-  `shard2.toml`): Links(hash PK, originLink, shortenLink, createdAt, userId?)
+Each owning service gets its own **physical database** (not a shared database with per-service
+schemas) — closer to real microservice isolation, and it's the model `pgcat` pools route on later
+(scenario 4: a pool is per-database, not per-schema).
+
+- `users_db` (owned by AuthApi) — Users(id, name, email, passwordHash, sault)
+- `links_db` (owned by ShortenerService; LinkApi/RedirectApi read the same database) — target:
+  **sharded** (see `infra/pgcat/shard1.toml`, `shard2.toml`): Links(hash PK, originLink, shortenLink,
+  createdAt, userId?)
 - `Redis Links` — cache of hash → link for fast redirects (shared key format across LinkApi/RedirectApi)
-- `Postgres Clicks` (schema `traffic-service`) — Clicks(id, clickedAt, inboundLink, outboundLink, hash)
+- `clicks_db` (owned by TrafficService) — Clicks(id, clickedAt, inboundLink, outboundLink, hash)
 - `Mongo Clicks meta` — target: ClicksMeta(id, clickedAt, userAgent, referrer, origin, headers) — not built yet
 
 ## Infrastructure for High-Load Practice
@@ -58,7 +63,9 @@ Short version of what's real today:
   if RabbitMQ is briefly unreachable
 - `LinkApi` optionally validates a Bearer token (no `[Authorize]` — anonymous still works) and
   stores the caller's `userId` on the link when one is present
-- One Postgres instance holds all three schemas (no sharding yet — that's scenario 4)
+- One Postgres server hosts three separate databases (`users_db`, `links_db`, `clicks_db`) — real
+  database-level isolation between services, not just schemas in one database. No sharding of
+  `links_db` yet — that's scenario 4.
 - Click *metadata* (user-agent, referrer, headers → Mongo) is still not built — Mongo isn't in the
   stack. Only the Postgres `Clicks` row (hash, in/outbound link, timestamp) exists.
 - RabbitMQ's exchange/queue/binding topology is declared by the application itself at connection

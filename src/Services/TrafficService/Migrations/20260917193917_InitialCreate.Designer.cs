@@ -5,14 +5,14 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using ShortenerService;
+using TrafficService;
 
 #nullable disable
 
-namespace ShortenerService.Migrations
+namespace TrafficService.Migrations
 {
     [DbContext(typeof(DatabaseContext))]
-    [Migration("20260917130552_InitialCreate")]
+    [Migration("20260917193917_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -20,34 +20,35 @@ namespace ShortenerService.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasDefaultSchema("shortener-service")
                 .HasAnnotation("ProductVersion", "10.0.12")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("Common.Models.Link", b =>
+            modelBuilder.Entity("Common.Models.Click", b =>
                 {
-                    b.Property<string>("Hash")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("OriginalLink")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("ShortenLink")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("UserId")
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.HasKey("Hash");
+                    b.Property<DateTime>("ClickedAt")
+                        .HasColumnType("timestamp with time zone");
 
-                    b.ToTable("links", "shortener-service");
+                    b.Property<string>("Hash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("InboundLink")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("OutboundLink")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("clicks", (string)null);
                 });
 #pragma warning restore 612, 618
         }

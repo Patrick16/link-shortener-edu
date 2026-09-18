@@ -11,12 +11,8 @@ namespace ShortenerService.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.EnsureSchema(
-                name: "shortener-service");
-
             migrationBuilder.CreateTable(
                 name: "links",
-                schema: "shortener-service",
                 columns: table => new
                 {
                     Hash = table.Column<string>(type: "text", nullable: false),
@@ -35,8 +31,7 @@ namespace ShortenerService.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
-                name: "links",
-                schema: "shortener-service");
+                name: "links");
         }
     }
 }
