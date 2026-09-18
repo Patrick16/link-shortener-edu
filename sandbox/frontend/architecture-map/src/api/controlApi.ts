@@ -1,4 +1,4 @@
-import type { ChaosRequest, ChaosAction, ManagedContainer, TrafficRequest, TrafficResult } from '../types/controlApi'
+import type { ChaosRequest, ChaosAction, ManagedContainer, ResourceSample, TrafficRequest } from '../types/controlApi'
 
 const BASE_URL = import.meta.env.VITE_CONTROL_API_URL || 'http://localhost:5299'
 
@@ -12,7 +12,7 @@ export class ControlApiError extends Error {
   }
 }
 
-async function request<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown): Promise<T> {
+async function send(path: string, method: 'GET' | 'POST', body?: unknown): Promise<Response> {
   const response = await fetch(`${BASE_URL}${path}`, {
     method,
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
@@ -24,7 +24,11 @@ async function request<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: u
     throw new ControlApiError(response.status, message || response.statusText)
   }
 
-  return (await response.json()) as T
+  return response
+}
+
+async function request<T>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown): Promise<T> {
+  return (await send(path, method, body)).json() as Promise<T>
 }
 
 export const controlApi = {
@@ -41,7 +45,13 @@ export const controlApi = {
 
   heal: (serviceId: string) => request<{ stopped: number }>(`/api/containers/${serviceId}/heal`, 'POST'),
 
+  statsHistory: (serviceId: string) => request<ResourceSample[]>(`/api/containers/${serviceId}/stats/history`),
+
   listTrafficScenarios: () => request<string[]>('/api/traffic/scenarios'),
 
-  runTraffic: (traffic: TrafficRequest) => request<TrafficResult>('/api/traffic', 'POST', traffic),
+  // Fire-and-forget: the run itself is reported over SignalR (trafficProgress/trafficCompleted/
+  // trafficFailed), not in this response - see useTrafficRun.
+  startTraffic: async (traffic: TrafficRequest): Promise<void> => {
+    await send('/api/traffic', 'POST', traffic)
+  },
 }

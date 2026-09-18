@@ -1,4 +1,8 @@
 using System.Formats.Tar;
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using ControlApi.Models;
 using Docker.DotNet;
 using Docker.DotNet.Models;
@@ -177,7 +181,9 @@ public class DockerService : IDockerService
             .ToList();
     }
 
-    public async Task<TrafficResult?> RunTrafficAsync(TrafficRequest request, CancellationToken ct)
+    private static readonly Regex K6ProgressLine = new(@"running \((\d+(?:\.\d+)?)s\), \d+/\d+ VUs, (\d+) complete", RegexOptions.Compiled);
+
+    public async Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
         var scriptPath = Path.Combine(_k6ScriptsDir, $"{request.Scenario}.js");
         if (!File.Exists(scriptPath))
@@ -190,7 +196,13 @@ public class DockerService : IDockerService
         var created = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
         {
             Image = K6Image,
-            Cmd = ["run", "--no-color", "--vus", request.Vus.ToString(), "--duration", $"{request.DurationSeconds}s", "/scripts/scenario.js"],
+            // grafana/k6's image runs as a non-root user by default, which can't write
+            // summary.json into a directory extracted via the Docker API (its permissions don't
+            // survive extraction the way a tar mode would suggest - the daemon applies its own
+            // umask). Root avoids that fight entirely; this is a throwaway, self-removing
+            // container with no docker.sock access, so it's a low-risk place to do it.
+            User = "0:0",
+            Cmd = ["run", "--no-color", "--summary-export", "/scripts/summary.json", "--vus", request.Vus.ToString(), "--duration", $"{request.DurationSeconds}s", "/scripts/scenario.js"],
             Labels = new Dictionary<string, string> { ["com.docker.compose.project"] = _composeProject },
             HostConfig = new HostConfig { NetworkMode = _composeNetwork },
         }, ct);
@@ -212,19 +224,189 @@ public class DockerService : IDockerService
             request.Scenario, request.Vus, request.DurationSeconds, created.ID);
 
         await _client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
-        await _client.Containers.WaitContainerAsync(created.ID, ct);
 
-        var logStream = await _client.Containers.GetContainerLogsAsync(
-            created.ID,
-            tty: false,
-            new ContainerLogsParameters { ShowStdout = true, ShowStderr = true },
-            ct);
-        var (stdout, stderr) = await logStream.ReadOutputToEndAsync(ct);
+        var output = await StreamLogsWithProgressAsync(created.ID, request.DurationSeconds, onProgress, ct);
 
         var inspect = await _client.Containers.InspectContainerAsync(created.ID, ct);
+        var report = await ReadSummaryAsync(created.ID, request.Scenario, inspect.State.ExitCode, output, ct);
         await _client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
 
-        return new TrafficResult(request.Scenario, inspect.State.ExitCode, stdout + stderr);
+        return report;
+    }
+
+    // Follows the container's combined stdout/stderr as it runs, parsing k6's own once-a-second
+    // "running (Ns), X/X VUs, N complete..." status lines into progress pushes, while also
+    // building up the full text for the raw-output field of the final report. Returns once the
+    // stream hits EOF, which happens when k6 itself exits.
+    private async Task<string> StreamLogsWithProgressAsync(string containerId, int totalSeconds, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
+    {
+        var logStream = await _client.Containers.GetContainerLogsAsync(
+            containerId,
+            tty: false,
+            new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true },
+            ct);
+
+        var fullOutput = new StringBuilder();
+        var pendingLine = new StringBuilder();
+        var buffer = new byte[4096];
+        double lastElapsed = 0;
+        long lastIterations = 0;
+
+        while (true)
+        {
+            var result = await logStream.ReadOutputAsync(buffer, 0, buffer.Length, ct);
+            if (result.EOF || result.Count == 0)
+            {
+                break;
+            }
+
+            var chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
+            fullOutput.Append(chunk);
+            pendingLine.Append(chunk);
+
+            var lines = pendingLine.ToString().Split('\n');
+            for (var i = 0; i < lines.Length - 1; i++)
+            {
+                var match = K6ProgressLine.Match(lines[i]);
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                var elapsed = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+                if (elapsed > totalSeconds)
+                {
+                    // k6 prints one extra status line during its graceful-stop tail, past the
+                    // requested duration - skip it rather than report a misleading rate spike from
+                    // the tiny elapsed delta.
+                    continue;
+                }
+
+                var iterations = long.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+                var elapsedDelta = elapsed - lastElapsed;
+                var rate = elapsedDelta > 0 ? (iterations - lastIterations) / elapsedDelta : 0;
+                lastElapsed = elapsed;
+                lastIterations = iterations;
+
+                var percent = (int)Math.Min(100, elapsed / totalSeconds * 100);
+                await onProgress(new TrafficProgress((int)elapsed, totalSeconds, percent, iterations, rate));
+            }
+
+            pendingLine.Clear();
+            pendingLine.Append(lines[^1]);
+        }
+
+        return fullOutput.ToString();
+    }
+
+    public async Task<ResourceSample?> GetResourceSampleAsync(string serviceId, CancellationToken ct)
+    {
+        var container = await FindAsync(serviceId, ct);
+        if (container is null || container.State != "running")
+        {
+            return null;
+        }
+
+        // Stream = false still returns one response with both cpu_stats and precpu_stats
+        // populated (two samples internally), which is what the CPU% formula below needs -
+        // same as what `docker stats --no-stream` does under the hood.
+        ContainerStatsResponse? stats = null;
+        await _client.Containers.GetContainerStatsAsync(
+            container.ID,
+            new ContainerStatsParameters { Stream = false },
+            new Progress<ContainerStatsResponse>(s => stats = s),
+            ct);
+
+        if (stats is null)
+        {
+            return null;
+        }
+
+        var cpuDelta = (double)(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage);
+        var systemDelta = (double)(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage);
+        var onlineCpus = stats.CPUStats.OnlineCPUs > 0 ? stats.CPUStats.OnlineCPUs : (uint)stats.CPUStats.CPUUsage.PercpuUsage.Count;
+        var cpuPercent = systemDelta > 0 && cpuDelta > 0 ? cpuDelta / systemDelta * onlineCpus * 100.0 : 0.0;
+
+        return new ResourceSample(serviceId, cpuPercent, (long)stats.MemoryStats.Usage, (long)stats.MemoryStats.Limit, DateTimeOffset.UtcNow);
+    }
+
+    private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, long exitCode, string rawOutput, CancellationToken ct)
+    {
+        try
+        {
+            var response = await _client.Containers.GetArchiveFromContainerAsync(
+                containerId, new GetArchiveFromContainerParameters { Path = "/scripts/summary.json" }, false, ct);
+
+            // Buffer fully before handing to TarReader - it does non-sequential-looking reads via
+            // SubReadStream over each entry's data, which doesn't play well with the raw chunked
+            // HTTP stream the Docker API hands back (hit EndOfStreamException reading directly).
+            using var buffered = new MemoryStream();
+            await response.Stream.CopyToAsync(buffered, ct);
+            buffered.Position = 0;
+
+            using var reader = new TarReader(buffered);
+            TarEntry? entry;
+            while ((entry = await reader.GetNextEntryAsync(cancellationToken: ct)) is not null)
+            {
+                if (entry.DataStream is null)
+                {
+                    continue;
+                }
+
+                using var streamReader = new StreamReader(entry.DataStream);
+                var json = await streamReader.ReadToEndAsync(ct);
+                return ParseSummary(json, scenario, exitCode, rawOutput);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read k6 summary.json for {Scenario} - falling back to raw output only", scenario);
+        }
+
+        return new TrafficReport(scenario, exitCode, 0, 0, 0, 0, 0, null, [], rawOutput);
+    }
+
+    private static TrafficReport ParseSummary(string json, string scenario, long exitCode, string rawOutput)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var metrics = doc.RootElement.GetProperty("metrics");
+
+        long GetCount(string metric) =>
+            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("count", out var c) ? c.GetInt64() : 0;
+        double GetRate(string metric) =>
+            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("rate", out var r) ? r.GetDouble() : 0;
+        double GetValue(string metric) =>
+            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("value", out var v) ? v.GetDouble() : 0;
+
+        LatencyStats? duration = null;
+        if (metrics.TryGetProperty("http_req_duration", out var d))
+        {
+            double Field(string name) => d.TryGetProperty(name, out var v) ? v.GetDouble() : 0;
+            duration = new LatencyStats(Field("avg"), Field("min"), Field("med"), Field("max"), Field("p(90)"), Field("p(95)"));
+        }
+
+        var checks = new List<CheckResult>();
+        if (doc.RootElement.TryGetProperty("root_group", out var rootGroup) && rootGroup.TryGetProperty("checks", out var checksObj))
+        {
+            foreach (var check in checksObj.EnumerateObject())
+            {
+                var passes = check.Value.TryGetProperty("passes", out var p) ? p.GetInt32() : 0;
+                var fails = check.Value.TryGetProperty("fails", out var f) ? f.GetInt32() : 0;
+                checks.Add(new CheckResult(check.Name, passes, fails));
+            }
+        }
+
+        return new TrafficReport(
+            scenario,
+            exitCode,
+            GetCount("http_reqs"),
+            GetRate("http_reqs"),
+            GetCount("iterations"),
+            GetRate("iterations"),
+            (int)GetValue("vus_max"),
+            duration,
+            checks,
+            rawOutput);
     }
 
     private static async Task<MemoryStream> BuildScriptTarAsync(string scriptPath, CancellationToken ct)
@@ -232,11 +414,19 @@ public class DockerService : IDockerService
         var tarStream = new MemoryStream();
         await using (var writer = new TarWriter(tarStream, TarEntryFormat.Pax, leaveOpen: true))
         {
-            var entry = new PaxTarEntry(TarEntryType.RegularFile, "scripts/scenario.js")
+            // Without an explicit directory entry, the extraction still creates "scripts/" (to
+            // hold scenario.js) but with a restrictive default mode - grafana/k6 runs as a
+            // non-root user and needs write access on this directory itself to later create
+            // summary.json there, not just read access to the script file inside it.
+            var dirEntry = new PaxTarEntry(TarEntryType.Directory, "scripts/") { Mode = (UnixFileMode)0777 };
+            await writer.WriteEntryAsync(dirEntry, ct);
+
+            var fileEntry = new PaxTarEntry(TarEntryType.RegularFile, "scripts/scenario.js")
             {
                 DataStream = File.OpenRead(scriptPath),
+                Mode = (UnixFileMode)0644,
             };
-            await writer.WriteEntryAsync(entry, ct);
+            await writer.WriteEntryAsync(fileEntry, ct);
         }
 
         tarStream.Position = 0;

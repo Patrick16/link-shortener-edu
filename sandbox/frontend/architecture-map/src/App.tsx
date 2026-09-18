@@ -1,36 +1,70 @@
+import { useMemo, useState } from 'react'
 import './App.css'
 import architectureData from './data/architecture.json'
-import { useContainerStatus } from './hooks/useContainerStatus'
-import { ServiceCard } from './components/ServiceCard'
+import { useLiveStack } from './hooks/useLiveStack'
+import { useTrafficRun } from './hooks/useTrafficRun'
+import { Diagram } from './components/Diagram'
+import { NodePanel } from './components/NodePanel'
+import { ConnectionDetail } from './components/ConnectionDetail'
+import { ScenarioSwitcher } from './components/ScenarioSwitcher'
 import { TrafficPanel } from './components/TrafficPanel'
+import { resolveServiceId } from './utils/resolveServiceId'
 import type { ArchitectureData } from './types/architecture'
 
 const data = architectureData as unknown as ArchitectureData
 const metaById = new Map(data.components.map((c) => [c.id, c]))
 
-// This is the control panel for the real running sandbox stack - not the node-graph diagram yet
-// (that's still TODO, see .notes/ARCHITECTURE_MAP_PLAN.md). Cards are driven by what's actually
-// running (GET /api/containers via useContainerStatus), not by architecture.json - the logical
-// "-db" components in that data all live in the single `postgres` container, so they intentionally
-// don't get their own card here.
+type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index: number } | null
+
 function App() {
-  const { containers, connected, loading, error } = useContainerStatus()
-  const services = Object.values(containers).sort((a, b) => a.serviceId.localeCompare(b.serviceId))
+  const { containers, resourceHistory, connected, loading, error } = useLiveStack()
+  const trafficRun = useTrafficRun()
+  const [scenario, setScenario] = useState(data.scenarios[0]?.id ?? '1')
+  const [selection, setSelection] = useState<Selection>(null)
+
+  const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
+  const visibleConnections = useMemo(
+    () => data.connections.filter((c) => c.scenarios.includes(scenario)),
+    [scenario],
+  )
+
+  const selectedComponent = selection?.kind === 'component' ? metaById.get(selection.id) : undefined
+  const selectedConnection = selection?.kind === 'connection' ? visibleConnections[selection.index] : undefined
+  const selectedServiceId = selectedComponent ? resolveServiceId(selectedComponent, knownServiceIds) : null
+  const selectedContainer = selectedServiceId ? (containers[selectedServiceId] ?? null) : null
 
   return (
     <main>
-      <h1>Architecture Map - Control Panel</h1>
+      <h1>Architecture Map</h1>
       <p className="connection-status">{connected ? 'Live' : 'Connecting...'}</p>
 
-      <TrafficPanel />
+      <ScenarioSwitcher scenarios={data.scenarios} selected={scenario} onSelect={setScenario} />
+
+      <TrafficPanel {...trafficRun} />
 
       {loading && <p>Loading containers...</p>}
       {error && <p className="service-card-error">{error}</p>}
 
-      <div className="service-grid">
-        {services.map((container) => (
-          <ServiceCard key={container.serviceId} container={container} meta={metaById.get(container.serviceId)} />
-        ))}
+      <div className="diagram-layout">
+        <Diagram
+          data={data}
+          scenario={scenario}
+          containers={containers}
+          trafficActive={trafficRun.running}
+          onSelectComponent={(id) => setSelection({ kind: 'component', id })}
+          onSelectConnection={(index) => setSelection({ kind: 'connection', index })}
+        />
+
+        {selectedComponent && (
+          <NodePanel
+            component={selectedComponent}
+            container={selectedContainer}
+            resourceHistory={selectedServiceId ? (resourceHistory[selectedServiceId] ?? []) : []}
+            onClose={() => setSelection(null)}
+          />
+        )}
+
+        {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}
       </div>
     </main>
   )

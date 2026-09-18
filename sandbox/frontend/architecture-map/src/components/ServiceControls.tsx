@@ -1,22 +1,15 @@
 import { useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
-import type { ManagedContainer } from '../types/controlApi'
-import type { ArchComponent } from '../types/architecture'
 import type { ChaosType } from '../types/controlApi'
 
 interface Props {
-  container: ManagedContainer
-  meta?: ArchComponent
+  serviceId: string
+  state: string
 }
 
-const STATE_COLOR: Record<string, string> = {
-  running: '#22c55e',
-  exited: '#ef4444',
-  paused: '#f59e0b',
-  restarting: '#f59e0b',
-}
-
-export function ServiceCard({ container, meta }: Props) {
+// Just the action buttons (Stop/Start/Restart/Heal/Degrade) - NodePanel composes this with
+// ComponentCard (details) and Sparkline (resource history) for the full per-node panel.
+export function ServiceControls({ serviceId, state }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [chaosOpen, setChaosOpen] = useState(false)
@@ -24,8 +17,7 @@ export function ServiceCard({ container, meta }: Props) {
   const [amount, setAmount] = useState(500)
   const [duration, setDuration] = useState(20)
 
-  const isRunning = container.state === 'running'
-  const dotColor = STATE_COLOR[container.state] ?? '#9ca3af'
+  const isRunning = state === 'running'
 
   async function runAction(action: () => Promise<unknown>) {
     setBusy(true)
@@ -40,28 +32,18 @@ export function ServiceCard({ container, meta }: Props) {
   }
 
   return (
-    <div className="service-card">
-      <div className="service-card-header">
-        <span className="service-card-icon">{meta?.icon ?? '\u{1F4E6}'}</span>
-        <div>
-          <div className="service-card-name">{meta?.name ?? container.serviceId}</div>
-          <div className="service-card-status">
-            <span className="status-dot" style={{ background: dotColor }} />
-            {container.status}
-          </div>
-        </div>
-      </div>
-
-      {meta?.description && <p className="service-card-description">{meta.description}</p>}
-
+    <div className="service-controls">
       <div className="service-card-actions">
-        <button disabled={busy} onClick={() => runAction(() => (isRunning ? controlApi.stop(container.serviceId) : controlApi.start(container.serviceId)))}>
+        <button
+          disabled={busy}
+          onClick={() => runAction(() => (isRunning ? controlApi.stop(serviceId) : controlApi.start(serviceId)))}
+        >
           {isRunning ? 'Stop' : 'Start'}
         </button>
-        <button disabled={busy} onClick={() => runAction(() => controlApi.restart(container.serviceId))}>
+        <button disabled={busy} onClick={() => runAction(() => controlApi.restart(serviceId))}>
           Restart
         </button>
-        <button disabled={busy} onClick={() => runAction(() => controlApi.heal(container.serviceId))}>
+        <button disabled={busy} onClick={() => runAction(() => controlApi.heal(serviceId))}>
           Heal
         </button>
         <button disabled={busy} onClick={() => setChaosOpen((open) => !open)}>
@@ -96,7 +78,7 @@ export function ServiceCard({ container, meta }: Props) {
           />
           <button
             disabled={busy}
-            onClick={() => runAction(() => controlApi.degrade(container.serviceId, { type: chaosType, amount, durationSeconds: duration }))}
+            onClick={() => runAction(() => controlApi.degrade(serviceId, { type: chaosType, amount, durationSeconds: duration }))}
           >
             Start
           </button>

@@ -24,7 +24,11 @@ public interface IDockerService
     // Names of the k6 scripts baked into this image (sandbox/infra/control-api/k6-scripts/*.js).
     IReadOnlyList<string> ListTrafficScenarios();
 
-    // Runs the named k6 script against the real stack and waits for it to finish - the request
-    // blocks for up to ~DurationSeconds, which is fine for the short runs this is meant for.
-    Task<TrafficResult?> RunTrafficAsync(TrafficRequest request, CancellationToken ct);
+    // Runs the named k6 script against the real stack, calling onProgress roughly once a second
+    // (parsed from k6's own periodic status lines) while it runs, then returns the final report.
+    // Null return means the scenario name didn't match a known script.
+    Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct);
+
+    // Current CPU/memory snapshot for one service, or null if it isn't running.
+    Task<ResourceSample?> GetResourceSampleAsync(string serviceId, CancellationToken ct);
 }

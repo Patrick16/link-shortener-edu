@@ -29,8 +29,46 @@ export interface TrafficRequest {
   durationSeconds: number
 }
 
-export interface TrafficResult {
+export interface LatencyStats {
+  avg: number
+  min: number
+  med: number
+  max: number
+  p90: number
+  p95: number
+}
+
+export interface CheckResult {
+  name: string
+  passes: number
+  fails: number
+}
+
+export interface TrafficReport {
   scenario: string
   exitCode: number
-  output: string
+  httpRequests: number
+  httpRequestRate: number
+  iterations: number
+  iterationRate: number
+  vus: number
+  httpReqDuration: LatencyStats | null
+  checks: CheckResult[]
+  rawOutput: string
+}
+
+export interface TrafficProgress {
+  elapsedSeconds: number
+  totalSeconds: number
+  percentComplete: number
+  iterationsSoFar: number
+  iterationsPerSecond: number
+}
+
+export interface ResourceSample {
+  serviceId: string
+  cpuPercent: number
+  memoryUsageBytes: number
+  memoryLimitBytes: number
+  timestamp: string
 }

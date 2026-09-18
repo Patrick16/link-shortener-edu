@@ -1,12 +1,15 @@
 using ControlApi.Hubs;
 using ControlApi.Models;
 using ControlApi.Services;
+using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<IDockerService, DockerService>();
+builder.Services.AddSingleton<ResourceStatsStore>();
 builder.Services.AddSignalR();
 builder.Services.AddHostedService<StatusPollerService>();
+builder.Services.AddHostedService<ResourceStatsPollerService>();
 
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
     ?? ["http://localhost:5173", "http://localhost:5174"];
@@ -69,9 +72,12 @@ app.MapPost("/api/containers/{serviceId}/degrade", async (string serviceId, Chao
 app.MapPost("/api/containers/{serviceId}/heal", async (string serviceId, IDockerService docker, CancellationToken ct) =>
     Results.Ok(new { stopped = await docker.HealAsync(serviceId, ct) }));
 
+app.MapGet("/api/containers/{serviceId}/stats/history", (string serviceId, ResourceStatsStore store) =>
+    Results.Ok(store.GetHistory(serviceId)));
+
 app.MapGet("/api/traffic/scenarios", (IDockerService docker) => Results.Ok(docker.ListTrafficScenarios()));
 
-app.MapPost("/api/traffic", async (TrafficRequest request, IDockerService docker, CancellationToken ct) =>
+app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
 {
     if (request.Vus is < 1 or > 200)
     {
@@ -83,8 +89,36 @@ app.MapPost("/api/traffic", async (TrafficRequest request, IDockerService docker
         return Results.BadRequest(new { error = "durationSeconds must be between 1 and 120" });
     }
 
-    var result = await docker.RunTrafficAsync(request, ct);
-    return result is null ? Results.NotFound(new { error = $"unknown scenario '{request.Scenario}'" }) : Results.Ok(result);
+    if (!docker.ListTrafficScenarios().Contains(request.Scenario))
+    {
+        return Results.NotFound(new { error = $"unknown scenario '{request.Scenario}'" });
+    }
+
+    // Runs in the background and reports over SignalR (trafficProgress while it runs,
+    // trafficCompleted with the final TrafficReport) instead of blocking the HTTP request for the
+    // full duration - lets the UI show a live progress bar instead of a frozen spinner.
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            var report = await docker.RunTrafficAsync(
+                request,
+                progress => hub.Clients.All.SendAsync("trafficProgress", progress),
+                CancellationToken.None);
+
+            if (report is not null)
+            {
+                await hub.Clients.All.SendAsync("trafficCompleted", report);
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Traffic run for {Scenario} failed", request.Scenario);
+            await hub.Clients.All.SendAsync("trafficFailed", new { request.Scenario, error = ex.Message });
+        }
+    });
+
+    return Results.Accepted();
 });
 
 app.Run();
