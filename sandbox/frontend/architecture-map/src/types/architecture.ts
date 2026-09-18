@@ -15,7 +15,6 @@ export interface ArchComponent {
   icon: string
   description: string
   position: { x: number; y: number }
-  scenarios: string[]
   details: ComponentDetails
 }
 
@@ -27,18 +26,9 @@ export interface ArchConnection {
   format?: string
   synchronous: boolean
   notes?: string
-  scenarios: string[]
-}
-
-export interface ArchScenario {
-  id: string
-  name: string
-  description: string
-  focus: string
 }
 
 export interface ArchitectureData {
   components: ArchComponent[]
   connections: ArchConnection[]
-  scenarios: ArchScenario[]
 }

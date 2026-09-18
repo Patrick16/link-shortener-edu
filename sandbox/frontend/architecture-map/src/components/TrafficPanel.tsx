@@ -1,14 +1,11 @@
 import { useEffect, useState } from 'react'
 import { controlApi } from '../api/controlApi'
 import type { TrafficRunState } from '../hooks/useTrafficRun'
-import type { TrafficScenarioInfo, TrafficStage } from '../types/controlApi'
+import type { EndpointDefinition, TrafficStage } from '../types/controlApi'
 import { AxisChart } from './AxisChart'
 import { StageGraphEditor, type StagePoint } from './StageGraphEditor'
+import { EndpointSequenceBuilder } from './EndpointSequenceBuilder'
 import { CustomScenarioControls } from './CustomScenarioControls'
-
-// Not a real k6-scripts/*.js name (custom.js is excluded from ListTrafficScenarios on purpose) -
-// picking it switches the panel into "choose your own endpoints" mode instead of a named script.
-const CUSTOM_VALUE = '__custom__'
 
 const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: string }> = [
   { key: 'avg', label: 'avg' },
@@ -18,44 +15,62 @@ const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: s
   { key: 'max', label: 'max' },
 ]
 
-interface Preset {
+interface RampPreset {
+  id: string
+  label: string
+  description: string
   totalDurationSeconds: number
   points: StagePoint[]
 }
 
-// Starting shape for each scenario's load profile - picked to actually look like what the name
-// promises (a flat smoke check, a sharp spike, a gradual read-heavy ramp) rather than one generic
-// default, but every point stays draggable afterwards. Keyed by k6-scripts/<name>.js's own name.
-const PRESETS: Record<string, Preset> = {
-  smoke: {
-    totalDurationSeconds: 10,
+// Load *shape* presets - what kind of test this is has nothing to do with which endpoints get
+// called (that's the sequence builder below), only with how VUs move over time. Every preset stays
+// fully editable on the graph afterwards; picking one is just a sensible starting shape.
+const RAMP_PRESETS: RampPreset[] = [
+  {
+    id: 'load',
+    label: 'Load Testing',
+    description: 'Steady expected concurrency, held for the whole run - confirms the system meets normal performance expectations under typical traffic.',
+    totalDurationSeconds: 30,
     points: [
-      { t: 0, vus: 3 },
-      { t: 10, vus: 3 },
+      { t: 0, vus: 10 },
+      { t: 30, vus: 10 },
     ],
   },
-  spike: {
+  {
+    id: 'stress',
+    label: 'Stress Testing',
+    description: 'Climbs steadily well past normal levels - watch the live error rate and status codes to find the point where the system starts to fail, and how it behaves past that point.',
+    totalDurationSeconds: 60,
+    points: [
+      { t: 0, vus: 0 },
+      { t: 60, vus: 150 },
+    ],
+  },
+  {
+    id: 'spike',
+    label: 'Spike Testing',
+    description: 'A sudden jump to a high VU count, held briefly, then a sudden drop - simulates a burst of traffic (e.g. from a news mention) rather than gradual growth.',
     totalDurationSeconds: 20,
     points: [
       { t: 0, vus: 0 },
-      { t: 3, vus: 50 },
-      { t: 13, vus: 50 },
+      { t: 3, vus: 80 },
+      { t: 13, vus: 80 },
       { t: 20, vus: 0 },
     ],
   },
-  'read-heavy': {
-    totalDurationSeconds: 20,
+  {
+    id: 'soak',
+    label: 'Soak / Endurance Testing',
+    description: 'Moderate load held for as long as this tool allows (real soak tests run for hours) - useful for spotting problems that only show up over time, like slow memory growth or degrading latency.',
+    totalDurationSeconds: 300,
     points: [
-      { t: 0, vus: 0 },
-      { t: 5, vus: 20 },
-      { t: 20, vus: 20 },
+      { t: 0, vus: 12 },
+      { t: 300, vus: 12 },
     ],
   },
-}
-const DEFAULT_PRESET: Preset = { totalDurationSeconds: 10, points: [{ t: 0, vus: 3 }, { t: 10, vus: 3 }] }
+]
 
-// Consecutive points become k6 --stage segments - k6 only needs "ramp/hold to this many VUs over
-// this many seconds", it has no notion of the graph's absolute time axis the UI edits in.
 function pointsToStages(points: StagePoint[]): TrafficStage[] {
   const stages: TrafficStage[] = []
   for (let i = 1; i < points.length; i++) {
@@ -67,37 +82,27 @@ function pointsToStages(points: StagePoint[]): TrafficStage[] {
 // Driven by a useTrafficRun() instance owned by App (not this component) - the graph needs to
 // know whether traffic is running too, to animate the edges the flow actually exercises.
 export function TrafficPanel({ running, progress, progressHistory, report, error, start }: TrafficRunState) {
-  const [scenarios, setScenarios] = useState<TrafficScenarioInfo[]>([])
-  const [scenario, setScenario] = useState('')
-  const [totalDuration, setTotalDuration] = useState(DEFAULT_PRESET.totalDurationSeconds)
-  const [points, setPoints] = useState<StagePoint[]>(DEFAULT_PRESET.points)
-  const [selectedEndpoints, setSelectedEndpoints] = useState<string[]>(['create', 'redirect'])
+  const [endpointOptions, setEndpointOptions] = useState<EndpointDefinition[]>([])
+  const [sequence, setSequence] = useState<string[]>([])
+  const [rampPreset, setRampPreset] = useState(RAMP_PRESETS[0].id)
+  const [totalDuration, setTotalDuration] = useState(RAMP_PRESETS[0].totalDurationSeconds)
+  const [points, setPoints] = useState<StagePoint[]>(RAMP_PRESETS[0].points)
+  const [scenarioName, setScenarioName] = useState('')
 
   useEffect(() => {
-    controlApi
-      .listTrafficScenarios()
-      .then((list) => {
-        setScenarios(list)
-        if (list.length > 0) setScenario(list[0].name)
-      })
-      .catch(() => {})
+    controlApi.listEndpoints().then(setEndpointOptions).catch(() => {})
   }, [])
 
-  // Loads that scenario's own starting profile whenever the picker changes - including the very
-  // first time it's set from the scenario list above.
+  // Loads that preset's own starting shape whenever the picker changes.
   useEffect(() => {
-    if (!scenario) return
-    if (scenario === CUSTOM_VALUE) {
-      setSelectedEndpoints(['create', 'redirect'])
-    }
-    const preset = PRESETS[scenario] ?? DEFAULT_PRESET
+    const preset = RAMP_PRESETS.find((p) => p.id === rampPreset)
+    if (!preset) return
     setTotalDuration(preset.totalDurationSeconds)
     setPoints(preset.points)
-  }, [scenario])
+  }, [rampPreset])
 
-  const isCustom = scenario === CUSTOM_VALUE
   const maxLatency = report?.httpReqDuration ? Math.max(...LATENCY_ROWS.map((r) => report.httpReqDuration![r.key])) : 0
-  const selectedDescription = scenarios.find((s) => s.name === scenario)?.description
+  const selectedPresetDescription = RAMP_PRESETS.find((p) => p.id === rampPreset)?.description
   const totalSeconds = progress?.totalSeconds ?? totalDuration
   const vusPoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.activeVus }))
   const ratePoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.iterationsPerSecond }))
@@ -105,60 +110,56 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
   return (
     <div className="traffic-panel">
       <div className="traffic-panel-controls">
-        <select value={scenario} onChange={(e) => setScenario(e.target.value)} disabled={running || scenarios.length === 0}>
-          {scenarios.length === 0 && <option>No scenarios available</option>}
-          {scenarios.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.name}
+        <select value={rampPreset} onChange={(e) => setRampPreset(e.target.value)} disabled={running}>
+          {RAMP_PRESETS.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
             </option>
           ))}
-          <option value={CUSTOM_VALUE}>— Custom (choose endpoints) —</option>
         </select>
         <button
           onClick={() =>
             start({
-              scenario: isCustom ? 'custom' : scenario,
+              scenario: scenarioName.trim() || 'flow',
               vus: points[0]?.vus ?? 0,
               durationSeconds: totalDuration,
               stages: pointsToStages(points),
-              endpoints: isCustom ? selectedEndpoints : undefined,
+              endpoints: sequence,
             })
           }
-          disabled={running || !scenario || points.length < 2 || (isCustom && selectedEndpoints.length === 0)}
+          disabled={running || sequence.length === 0 || points.length < 2}
         >
-          {running ? `Running ${isCustom ? 'custom' : scenario}...` : 'Run traffic'}
+          {running ? `Running ${scenarioName.trim() || 'flow'}...` : 'Run traffic'}
         </button>
       </div>
 
-      {isCustom ? (
-        <>
-          <p className="scenario-description-text">
-            Pick which endpoints to generate load against - each iteration hits a random one from your selection - then draw the
-            ramp below. Save a combination by name to reuse or tweak it later.
-          </p>
-          <CustomScenarioControls
-            disabled={running}
-            selectedEndpoints={selectedEndpoints}
-            onEndpointsChange={setSelectedEndpoints}
-            points={points}
-            totalDurationSeconds={totalDuration}
-            onLoad={(saved) => {
-              setSelectedEndpoints(saved.endpoints)
-              setPoints(saved.points.map((p) => ({ t: p.t, vus: p.vus })))
-              setTotalDuration(saved.totalDurationSeconds)
-            }}
-            onReset={() => {
-              setSelectedEndpoints(['create', 'redirect'])
-              setPoints(DEFAULT_PRESET.points)
-              setTotalDuration(DEFAULT_PRESET.totalDurationSeconds)
-            }}
-          />
-        </>
-      ) : (
-        selectedDescription && <p className="scenario-description-text">{selectedDescription}</p>
-      )}
+      {selectedPresetDescription && <p className="scenario-description-text">{selectedPresetDescription}</p>}
 
+      <h3 className="traffic-panel-subheading">What to call</h3>
+      <EndpointSequenceBuilder disabled={running} endpoints={endpointOptions} sequence={sequence} onChange={setSequence} />
+
+      <h3 className="traffic-panel-subheading">How much load</h3>
       <StageGraphEditor points={points} onChange={setPoints} totalDurationSeconds={totalDuration} onTotalDurationChange={setTotalDuration} disabled={running} />
+
+      <h3 className="traffic-panel-subheading">Save this combination</h3>
+      <CustomScenarioControls
+        disabled={running}
+        scenarioName={scenarioName}
+        onScenarioNameChange={setScenarioName}
+        endpoints={sequence}
+        points={points}
+        totalDurationSeconds={totalDuration}
+        onLoad={(saved) => {
+          setSequence(saved.endpoints)
+          setPoints(saved.points.map((p) => ({ t: p.t, vus: p.vus })))
+          setTotalDuration(saved.totalDurationSeconds)
+        }}
+        onReset={() => {
+          setSequence([])
+          setPoints(RAMP_PRESETS[0].points)
+          setTotalDuration(RAMP_PRESETS[0].totalDurationSeconds)
+        }}
+      />
 
       {error && <p className="service-card-error">{error}</p>}
 

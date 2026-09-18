@@ -44,8 +44,21 @@ export interface TrafficRequest {
   scenario: string
   vus: number
   durationSeconds: number
+  endpoints: string[]
   stages?: TrafficStage[]
-  endpoints?: string[]
+}
+
+// One real HTTP route the flow runner can call - see EndpointDefinition on the backend.
+// PathTemplate/BodyTemplate use "{{varName}}" placeholders resolved by k6-scripts/flow.js.
+export interface EndpointDefinition {
+  id: string
+  serviceId: string
+  method: string
+  pathTemplate: string
+  bodyTemplate: string | null
+  produces: Record<string, string>
+  consumes: string[]
+  description: string
 }
 
 // Persisted exactly as the graph edits it (time + VUs at that point) - see ScenarioPoint on the
@@ -68,11 +81,6 @@ export interface InfraStatus {
   nginxBypassed: boolean
   pgcatEnabled: boolean
   cacheEnabled: boolean
-}
-
-export interface TrafficScenarioInfo {
-  name: string
-  description: string
 }
 
 export interface LatencyStats {

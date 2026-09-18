@@ -1,14 +1,13 @@
 {
-  "_comment": "Filled in as scenarios are actually implemented, not ahead of reality — see docs/scenarios/ for what's actually built.",
+  "_comment": "Filled in as things are actually implemented, not ahead of reality — see docs/scenarios/ for what's actually built. All nodes/connections here are always shown - no teaching-progression scenario filter anymore.",
   "components": [
     {
       "id": "k6",
       "name": "k6 (load test)",
       "type": "infrastructure",
       "icon": "🧪",
-      "description": "Traffic generator started from the control panel - not part of the deployed stack, only exists while a scenario is running",
+      "description": "Traffic generator started from the control panel - not part of the deployed stack, only exists while a run is active",
       "position": { "x": 40, "y": 160 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "One-off container per run (see the traffic panel); hits the same external entry point (nginx) real clients would",
         "technologies": ["k6", "grafana/k6 docker image"],
@@ -24,7 +23,6 @@
       "icon": "🧭",
       "description": "External entry point for LinkApi and RedirectApi - the only reason either can have more than one replica",
       "position": { "x": 190, "y": 360 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Reverse proxy in front of link-api/redirect-api; re-resolves their service name against Docker's embedded DNS on a short TTL so it picks up replicas added/removed via Scale without a config reload",
         "technologies": ["nginx"],
@@ -42,7 +40,6 @@
       "icon": "🖥️",
       "description": "Demo UI — register/login, create a short link, visit it",
       "position": { "x": 40, "y": 260 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "The only thing an actual person interacts with in this whole stack",
         "technologies": ["React 19", "TypeScript", "Vite", "react-router-dom"],
@@ -60,7 +57,6 @@
       "icon": "🔑",
       "description": "Registration / login, issues a JWT",
       "position": { "x": 320, "y": 60 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Owns users_db (the only writer to it, and the only one that migrates it)",
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "PasswordHasher<T>", "System.IdentityModel.Tokens.Jwt"],
@@ -79,7 +75,6 @@
       "icon": "🌐",
       "description": "Creates short links (hash generated here), reads them back through a cache",
       "position": { "x": 320, "y": 260 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "POST /links generates the hash, optionally attaches userId from a Bearer token (no [Authorize] — anonymous still works), and publishes it; GET /links/{hash} is a cached read against links_db",
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis", "Microsoft.AspNetCore.Authentication.JwtBearer"],
@@ -97,7 +92,6 @@
       "icon": "↪️",
       "description": "Resolves a short link, issues a 302, and records the click",
       "position": { "x": 320, "y": 460 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; publishes ClickTrackedEvent right before redirecting",
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis"],
@@ -115,7 +109,6 @@
       "icon": "🐰",
       "description": "Durable queue between the two APIs and their workers",
       "position": { "x": 600, "y": 260 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Decouples each API's synchronous response from the actual Postgres write it triggers",
         "technologies": ["RabbitMQ 3", "AMQP 0-9-1"],
@@ -136,7 +129,6 @@
       "icon": "⚙️",
       "description": "Consumes LinkCreatedEvent, persists the link",
       "position": { "x": 880, "y": 120 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Owns links_db (the only writer, and the only one that migrates it); redelivery-safe (skips if the hash is already stored)",
         "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client"],
@@ -154,7 +146,6 @@
       "icon": "📊",
       "description": "Consumes ClickTrackedEvent, persists the click",
       "position": { "x": 880, "y": 400 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Owns clicks_db (the only writer, and the only one that migrates it); redelivery-safe (skips if the event's Id is already stored)",
         "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client"],
@@ -172,7 +163,6 @@
       "icon": "🐈",
       "description": "Connection pooler in front of Postgres - every service talks to pgcat, never to postgres directly",
       "position": { "x": 990, "y": 260 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "One pool per physical database (users_db/links_db/clicks_db), each a single unsharded shard for now; multiplexes many short-lived app connections onto a small server-side pool per database",
         "technologies": ["PgCat"],
@@ -190,7 +180,6 @@
       "icon": "🗄️",
       "description": "Cache of hash → link, shared key format between LinkApi and RedirectApi",
       "position": { "x": 600, "y": 460 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Cache-aside: read-through on miss, populated by whichever service reads or creates first",
         "technologies": ["Redis 7"],
@@ -208,7 +197,6 @@
       "icon": "🐘",
       "description": "Own physical database, not just a schema — real isolation from links_db/clicks_db",
       "position": { "x": 1140, "y": 60 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Users(id, name, email, passwordHash, sault)",
         "technologies": ["PostgreSQL 16"],
@@ -226,7 +214,6 @@
       "icon": "🐘",
       "description": "Own physical database — target design shards this one (scenario 4)",
       "position": { "x": 1140, "y": 260 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Links(hash PK, originalLink, shortenLink, createdAt, userId?)",
         "technologies": ["PostgreSQL 16"],
@@ -244,7 +231,6 @@
       "icon": "🐘",
       "description": "Own physical database",
       "position": { "x": 1140, "y": 460 },
-      "scenarios": ["1", "2"],
       "details": {
         "purpose": "Clicks(id, clickedAt, inboundLink, outboundLink, hash)",
         "technologies": ["PostgreSQL 16"],
@@ -263,8 +249,7 @@
       "label": "Register / login",
       "protocol": "HTTP (fetch)",
       "format": "JSON",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "frontend-app",
@@ -272,8 +257,7 @@
       "label": "Create / look up / visit a link",
       "protocol": "HTTP (fetch + browser navigation)",
       "format": "JSON / redirect",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "k6",
@@ -281,8 +265,7 @@
       "label": "Generated load",
       "protocol": "HTTP",
       "synchronous": true,
-      "notes": "Only present while a scenario is running from the traffic panel.",
-      "scenarios": ["1", "2"]
+      "notes": "Only present while a traffic run is active from the traffic panel."
     },
     {
       "from": "nginx",
@@ -290,24 +273,21 @@
       "label": "Proxy: create / look up a link",
       "protocol": "HTTP",
       "format": "JSON",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "nginx",
       "to": "redirect-api",
       "label": "Proxy: visit the short link",
       "protocol": "HTTP",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "auth-api",
       "to": "pgcat",
       "label": "Write / read user",
       "protocol": "PostgreSQL wire (Npgsql)",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "link-api",
@@ -315,8 +295,7 @@
       "label": "Cache read-through on GET",
       "protocol": "RESP",
       "format": "link:{hash} → JSON",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "link-api",
@@ -324,8 +303,7 @@
       "label": "Read on cache miss",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "read-only from this service — ShortenerService owns writes/migrations",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "link-api",
@@ -334,16 +312,14 @@
       "protocol": "AMQP 0-9-1",
       "format": "{ hash, originalLink, shortenLink, createdAt, userId? } → JSON, routing key \"link.created\"",
       "synchronous": false,
-      "notes": "Falls back to a local SQLite queue if the broker is unreachable; retried every 30s.",
-      "scenarios": ["1", "2"]
+      "notes": "Falls back to a local SQLite queue if the broker is unreachable; retried every 30s."
     },
     {
       "from": "rabbitmq",
       "to": "shortener-service",
       "label": "Consume LinkCreatedEvent",
       "protocol": "AMQP 0-9-1",
-      "synchronous": false,
-      "scenarios": ["1", "2"]
+      "synchronous": false
     },
     {
       "from": "shortener-service",
@@ -351,8 +327,7 @@
       "label": "Persist the link",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "this is the only writer",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "redirect-api",
@@ -360,8 +335,7 @@
       "label": "Cache lookup",
       "protocol": "RESP",
       "format": "link:{hash} → JSON",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "redirect-api",
@@ -369,8 +343,7 @@
       "label": "Read on cache miss",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "read-only from this service — ShortenerService owns writes/migrations",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "redirect-api",
@@ -379,16 +352,14 @@
       "protocol": "AMQP 0-9-1",
       "format": "{ id, hash, inboundLink, outboundLink, clickedAt } → JSON, routing key \"click.tracked\"",
       "synchronous": false,
-      "notes": "Published right before the 302 response; falls back to the same SQLite-queue pattern as LinkApi if the broker is unreachable. A 404 never publishes anything.",
-      "scenarios": ["2"]
+      "notes": "Published right before the 302 response; falls back to the same SQLite-queue pattern as LinkApi if the broker is unreachable. A 404 never publishes anything."
     },
     {
       "from": "rabbitmq",
       "to": "traffic-service",
       "label": "Consume ClickTrackedEvent",
       "protocol": "AMQP 0-9-1",
-      "synchronous": false,
-      "scenarios": ["2"]
+      "synchronous": false
     },
     {
       "from": "traffic-service",
@@ -396,8 +367,7 @@
       "label": "Persist the click",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "this is the only writer",
-      "synchronous": true,
-      "scenarios": ["2"]
+      "synchronous": true
     },
     {
       "from": "pgcat",
@@ -405,8 +375,7 @@
       "label": "Pooled connection",
       "protocol": "PostgreSQL wire",
       "format": "pool_mode = transaction, 1 unsharded shard",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "pgcat",
@@ -414,8 +383,7 @@
       "label": "Pooled connection",
       "protocol": "PostgreSQL wire",
       "format": "pool_mode = transaction, 1 unsharded shard - see scenario 4 for sharding this one",
-      "synchronous": true,
-      "scenarios": ["1", "2"]
+      "synchronous": true
     },
     {
       "from": "pgcat",
@@ -423,22 +391,7 @@
       "label": "Pooled connection",
       "protocol": "PostgreSQL wire",
       "format": "pool_mode = transaction, 1 unsharded shard",
-      "synchronous": true,
-      "scenarios": ["2"]
-    }
-  ],
-  "scenarios": [
-    {
-      "id": "1",
-      "name": "Minimal stack",
-      "description": "Register/login, create a short link, resolve it. RabbitMQ already decouples the write; no sharding or replicas yet.",
-      "focus": "Cache-aside reads, eventual consistency on the write path, connection pooling patterns (AddDbContextPool vs AddPooledDbContextFactory), database-per-service isolation"
-    },
-    {
-      "id": "2",
-      "name": "Click tracking (async)",
-      "description": "Visiting a link publishes a second event; TrafficService persists it independently of the redirect itself.",
-      "focus": "A second, symmetric async write path; JWT userId flows into the first path (LinkApi validates optionally, no [Authorize])"
+      "synchronous": true
     }
   ]
 }

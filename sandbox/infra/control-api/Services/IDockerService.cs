@@ -21,13 +21,10 @@ public interface IDockerService
     // Returns how many chaos containers were stopped.
     Task<int> HealAsync(string serviceId, CancellationToken ct);
 
-    // Metadata (name + short human description) for the k6 scripts baked into this image
-    // (sandbox/infra/control-api/k6-scripts/*.js).
-    IReadOnlyList<TrafficScenarioInfo> ListTrafficScenarios();
-
-    // Runs the named k6 script against the real stack, calling onProgress roughly once a second
-    // (parsed from k6's own periodic status lines) while it runs, then returns the final report.
-    // Null return means the scenario name didn't match a known script.
+    // Runs the request's ordered Endpoints sequence through k6-scripts/flow.js against the real
+    // stack, calling onProgress roughly once a second (parsed from k6's own periodic status lines)
+    // while it runs, then returns the final report. Null return means an endpoint id didn't
+    // resolve against ListKnownEndpoints (already rejected by Program.cs before this is called).
     Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct);
 
     // Current CPU/memory snapshot for one service, or null if it isn't running.
@@ -53,6 +50,7 @@ public interface IDockerService
     Task<InfraStatus> SetPgcatEnabledAsync(bool enabled, CancellationToken ct);
     Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct);
 
-    // Endpoint keys a custom (Endpoints-driven) traffic run can pick from - see k6-scripts/custom.js.
-    IReadOnlyList<string> ListKnownEndpoints();
+    // The real routes a traffic run's step sequence can be built from - see EndpointDefinition and
+    // k6-scripts/flow.js.
+    IReadOnlyList<EndpointDefinition> ListKnownEndpoints();
 }

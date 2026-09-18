@@ -5,42 +5,34 @@ import type { StagePoint } from './StageGraphEditor'
 
 interface Props {
   disabled: boolean
-  selectedEndpoints: string[]
-  onEndpointsChange: (endpoints: string[]) => void
+  scenarioName: string
+  onScenarioNameChange: (name: string) => void
+  endpoints: string[]
   points: StagePoint[]
   totalDurationSeconds: number
   onLoad: (scenario: CustomScenario) => void
   onReset: () => void
 }
 
-// Human-readable labels for DockerService.KnownEndpoints - the API only needs the keys.
-const ENDPOINT_LABELS: Record<string, string> = {
-  create: 'Create link (POST /Links)',
-  redirect: 'Resolve link (GET redirect)',
-  register: 'Register user (POST /register)',
-}
-
-// Endpoint checkboxes + save/load/delete for named custom scenarios - the load ramp itself stays
-// in TrafficPanel's own StageGraphEditor (points/totalDurationSeconds are passed in just so Save
-// can persist whatever's currently drawn).
+// Save/load/delete of a named scenario - the endpoint step sequence itself lives in
+// EndpointSequenceBuilder and the load ramp in StageGraphEditor; this just persists whatever
+// combination of the two is currently set up, under a name, so it can be reloaded later.
 export function CustomScenarioControls({
   disabled,
-  selectedEndpoints,
-  onEndpointsChange,
+  scenarioName,
+  onScenarioNameChange,
+  endpoints,
   points,
   totalDurationSeconds,
   onLoad,
   onReset,
 }: Props) {
-  const [endpointOptions, setEndpointOptions] = useState<string[]>([])
   const [scenarios, setScenarios] = useState<CustomScenario[]>([])
   const [selectedName, setSelectedName] = useState('')
-  const [nameInput, setNameInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    controlApi.listEndpoints().then(setEndpointOptions).catch(() => {})
     refreshScenarios()
   }, [])
 
@@ -48,21 +40,17 @@ export function CustomScenarioControls({
     controlApi.listScenarios().then(setScenarios).catch(() => {})
   }
 
-  function toggleEndpoint(endpoint: string, checked: boolean) {
-    onEndpointsChange(checked ? [...selectedEndpoints, endpoint] : selectedEndpoints.filter((e) => e !== endpoint))
-  }
-
   function handleLoadChange(name: string) {
     setSelectedName(name)
     setError(null)
     if (!name) {
-      setNameInput('')
+      onScenarioNameChange('')
       onReset()
       return
     }
     const found = scenarios.find((s) => s.name === name)
     if (found) {
-      setNameInput(found.name)
+      onScenarioNameChange(found.name)
       onLoad(found)
     }
   }
@@ -72,8 +60,8 @@ export function CustomScenarioControls({
     setError(null)
     try {
       const saved = await controlApi.saveScenario({
-        name: nameInput.trim(),
-        endpoints: selectedEndpoints,
+        name: scenarioName.trim(),
+        endpoints,
         totalDurationSeconds,
         points,
       })
@@ -93,7 +81,7 @@ export function CustomScenarioControls({
       await controlApi.deleteScenario(selectedName)
       refreshScenarios()
       setSelectedName('')
-      setNameInput('')
+      onScenarioNameChange('')
       onReset()
     } catch (err) {
       setError(err instanceof ControlApiError ? err.message : String(err))
@@ -106,7 +94,7 @@ export function CustomScenarioControls({
     <div className="custom-scenario-controls">
       <div className="custom-scenario-row">
         <select value={selectedName} onChange={(e) => handleLoadChange(e.target.value)} disabled={disabled}>
-          <option value="">+ New custom scenario</option>
+          <option value="">+ New scenario</option>
           {scenarios.map((s) => (
             <option key={s.name} value={s.name}>
               {s.name}
@@ -120,29 +108,15 @@ export function CustomScenarioControls({
         )}
       </div>
 
-      <div className="custom-scenario-endpoints">
-        {endpointOptions.map((endpoint) => (
-          <label key={endpoint} className="custom-scenario-endpoint">
-            <input
-              type="checkbox"
-              checked={selectedEndpoints.includes(endpoint)}
-              disabled={disabled}
-              onChange={(e) => toggleEndpoint(endpoint, e.target.checked)}
-            />
-            {ENDPOINT_LABELS[endpoint] ?? endpoint}
-          </label>
-        ))}
-      </div>
-
       <div className="custom-scenario-row">
         <input
           type="text"
-          value={nameInput}
-          onChange={(e) => setNameInput(e.target.value)}
+          value={scenarioName}
+          onChange={(e) => onScenarioNameChange(e.target.value)}
           placeholder="Scenario name"
           disabled={disabled}
         />
-        <button onClick={handleSave} disabled={disabled || busy || !nameInput.trim() || selectedEndpoints.length === 0}>
+        <button onClick={handleSave} disabled={disabled || busy || !scenarioName.trim() || endpoints.length === 0}>
           {busy ? 'Saving...' : selectedName ? 'Save changes' : 'Save as new'}
         </button>
       </div>

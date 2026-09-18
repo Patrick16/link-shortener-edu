@@ -95,8 +95,6 @@ app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleR
     return result.Success ? Results.Ok(result) : Results.BadRequest(result);
 });
 
-app.MapGet("/api/traffic/scenarios", (IDockerService docker) => Results.Ok(docker.ListTrafficScenarios()));
-
 app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
 {
     // With a custom ramp, Vus is just the starting point k6 ramps from - 0 is exactly what a spike
@@ -131,17 +129,15 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHub
         return Results.BadRequest(new { error = "durationSeconds must be between 1 and 120" });
     }
 
-    if (request.Endpoints is { Count: > 0 } endpoints)
+    if (request.Endpoints.Count == 0)
     {
-        var unknown = endpoints.Where(e => !docker.ListKnownEndpoints().Contains(e)).ToList();
-        if (unknown.Count > 0)
-        {
-            return Results.BadRequest(new { error = $"unknown endpoint(s): {string.Join(", ", unknown)}" });
-        }
+        return Results.BadRequest(new { error = "at least one endpoint step is required" });
     }
-    else if (!docker.ListTrafficScenarios().Any(s => s.Name == request.Scenario))
+
+    var unknownEndpoints = request.Endpoints.Where(e => !docker.ListKnownEndpoints().Any(ep => ep.Id == e)).ToList();
+    if (unknownEndpoints.Count > 0)
     {
-        return Results.NotFound(new { error = $"unknown scenario '{request.Scenario}'" });
+        return Results.BadRequest(new { error = $"unknown endpoint(s): {string.Join(", ", unknownEndpoints)}" });
     }
 
     // Runs in the background and reports over SignalR (trafficProgress while it runs,
@@ -216,10 +212,11 @@ app.MapPost("/api/scenarios", async (CustomScenario scenario, IScenarioStore sto
         return Results.BadRequest(new { error = "name is required" });
     }
 
-    var unknown = scenario.Endpoints.Where(e => !docker.ListKnownEndpoints().Contains(e)).ToList();
+    var knownIds = docker.ListKnownEndpoints().Select(ep => ep.Id).ToList();
+    var unknown = scenario.Endpoints.Where(e => !knownIds.Contains(e)).ToList();
     if (scenario.Endpoints.Count == 0 || unknown.Count > 0)
     {
-        return Results.BadRequest(new { error = $"endpoints must be a non-empty subset of: {string.Join(", ", docker.ListKnownEndpoints())}" });
+        return Results.BadRequest(new { error = $"endpoints must be a non-empty sequence drawn from: {string.Join(", ", knownIds)}" });
     }
 
     if (scenario.Points.Count < 2)

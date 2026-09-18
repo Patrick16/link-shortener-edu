@@ -2,12 +2,12 @@ import type {
   ChaosRequest,
   ChaosAction,
   CustomScenario,
+  EndpointDefinition,
   InfraStatus,
   ManagedContainer,
   ResourceSample,
   ScaleResult,
   TrafficRequest,
-  TrafficScenarioInfo,
 } from '../types/controlApi'
 
 const BASE_URL = import.meta.env.VITE_CONTROL_API_URL || 'http://localhost:5299'
@@ -62,8 +62,6 @@ export const controlApi = {
   scale: (serviceId: string, replicas: number) =>
     request<ScaleResult>(`/api/containers/${serviceId}/scale`, 'POST', { replicas }),
 
-  listTrafficScenarios: () => request<TrafficScenarioInfo[]>('/api/traffic/scenarios'),
-
   // Fire-and-forget: the run itself is reported over SignalR (trafficProgress/trafficCompleted/
   // trafficFailed), not in this response - see useTrafficRun.
   startTraffic: async (traffic: TrafficRequest): Promise<void> => {
@@ -72,7 +70,7 @@ export const controlApi = {
 
   flushRedisCache: () => request<{ flushed: string }>('/api/containers/redis/flush-cache', 'POST'),
 
-  listEndpoints: () => request<string[]>('/api/endpoints'),
+  listEndpoints: () => request<EndpointDefinition[]>('/api/endpoints'),
 
   getInfraStatus: () => request<InfraStatus>('/api/infra/status'),
   setNginxEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/nginx', 'POST', { enabled }),

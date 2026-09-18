@@ -11,18 +11,18 @@ public record TrafficStage(int DurationSeconds, int TargetVus);
 // total. Kept both shapes on one request rather than two endpoints since everything downstream
 // (progress reporting, the report itself) is identical either way.
 //
-// Endpoints, when present and non-empty, replace the named-script lookup ({Scenario}.js) with the
-// one generic k6-scripts/custom.js, which picks a random endpoint from this list each iteration -
-// see DockerService.KnownEndpoints for the allowed values. Scenario is still sent along in this
-// mode purely as a label for the report/UI (e.g. a saved custom scenario's name), not a script name.
+// Every run goes through the one generic k6-scripts/flow.js now - there's no more "named script"
+// concept. Endpoints is the ordered sequence of EndpointDefinition ids to call, once per iteration,
+// in that exact order (see DockerService.EndpointRegistry) - order matters, since later steps can
+// consume variables earlier steps produced (e.g. a "resolve" step needs the "hash" a "create" step
+// earlier in the same sequence produced). Scenario is just a display label for the report/UI (e.g.
+// a saved custom scenario's own name), not a script name.
 public record TrafficRequest(
     string Scenario,
     int Vus,
     int DurationSeconds,
-    IReadOnlyList<TrafficStage>? Stages = null,
-    IReadOnlyList<string>? Endpoints = null);
-
-public record TrafficScenarioInfo(string Name, string Description);
+    IReadOnlyList<string> Endpoints,
+    IReadOnlyList<TrafficStage>? Stages = null);
 
 public record LatencyStats(double Avg, double Min, double Med, double Max, double P90, double P95);
 

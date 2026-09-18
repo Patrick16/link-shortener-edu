@@ -1,0 +1,89 @@
+import http from 'k6/http';
+import { check, sleep } from 'k6';
+
+// Every traffic run goes through this one script now. Which real endpoints get called, in what
+// order, and how data flows from one call into the next is entirely driven by STEPS_JSON - a JSON
+// array control-api built server-side from DockerService.EndpointRegistry, resolved from the
+// ordered list of endpoint ids the UI's sequence builder sent. This script has no built-in
+// knowledge of the app's actual routes; it's a generic interpreter over {serviceId, method,
+// pathTemplate, bodyTemplate, produces} objects.
+//
+// See DockerService.TrackedStatusCodes for why these thresholds exist - must match that list.
+export const options = {
+  thresholds: {
+    'http_reqs{status:200}': ['count>=0'],
+    'http_reqs{status:302}': ['count>=0'],
+    'http_reqs{status:401}': ['count>=0'],
+    'http_reqs{status:404}': ['count>=0'],
+    'http_reqs{status:409}': ['count>=0'],
+    'http_reqs{status:500}': ['count>=0'],
+    'http_reqs{status:502}': ['count>=0'],
+    'http_reqs{status:503}': ['count>=0'],
+    'http_reqs{status:504}': ['count>=0'],
+    'http_reqs{status:0}': ['count>=0'],
+  },
+};
+
+const BASE_URLS = {
+  'auth-api': __ENV.AUTH_API_URL || 'http://auth-api:8080',
+  'link-api': __ENV.LINK_API_URL || 'http://nginx:8082',
+  'redirect-api': __ENV.REDIRECT_API_URL || 'http://nginx:8083',
+};
+
+const STEPS = JSON.parse(__ENV.STEPS_JSON || '[]');
+
+function substitute(template, vars) {
+  if (template == null) return null;
+  return template.replace(/\{\{(\w+)\}\}/g, (_, name) => (vars[name] !== undefined ? String(vars[name]) : ''));
+}
+
+export function setup() {
+  // A fixture link so a sequence that resolves a link without ever creating one in the same
+  // iteration (e.g. testing "Resolve link" on its own) still has something real to hit, rather than
+  // a request against an empty hash. Overwritten per-iteration below the moment a Create step runs.
+  const res = http.post(
+    `${BASE_URLS['link-api']}/Links`,
+    JSON.stringify({ originalLink: `https://example.com/flow-fixture-${Date.now()}` }),
+    { headers: { 'Content-Type': 'application/json' } },
+  );
+  const hash = res.json('shortenLink');
+
+  // Same async-persist race every other script in this project pauses for - give ShortenerService
+  // a moment before any VU might try to resolve this fixture.
+  sleep(1);
+
+  return { fixtureHash: hash };
+}
+
+export default function (data) {
+  const rand = Math.random().toString(36).slice(2);
+  // Seeded once per iteration, not once per step - a Register step followed by a Login step in the
+  // same sequence needs to see the *same* generated email/password to log in as the user it just
+  // registered, not two unrelated identities.
+  const vars = {
+    email: `flow-${rand}@example.com`,
+    password: 'Password123!',
+    originalLink: `https://example.com/${rand}`,
+    hash: data.fixtureHash,
+  };
+
+  for (const step of STEPS) {
+    const base = BASE_URLS[step.serviceId];
+    const path = substitute(step.pathTemplate, vars);
+    const url = `${base}${path}`;
+    const body = substitute(step.bodyTemplate, vars);
+
+    const res = step.method === 'GET'
+      ? http.get(url, { redirects: 0 })
+      : http.request(step.method, url, body, { headers: { 'Content-Type': 'application/json' } });
+
+    check(res, { [`${step.serviceId} ${step.method} ${step.pathTemplate}`]: (r) => r.status >= 200 && r.status < 400 });
+
+    for (const [varName, field] of Object.entries(step.produces || {})) {
+      const value = res.json(field);
+      if (value !== undefined && value !== null) vars[varName] = value;
+    }
+  }
+
+  sleep(0.2);
+}

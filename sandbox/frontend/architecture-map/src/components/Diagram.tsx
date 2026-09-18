@@ -9,7 +9,6 @@ import type { ManagedContainer } from '../types/controlApi'
 
 interface Props {
   data: ArchitectureData
-  scenario: string
   containers: Record<string, ManagedContainer[]>
   trafficActive: boolean
   onSelectComponent: (componentId: string) => void
@@ -18,29 +17,16 @@ interface Props {
 
 const nodeTypes = { service: ServiceNode }
 
-export function Diagram({ data, scenario, containers, trafficActive, onSelectComponent, onSelectConnection }: Props) {
+// All nodes and connections are always shown - there used to be a "scenario" teaching-progression
+// filter here (a "1. Minimal stack" / "2. Click tracking" switcher hiding parts of the graph), but
+// it turned out to add more confusion (what's hidden right now?) than it removed, so the graph now
+// just always draws the whole real topology.
+export function Diagram({ data, containers, trafficActive, onSelectComponent, onSelectConnection }: Props) {
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
-
-  const visibleComponents = useMemo(
-    () => data.components.filter((c) => c.scenarios.includes(scenario)),
-    [data.components, scenario],
-  )
-  // While traffic is actually running, show every connection real requests are flowing through
-  // even if it's tagged for a *different* scenario than the one currently selected - the scenario
-  // filter is a teaching-progression staging device for browsing, not a claim about what's really
-  // deployed (everything scenario 1+2 built is always running in this stack). Real traffic doesn't
-  // care which teaching stage is selected, so a live demo shouldn't hide part of its own path.
-  const visibleConnections = useMemo(
-    () =>
-      data.connections.filter(
-        (c) => c.scenarios.includes(scenario) || (trafficActive && isTrafficFlowEdge(c.from, c.to)),
-      ),
-    [data.connections, scenario, trafficActive],
-  )
 
   const computedNodes: Node[] = useMemo(
     () =>
-      visibleComponents.map((component) => {
+      data.components.map((component) => {
         const serviceId = resolveServiceId(component, knownServiceIds)
         const instances = serviceId ? (containers[serviceId] ?? []) : []
         return {
@@ -59,7 +45,7 @@ export function Diagram({ data, scenario, containers, trafficActive, onSelectCom
           } satisfies ServiceNodeData,
         }
       }),
-    [visibleComponents, containers, knownServiceIds],
+    [data.components, containers, knownServiceIds],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(computedNodes)
@@ -76,7 +62,7 @@ export function Diagram({ data, scenario, containers, trafficActive, onSelectCom
 
   const edges: Edge[] = useMemo(
     () =>
-      visibleConnections.map((connection, index) => {
+      data.connections.map((connection, index) => {
         const isFlowing = trafficActive && isTrafficFlowEdge(connection.from, connection.to)
         return {
           id: `${connection.from}-${connection.to}-${index}`,
@@ -92,7 +78,7 @@ export function Diagram({ data, scenario, containers, trafficActive, onSelectCom
           markerEnd: { type: MarkerType.ArrowClosed, color: isFlowing ? 'var(--accent)' : 'var(--text)' },
         }
       }),
-    [visibleConnections, trafficActive],
+    [data.connections, trafficActive],
   )
 
   return (
@@ -104,7 +90,7 @@ export function Diagram({ data, scenario, containers, trafficActive, onSelectCom
         nodeTypes={nodeTypes}
         onNodeClick={(_, node) => onSelectComponent(node.id)}
         onEdgeClick={(_, edge) => {
-          const index = visibleConnections.findIndex((c, i) => `${c.from}-${c.to}-${i}` === edge.id)
+          const index = data.connections.findIndex((c, i) => `${c.from}-${c.to}-${i}` === edge.id)
           if (index >= 0) onSelectConnection(index)
         }}
         fitView
