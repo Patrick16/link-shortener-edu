@@ -159,6 +159,71 @@ button:disabled {
   font-weight: 500;
 }
 
+.service-node-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-h);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.instance-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.instance-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scale-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.scale-control label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+}
+
+.scale-control input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 6px;
+  width: 60px;
+}
+
+.scale-control button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.scale-control button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
 /* Side panel (node details / connection details) */
 
 .side-panel {
@@ -370,6 +435,10 @@ button:disabled {
   color: var(--text-h);
 }
 
+.stat-tile-value-danger {
+  color: #ef4444;
+}
+
 .stat-tile-label {
   font-size: 12px;
   color: var(--text);
@@ -382,19 +451,31 @@ button:disabled {
   color: var(--text-h);
 }
 
+/* Labels ("avg", "p95", a check's name, ...) are what the user reads first to know what a bar
+   means - direct labels standing in for a legend (see dataviz guidance: fine for this few
+   series/categories), so they need real contrast and enough column width, not the ellipsis-in-a-
+   56px-box a shared narrow column used to give check names. */
 .latency-row,
 .check-row {
   display: grid;
-  grid-template-columns: 56px 1fr 70px;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 12px;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.latency-row {
+  grid-template-columns: 56px 1fr 70px;
+}
+
+.check-row {
+  grid-template-columns: minmax(120px, 180px) 1fr 60px;
 }
 
 .latency-row-label,
 .check-row-label {
-  color: var(--text);
+  color: var(--text-h);
+  font-weight: 500;
 }
 
 .check-row-label {
@@ -421,6 +502,10 @@ button:disabled {
   height: 100%;
   background: #22c55e;
   border-radius: 4px;
+}
+
+.check-bar-fill-critical {
+  background: #ef4444;
 }
 
 .latency-row-value,

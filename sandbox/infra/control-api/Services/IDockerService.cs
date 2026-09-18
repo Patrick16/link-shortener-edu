@@ -31,4 +31,12 @@ public interface IDockerService
 
     // Current CPU/memory snapshot for one service, or null if it isn't running.
     Task<ResourceSample?> GetResourceSampleAsync(string serviceId, CancellationToken ct);
+
+    // Names of services this instance will scale (an explicit allowlist, not "anything in
+    // the compose file" - only ones nginx actually fronts have a reason to run >1 replica).
+    IReadOnlyList<string> ListScalableServices();
+
+    // Shells out to `docker compose ... up -d --scale <serviceId>=<replicas>` - the actual
+    // replica-management logic is Compose's own, not reimplemented against the raw Docker API.
+    Task<ScaleResult> ScaleAsync(string serviceId, int replicas, CancellationToken ct);
 }

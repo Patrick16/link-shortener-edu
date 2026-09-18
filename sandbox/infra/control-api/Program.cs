@@ -75,6 +75,19 @@ app.MapPost("/api/containers/{serviceId}/heal", async (string serviceId, IDocker
 app.MapGet("/api/containers/{serviceId}/stats/history", (string serviceId, ResourceStatsStore store) =>
     Results.Ok(store.GetHistory(serviceId)));
 
+app.MapGet("/api/containers/scalable", (IDockerService docker) => Results.Ok(docker.ListScalableServices()));
+
+app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleRequest request, IDockerService docker, CancellationToken ct) =>
+{
+    if (request.Replicas is < 1 or > 10)
+    {
+        return Results.BadRequest(new { error = "replicas must be between 1 and 10" });
+    }
+
+    var result = await docker.ScaleAsync(serviceId, request.Replicas, ct);
+    return result.Success ? Results.Ok(result) : Results.BadRequest(result);
+});
+
 app.MapGet("/api/traffic/scenarios", (IDockerService docker) => Results.Ok(docker.ListTrafficScenarios()));
 
 app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHubContext<StatusHub> hub, ILogger<Program> logger) =>

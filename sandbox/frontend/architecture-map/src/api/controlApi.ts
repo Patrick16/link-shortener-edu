@@ -1,4 +1,4 @@
-import type { ChaosRequest, ChaosAction, ManagedContainer, ResourceSample, TrafficRequest } from '../types/controlApi'
+import type { ChaosRequest, ChaosAction, ManagedContainer, ResourceSample, ScaleResult, TrafficRequest } from '../types/controlApi'
 
 const BASE_URL = import.meta.env.VITE_CONTROL_API_URL || 'http://localhost:5299'
 
@@ -46,6 +46,11 @@ export const controlApi = {
   heal: (serviceId: string) => request<{ stopped: number }>(`/api/containers/${serviceId}/heal`, 'POST'),
 
   statsHistory: (serviceId: string) => request<ResourceSample[]>(`/api/containers/${serviceId}/stats/history`),
+
+  listScalableServices: () => request<string[]>('/api/containers/scalable'),
+
+  scale: (serviceId: string, replicas: number) =>
+    request<ScaleResult>(`/api/containers/${serviceId}/scale`, 'POST', { replicas }),
 
   listTrafficScenarios: () => request<string[]>('/api/traffic/scenarios'),
 

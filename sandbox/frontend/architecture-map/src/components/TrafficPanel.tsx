@@ -81,6 +81,12 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
               <span className="stat-tile-label">requests ({report.httpRequestRate.toFixed(1)}/s)</span>
             </div>
             <div className="stat-tile">
+              <span className={report.failedRequests > 0 ? 'stat-tile-value stat-tile-value-danger' : 'stat-tile-value'}>
+                {report.failedRequests}
+              </span>
+              <span className="stat-tile-label">failed ({(report.failedRequestRate * 100).toFixed(1)}%)</span>
+            </div>
+            <div className="stat-tile">
               <span className="stat-tile-value">{report.iterations}</span>
               <span className="stat-tile-label">iterations ({report.iterationRate.toFixed(1)}/s)</span>
             </div>
@@ -123,7 +129,10 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
                   <div className="check-row" key={check.name}>
                     <span className="check-row-label">{check.name}</span>
                     <div className="check-bar-track">
-                      <div className="check-bar-fill" style={{ width: `${passPct}%` }} />
+                      <div
+                        className={passPct >= 50 ? 'check-bar-fill' : 'check-bar-fill check-bar-fill-critical'}
+                        style={{ width: `${passPct}%` }}
+                      />
                     </div>
                     <span className="check-row-value">
                       {check.passes}/{total}

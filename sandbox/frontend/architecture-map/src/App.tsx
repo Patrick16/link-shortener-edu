@@ -31,7 +31,7 @@ function App() {
   const selectedComponent = selection?.kind === 'component' ? metaById.get(selection.id) : undefined
   const selectedConnection = selection?.kind === 'connection' ? visibleConnections[selection.index] : undefined
   const selectedServiceId = selectedComponent ? resolveServiceId(selectedComponent, knownServiceIds) : null
-  const selectedContainer = selectedServiceId ? (containers[selectedServiceId] ?? null) : null
+  const selectedInstances = selectedServiceId ? (containers[selectedServiceId] ?? []) : []
 
   return (
     <main>
@@ -55,13 +55,17 @@ function App() {
           onSelectConnection={(index) => setSelection({ kind: 'connection', index })}
         />
 
-        {selectedComponent && (
+        {selectedComponent && selectedServiceId && (
           <NodePanel
             component={selectedComponent}
-            container={selectedContainer}
-            resourceHistory={selectedServiceId ? (resourceHistory[selectedServiceId] ?? []) : []}
+            serviceId={selectedServiceId}
+            instances={selectedInstances}
+            resourceHistory={resourceHistory[selectedServiceId] ?? []}
             onClose={() => setSelection(null)}
           />
+        )}
+        {selectedComponent && !selectedServiceId && (
+          <NodePanel component={selectedComponent} serviceId={null} instances={[]} resourceHistory={[]} onClose={() => setSelection(null)} />
         )}
 
         {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}

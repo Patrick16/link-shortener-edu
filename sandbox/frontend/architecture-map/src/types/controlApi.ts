@@ -5,6 +5,18 @@ export interface ManagedContainer {
   containerId: string
   state: string
   status: string
+  containerNumber: number
+}
+
+export interface ScaleRequest {
+  replicas: number
+}
+
+export interface ScaleResult {
+  serviceId: string
+  replicas: number
+  success: boolean
+  output: string
 }
 
 export type ChaosType = 'Delay' | 'Loss' | 'Partition'
@@ -49,6 +61,8 @@ export interface TrafficReport {
   exitCode: number
   httpRequests: number
   httpRequestRate: number
+  failedRequests: number
+  failedRequestRate: number
   iterations: number
   iterationRate: number
   vus: number

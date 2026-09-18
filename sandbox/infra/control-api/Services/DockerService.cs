@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Formats.Tar;
 using System.Globalization;
 using System.Text;
@@ -22,9 +23,16 @@ public class DockerService : IDockerService
     private const string ChaosTargetLabel = "control-api.chaos-target";
     private const string K6Image = "grafana/k6:latest";
 
+    // Only services nginx actually fronts (see sandbox/infra/nginx/nginx.conf) have a reason to
+    // run more than one replica right now - an explicit allowlist rather than "anything in the
+    // compose file" so scaling a stateful/singleton service (postgres, rabbitmq, ...) isn't even
+    // an option to try by mistake.
+    private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api"];
+
     private readonly DockerClient _client;
     private readonly string _composeProject;
     private readonly string _composeNetwork;
+    private readonly string _composeFile;
     private readonly string _k6ScriptsDir;
     private readonly ILogger<DockerService> _logger;
 
@@ -33,6 +41,7 @@ public class DockerService : IDockerService
         _logger = logger;
         _composeProject = configuration["Docker:ComposeProject"] ?? "sandbox";
         _composeNetwork = configuration["Docker:ComposeNetwork"] ?? $"{_composeProject}_default";
+        _composeFile = configuration["Docker:ComposeFile"] ?? "/workspace/docker-compose.yml";
         _k6ScriptsDir = configuration["K6:ScriptsDir"] ?? Path.Combine(AppContext.BaseDirectory, "k6-scripts");
 
         var endpoint = configuration["Docker:Endpoint"]
@@ -330,6 +339,43 @@ public class DockerService : IDockerService
         return new ResourceSample(serviceId, cpuPercent, (long)stats.MemoryStats.Usage, (long)stats.MemoryStats.Limit, DateTimeOffset.UtcNow);
     }
 
+    public IReadOnlyList<string> ListScalableServices() => ScalableServices;
+
+    public async Task<ScaleResult> ScaleAsync(string serviceId, int replicas, CancellationToken ct)
+    {
+        if (!ScalableServices.Contains(serviceId))
+        {
+            return new ScaleResult(serviceId, replicas, false, $"'{serviceId}' is not a scalable service");
+        }
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = "docker",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var arg in new[] { "compose", "-p", _composeProject, "-f", _composeFile, "up", "-d", "--scale", $"{serviceId}={replicas}", "--no-recreate", serviceId })
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        _logger.LogWarning("Scaling {ServiceId} to {Replicas} replicas", serviceId, replicas);
+
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start the docker compose process");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        var stderrTask = process.StandardError.ReadToEndAsync(ct);
+        await process.WaitForExitAsync(ct);
+        var output = await stdoutTask + await stderrTask;
+
+        if (process.ExitCode != 0)
+        {
+            _logger.LogWarning("Scaling {ServiceId} failed (exit {ExitCode}): {Output}", serviceId, process.ExitCode, output);
+        }
+
+        return new ScaleResult(serviceId, replicas, process.ExitCode == 0, output);
+    }
+
     private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, long exitCode, string rawOutput, CancellationToken ct)
     {
         try
@@ -363,7 +409,7 @@ public class DockerService : IDockerService
             _logger.LogWarning(ex, "Could not read k6 summary.json for {Scenario} - falling back to raw output only", scenario);
         }
 
-        return new TrafficReport(scenario, exitCode, 0, 0, 0, 0, 0, null, [], rawOutput);
+        return new TrafficReport(scenario, exitCode, 0, 0, 0, 0, 0, 0, 0, null, [], rawOutput);
     }
 
     private static TrafficReport ParseSummary(string json, string scenario, long exitCode, string rawOutput)
@@ -377,6 +423,12 @@ public class DockerService : IDockerService
             metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("rate", out var r) ? r.GetDouble() : 0;
         double GetValue(string metric) =>
             metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("value", out var v) ? v.GetDouble() : 0;
+        // http_req_failed is a k6 Rate metric: "passes" is the count of samples where the request
+        // was considered failed (value 1), not a count of successes - the passes/fails naming is
+        // generic to Rate metrics (also used by "checks", where 1 *does* mean success) and doesn't
+        // flip meaning per-metric, so this needs to be read deliberately rather than by the names.
+        long GetFailedCount(string metric) =>
+            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("passes", out var p) ? p.GetInt64() : 0;
 
         LatencyStats? duration = null;
         if (metrics.TryGetProperty("http_req_duration", out var d))
@@ -401,6 +453,8 @@ public class DockerService : IDockerService
             exitCode,
             GetCount("http_reqs"),
             GetRate("http_reqs"),
+            GetFailedCount("http_req_failed"),
+            GetValue("http_req_failed"),
             GetCount("iterations"),
             GetRate("iterations"),
             (int)GetValue("vus_max"),
@@ -482,6 +536,10 @@ public class DockerService : IDockerService
             return null;
         }
 
-        return new ManagedContainer(serviceId, container.ID, container.State, container.Status);
+        var containerNumber = container.Labels.TryGetValue("com.docker.compose.container-number", out var n) && int.TryParse(n, out var parsed)
+            ? parsed
+            : 1;
+
+        return new ManagedContainer(serviceId, container.ID, container.State, container.Status, containerNumber);
     }
 }

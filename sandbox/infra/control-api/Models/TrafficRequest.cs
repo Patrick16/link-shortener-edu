@@ -11,6 +11,8 @@ public record TrafficReport(
     long ExitCode,
     long HttpRequests,
     double HttpRequestRate,
+    long FailedRequests,
+    double FailedRequestRate,
     long Iterations,
     double IterationRate,
     int Vus,

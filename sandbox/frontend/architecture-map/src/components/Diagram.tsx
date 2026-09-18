@@ -10,7 +10,7 @@ import type { ManagedContainer } from '../types/controlApi'
 interface Props {
   data: ArchitectureData
   scenario: string
-  containers: Record<string, ManagedContainer>
+  containers: Record<string, ManagedContainer[]>
   trafficActive: boolean
   onSelectComponent: (componentId: string) => void
   onSelectConnection: (index: number) => void
@@ -36,7 +36,7 @@ export function Diagram({ data, scenario, containers, trafficActive, onSelectCom
     () =>
       visibleComponents.map((component) => {
         const serviceId = resolveServiceId(component, knownServiceIds)
-        const container = serviceId ? containers[serviceId] : undefined
+        const instances = serviceId ? (containers[serviceId] ?? []) : []
         return {
           id: component.id,
           type: 'service',
@@ -45,7 +45,12 @@ export function Diagram({ data, scenario, containers, trafficActive, onSelectCom
           // a reasonable perf win regardless, and edges need a node's size to compute a path.
           width: 170,
           height: 40,
-          data: { label: component.name, icon: component.icon, state: container?.state } satisfies ServiceNodeData,
+          data: {
+            label: component.name,
+            icon: component.icon,
+            state: instances[0]?.state,
+            instanceCount: instances.length,
+          } satisfies ServiceNodeData,
         }
       }),
     [visibleComponents, containers, knownServiceIds],

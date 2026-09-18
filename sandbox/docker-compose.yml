@@ -87,8 +87,8 @@ services:
     build:
       context: ..
       dockerfile: src/backend/Services/LinkApi/Dockerfile
-    ports:
-      - "8082:8080"
+    # No host port mapping - multiple replicas (docker compose up --scale link-api=N) can't all
+    # bind the same host port. nginx is the external entry point on 8082 instead (see below).
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
@@ -110,8 +110,7 @@ services:
     build:
       context: ..
       dockerfile: src/backend/Services/RedirectApi/Dockerfile
-    ports:
-      - "8083:8080"
+    # No host port mapping - see the note on link-api above; nginx exposes this on 8083 instead.
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
@@ -127,6 +126,17 @@ services:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8082:8082" # LinkApi - round-robins across however many link-api replicas exist
+      - "8083:8083" # RedirectApi - same, for redirect-api
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - link-api
+      - redirect-api
 
   shortener-service:
     build:
@@ -169,6 +179,7 @@ services:
     environment:
       Docker__Endpoint: "unix:///var/run/docker.sock"
       Docker__ComposeProject: "sandbox"
+      Docker__ComposeFile: "/workspace/docker-compose.yml"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Cors__AllowedOrigins__1: "http://localhost:5174"
     volumes:
@@ -176,6 +187,10 @@ services:
       # stop/start/restart sibling containers on request. Local-stack-only tool - never point this
       # at a shared/real host; see sandbox/docs/architecture.md for why this is safe here.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Read-only: needed so the `docker compose` CLI inside this container (see its Dockerfile)
+      # can find docker-compose.yml to run `--scale`. Compose itself does the actual work against
+      # the Docker Engine via the socket above; this mount is just so it can read its own file.
+      - ./:/workspace:ro
 
 volumes:
   postgres-data:
