@@ -160,6 +160,23 @@ services:
       aspire-dashboard:
         condition: service_started
 
+  control-api:
+    build:
+      context: ./infra/control-api
+      dockerfile: Dockerfile
+    ports:
+      - "5299:8080"
+    environment:
+      Docker__Endpoint: "unix:///var/run/docker.sock"
+      Docker__ComposeProject: "sandbox"
+      Cors__AllowedOrigins__0: "http://localhost:5173"
+      Cors__AllowedOrigins__1: "http://localhost:5174"
+    volumes:
+      # Lets this container talk to the Docker Engine managing the whole stack, so it can
+      # stop/start/restart sibling containers on request. Local-stack-only tool - never point this
+      # at a shared/real host; see sandbox/docs/architecture.md for why this is safe here.
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   postgres-data:
   redisinsight-data:
