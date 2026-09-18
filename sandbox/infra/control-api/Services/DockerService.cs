@@ -212,6 +212,32 @@ public class DockerService : IDockerService
 
         await EnsureImageAsync(K6Image, ct);
 
+        // A custom ramp profile replaces flat --vus/--duration with k6's own --stage flags (one
+        // per segment of the UI's point graph) - --vus still sets the starting VU count k6 ramps
+        // from, it just no longer sets a constant. k6's periodic "running (Ns), X/Y VUs, N
+        // complete" status line has the same shape either way (confirmed against a real run before
+        // relying on it), so K6ProgressLine/StreamLogsWithProgressAsync need no changes for this.
+        var cmd = new List<string> { "run", "--no-color", "--summary-export", "/scripts/summary.json", "--vus", request.Vus.ToString() };
+        int totalSeconds;
+        if (request.Stages is { Count: > 0 } stages)
+        {
+            foreach (var stage in stages)
+            {
+                cmd.Add("--stage");
+                cmd.Add($"{stage.DurationSeconds}s:{stage.TargetVus}");
+            }
+
+            totalSeconds = stages.Sum(s => s.DurationSeconds);
+        }
+        else
+        {
+            cmd.Add("--duration");
+            cmd.Add($"{request.DurationSeconds}s");
+            totalSeconds = request.DurationSeconds;
+        }
+
+        cmd.Add("/scripts/scenario.js");
+
         var created = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
         {
             Image = K6Image,
@@ -221,7 +247,7 @@ public class DockerService : IDockerService
             // umask). Root avoids that fight entirely; this is a throwaway, self-removing
             // container with no docker.sock access, so it's a low-risk place to do it.
             User = "0:0",
-            Cmd = ["run", "--no-color", "--summary-export", "/scripts/summary.json", "--vus", request.Vus.ToString(), "--duration", $"{request.DurationSeconds}s", "/scripts/scenario.js"],
+            Cmd = cmd,
             Labels = new Dictionary<string, string> { ["com.docker.compose.project"] = _composeProject },
             HostConfig = new HostConfig { NetworkMode = _composeNetwork },
         }, ct);
@@ -239,12 +265,12 @@ public class DockerService : IDockerService
         }
 
         _logger.LogWarning(
-            "Running k6 scenario {Scenario} ({Vus} VUs, {Duration}s) as {ContainerId}",
-            request.Scenario, request.Vus, request.DurationSeconds, created.ID);
+            "Running k6 scenario {Scenario} ({Vus} start VUs, {Duration}s{StageNote}) as {ContainerId}",
+            request.Scenario, request.Vus, totalSeconds, request.Stages is { Count: > 0 } ? $", {request.Stages.Count} stages" : "", created.ID);
 
         await _client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
 
-        var output = await StreamLogsWithProgressAsync(created.ID, request.DurationSeconds, onProgress, ct);
+        var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, onProgress, ct);
 
         var inspect = await _client.Containers.InspectContainerAsync(created.ID, ct);
         var report = await ReadSummaryAsync(created.ID, request.Scenario, inspect.State.ExitCode, output, ct);
@@ -443,8 +469,26 @@ public class DockerService : IDockerService
             _logger.LogWarning(ex, "Could not read k6 summary.json for {Scenario} - falling back to raw output only", scenario);
         }
 
-        return new TrafficReport(scenario, exitCode, 0, 0, 0, 0, 0, 0, 0, null, [], rawOutput);
+        return new TrafficReport(scenario, exitCode, 0, 0, 0, 0, 0, 0, 0, null, [], [], rawOutput);
     }
+
+    // Only status codes k6 was explicitly told to track (via a trivial always-passing threshold on
+    // "http_reqs{status:X}" - see each k6-scripts/*.js) end up as separate entries in the summary
+    // JSON at all; anything not listed here still counts toward the overall http_reqs total, it
+    // just won't be broken out by code. "0" is k6's own status for a request that got no HTTP
+    // response whatsoever (connection refused/reset, or timed out) - genuinely different from a
+    // server responding with an error code, so it gets its own human-readable label instead of "0".
+    private static readonly IReadOnlyList<(string Code, string Label)> TrackedStatusCodes =
+    [
+        ("200", "200 OK"),
+        ("302", "302 Found"),
+        ("404", "404 Not Found"),
+        ("500", "500 Internal Server Error"),
+        ("502", "502 Bad Gateway"),
+        ("503", "503 Service Unavailable"),
+        ("504", "504 Gateway Timeout"),
+        ("0", "No response (connection error / timeout)"),
+    ];
 
     private static TrafficReport ParseSummary(string json, string scenario, long exitCode, string rawOutput)
     {
@@ -482,6 +526,12 @@ public class DockerService : IDockerService
             }
         }
 
+        var statusBreakdown = TrackedStatusCodes
+            .Select(sc => new StatusCount(sc.Label, GetCount($"http_reqs{{status:{sc.Code}}}")))
+            .Where(sc => sc.Count > 0)
+            .OrderByDescending(sc => sc.Count)
+            .ToList();
+
         return new TrafficReport(
             scenario,
             exitCode,
@@ -494,6 +544,7 @@ public class DockerService : IDockerService
             (int)GetValue("vus_max"),
             duration,
             checks,
+            statusBreakdown,
             rawOutput);
     }
 

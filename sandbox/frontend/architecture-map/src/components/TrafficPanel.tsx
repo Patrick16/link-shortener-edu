@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { controlApi } from '../api/controlApi'
 import type { TrafficRunState } from '../hooks/useTrafficRun'
-import type { TrafficScenarioInfo } from '../types/controlApi'
+import type { TrafficScenarioInfo, TrafficStage } from '../types/controlApi'
 import { AxisChart } from './AxisChart'
+import { StageGraphEditor, type StagePoint } from './StageGraphEditor'
 
 const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: string }> = [
   { key: 'avg', label: 'avg' },
@@ -12,13 +13,59 @@ const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: s
   { key: 'max', label: 'max' },
 ]
 
+interface Preset {
+  totalDurationSeconds: number
+  points: StagePoint[]
+}
+
+// Starting shape for each scenario's load profile - picked to actually look like what the name
+// promises (a flat smoke check, a sharp spike, a gradual read-heavy ramp) rather than one generic
+// default, but every point stays draggable afterwards. Keyed by k6-scripts/<name>.js's own name.
+const PRESETS: Record<string, Preset> = {
+  smoke: {
+    totalDurationSeconds: 10,
+    points: [
+      { t: 0, vus: 3 },
+      { t: 10, vus: 3 },
+    ],
+  },
+  spike: {
+    totalDurationSeconds: 20,
+    points: [
+      { t: 0, vus: 0 },
+      { t: 3, vus: 50 },
+      { t: 13, vus: 50 },
+      { t: 20, vus: 0 },
+    ],
+  },
+  'read-heavy': {
+    totalDurationSeconds: 20,
+    points: [
+      { t: 0, vus: 0 },
+      { t: 5, vus: 20 },
+      { t: 20, vus: 20 },
+    ],
+  },
+}
+const DEFAULT_PRESET: Preset = { totalDurationSeconds: 10, points: [{ t: 0, vus: 3 }, { t: 10, vus: 3 }] }
+
+// Consecutive points become k6 --stage segments - k6 only needs "ramp/hold to this many VUs over
+// this many seconds", it has no notion of the graph's absolute time axis the UI edits in.
+function pointsToStages(points: StagePoint[]): TrafficStage[] {
+  const stages: TrafficStage[] = []
+  for (let i = 1; i < points.length; i++) {
+    stages.push({ durationSeconds: points[i].t - points[i - 1].t, targetVus: points[i].vus })
+  }
+  return stages
+}
+
 // Driven by a useTrafficRun() instance owned by App (not this component) - the graph needs to
 // know whether traffic is running too, to animate the edges the flow actually exercises.
 export function TrafficPanel({ running, progress, progressHistory, report, error, start }: TrafficRunState) {
   const [scenarios, setScenarios] = useState<TrafficScenarioInfo[]>([])
   const [scenario, setScenario] = useState('')
-  const [vus, setVus] = useState(3)
-  const [duration, setDuration] = useState(10)
+  const [totalDuration, setTotalDuration] = useState(DEFAULT_PRESET.totalDurationSeconds)
+  const [points, setPoints] = useState<StagePoint[]>(DEFAULT_PRESET.points)
 
   useEffect(() => {
     controlApi
@@ -30,9 +77,18 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
       .catch(() => {})
   }, [])
 
+  // Loads that scenario's own starting profile whenever the picker changes - including the very
+  // first time it's set from the scenario list above.
+  useEffect(() => {
+    if (!scenario) return
+    const preset = PRESETS[scenario] ?? DEFAULT_PRESET
+    setTotalDuration(preset.totalDurationSeconds)
+    setPoints(preset.points)
+  }, [scenario])
+
   const maxLatency = report?.httpReqDuration ? Math.max(...LATENCY_ROWS.map((r) => report.httpReqDuration![r.key])) : 0
   const selectedDescription = scenarios.find((s) => s.name === scenario)?.description
-  const totalSeconds = progress?.totalSeconds ?? duration
+  const totalSeconds = progress?.totalSeconds ?? totalDuration
   const vusPoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.activeVus }))
   const ratePoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.iterationsPerSecond }))
 
@@ -47,20 +103,24 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
             </option>
           ))}
         </select>
-        <label>
-          VUs
-          <input type="number" value={vus} onChange={(e) => setVus(Number(e.target.value))} min={1} disabled={running} />
-        </label>
-        <label>
-          Duration (s)
-          <input type="number" value={duration} onChange={(e) => setDuration(Number(e.target.value))} min={1} max={120} disabled={running} />
-        </label>
-        <button onClick={() => start({ scenario, vus, durationSeconds: duration })} disabled={running || !scenario}>
+        <button
+          onClick={() =>
+            start({
+              scenario,
+              vus: points[0]?.vus ?? 0,
+              durationSeconds: totalDuration,
+              stages: pointsToStages(points),
+            })
+          }
+          disabled={running || !scenario || points.length < 2}
+        >
           {running ? `Running ${scenario}...` : 'Run traffic'}
         </button>
       </div>
 
       {selectedDescription && <p className="scenario-description-text">{selectedDescription}</p>}
+
+      <StageGraphEditor points={points} onChange={setPoints} totalDurationSeconds={totalDuration} onTotalDurationChange={setTotalDuration} disabled={running} />
 
       {error && <p className="service-card-error">{error}</p>}
 
@@ -145,6 +205,25 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
                     <span className="check-row-value">
                       {check.passes}/{total}
                     </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {report.statusBreakdown.length > 0 && (
+            <div className="status-list">
+              <h3>Status codes</h3>
+              {report.statusBreakdown.map((status) => {
+                const widthPct = report.httpRequests > 0 ? (status.count / report.httpRequests) * 100 : 0
+                const isSuccess = status.label.startsWith('2') || status.label.startsWith('3')
+                return (
+                  <div className="status-row" key={status.label}>
+                    <span className="status-row-label">{status.label}</span>
+                    <div className="status-bar-track">
+                      <div className={isSuccess ? 'status-bar-fill' : 'status-bar-fill status-bar-fill-critical'} style={{ width: `${widthPct}%` }} />
+                    </div>
+                    <span className="status-row-value">{status.count}</span>
                   </div>
                 )
               })}

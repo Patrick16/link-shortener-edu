@@ -98,12 +98,34 @@ app.MapGet("/api/traffic/scenarios", (IDockerService docker) => Results.Ok(docke
 
 app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
 {
-    if (request.Vus < 1)
+    // With a custom ramp, Vus is just the starting point k6 ramps from - 0 is exactly what a spike
+    // profile (or any "ramp up from idle") wants there. Only the flat constant-VUs run needs it to
+    // be at least 1, since there it's the VU count for the entire run.
+    if (request.Vus < 0 || (request.Stages is not { Count: > 0 } && request.Vus < 1))
     {
-        return Results.BadRequest(new { error = "vus must be at least 1" });
+        return Results.BadRequest(new { error = "vus must be at least 1 (or at least 0 as a ramp's starting point)" });
     }
 
-    if (request.DurationSeconds is < 1 or > 120)
+    if (request.Stages is { Count: > 0 } stages)
+    {
+        if (stages.Any(s => s.DurationSeconds < 1))
+        {
+            return Results.BadRequest(new { error = "each stage's durationSeconds must be at least 1" });
+        }
+
+        if (stages.Any(s => s.TargetVus < 0))
+        {
+            return Results.BadRequest(new { error = "a stage's targetVus can't be negative" });
+        }
+
+        // A custom ramp is user-drawn, so it isn't bound by the flat run's 120s cap - just a
+        // generous ceiling so a slipped point on the graph can't lock up a k6 container forever.
+        if (stages.Sum(s => s.DurationSeconds) > 600)
+        {
+            return Results.BadRequest(new { error = "total stage duration can't exceed 600 seconds" });
+        }
+    }
+    else if (request.DurationSeconds is < 1 or > 120)
     {
         return Results.BadRequest(new { error = "durationSeconds must be between 1 and 120" });
     }

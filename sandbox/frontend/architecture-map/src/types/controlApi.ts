@@ -35,10 +35,16 @@ export interface ChaosAction {
   startedAt: string
 }
 
+export interface TrafficStage {
+  durationSeconds: number
+  targetVus: number
+}
+
 export interface TrafficRequest {
   scenario: string
   vus: number
   durationSeconds: number
+  stages?: TrafficStage[]
 }
 
 export interface TrafficScenarioInfo {
@@ -61,6 +67,11 @@ export interface CheckResult {
   fails: number
 }
 
+export interface StatusCount {
+  label: string
+  count: number
+}
+
 export interface TrafficReport {
   scenario: string
   exitCode: number
@@ -73,6 +84,7 @@ export interface TrafficReport {
   vus: number
   httpReqDuration: LatencyStats | null
   checks: CheckResult[]
+  statusBreakdown: StatusCount[]
   rawOutput: string
 }
 

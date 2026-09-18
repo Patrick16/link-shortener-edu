@@ -10,6 +10,20 @@ import { check } from 'k6';
 const LINK_API = __ENV.LINK_API_URL || 'http://nginx:8082';
 const REDIRECT_API = __ENV.REDIRECT_API_URL || 'http://nginx:8083';
 
+// See smoke.js for why these exist - must match DockerService.TrackedStatusCodes.
+export const options = {
+  thresholds: {
+    'http_reqs{status:200}': ['count>=0'],
+    'http_reqs{status:302}': ['count>=0'],
+    'http_reqs{status:404}': ['count>=0'],
+    'http_reqs{status:500}': ['count>=0'],
+    'http_reqs{status:502}': ['count>=0'],
+    'http_reqs{status:503}': ['count>=0'],
+    'http_reqs{status:504}': ['count>=0'],
+    'http_reqs{status:0}': ['count>=0'],
+  },
+};
+
 export default function () {
   const originalLink = `https://example.com/${Math.random().toString(36).slice(2)}`;
 

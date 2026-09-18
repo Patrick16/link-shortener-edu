@@ -394,6 +394,67 @@ button:disabled {
   stroke-width: 1;
 }
 
+/* Stage graph (load profile editor) */
+
+.stage-graph {
+  margin-top: 12px;
+}
+
+.stage-graph-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.stage-graph-duration {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.stage-graph-duration input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 2px 6px;
+  width: 60px;
+}
+
+.stage-graph-svg {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: copy;
+  touch-action: none;
+}
+
+.stage-graph-svg-disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.stage-graph-point {
+  fill: var(--accent);
+  stroke: var(--code-bg);
+  stroke-width: 2;
+  cursor: grab;
+}
+
+.stage-graph-point:hover {
+  fill: var(--text-h);
+}
+
+.stage-graph-hint {
+  font-size: 11px;
+  color: var(--text);
+  margin: 4px 0 0;
+}
+
 .flush-cache-control {
   display: flex;
   align-items: center;
@@ -575,6 +636,53 @@ button:disabled {
 
 .checks-list {
   margin-top: 16px;
+}
+
+.status-list {
+  margin-top: 16px;
+}
+
+.status-list h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+  color: var(--text-h);
+}
+
+.status-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) 1fr 60px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.status-row-label {
+  color: var(--text-h);
+  font-weight: 500;
+}
+
+.status-bar-track {
+  height: 10px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.status-bar-fill {
+  height: 100%;
+  background: #22c55e;
+  border-radius: 4px;
+}
+
+.status-bar-fill-critical {
+  background: #ef4444;
+}
+
+.status-row-value {
+  text-align: right;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
 }
 
 .traffic-raw {
