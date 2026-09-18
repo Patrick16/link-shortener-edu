@@ -15,4 +15,5 @@ RUN dotnet publish "ControlApi.csproj" -c Release -o /app/publish /p:UseAppHost=
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
+COPY k6-scripts ./k6-scripts
 ENTRYPOINT ["dotnet", "ControlApi.dll"]

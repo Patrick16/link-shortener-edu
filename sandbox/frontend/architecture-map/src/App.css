@@ -1,1 +1,169 @@
-/* TODO: diagram, card, and scenario-switcher styles */
+main {
+  padding: 0 24px 48px;
+  text-align: left;
+}
+
+.connection-status {
+  text-align: center;
+  color: var(--text);
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+
+.service-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.service-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: left;
+  background: var(--code-bg);
+}
+
+.service-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.service-card-icon {
+  font-size: 28px;
+}
+
+.service-card-name {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.service-card-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.service-card-description {
+  font-size: 13px;
+  margin: 10px 0;
+}
+
+.service-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.service-card-actions button,
+.traffic-panel-controls button,
+.service-card-chaos button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.service-card-actions button:hover:not(:disabled),
+.traffic-panel-controls button:hover:not(:disabled),
+.service-card-chaos button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.service-card-chaos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.service-card-chaos select,
+.service-card-chaos input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 13px;
+  width: 90px;
+}
+
+.service-card-error {
+  color: #ef4444;
+  font-size: 13px;
+  margin-top: 8px;
+}
+
+.traffic-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+
+.traffic-panel-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.traffic-panel-controls select {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+.traffic-panel-controls label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+}
+
+.traffic-panel-controls input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 6px;
+  width: 70px;
+}
+
+.traffic-result {
+  margin-top: 12px;
+}
+
+.traffic-result pre {
+  max-height: 320px;
+  overflow: auto;
+  background: var(--code-bg);
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: pre-wrap;
+}

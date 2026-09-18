@@ -10,4 +10,8 @@
     <PackageReference Include="Docker.DotNet" Version="3.125.15" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="k6-scripts\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
