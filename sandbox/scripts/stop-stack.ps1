@@ -18,9 +18,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot
+$sandboxRoot = Split-Path -Parent $PSScriptRoot
 
-Push-Location $repoRoot
+Push-Location $sandboxRoot
 try {
     if ($Wipe) {
         Write-Host "==> Stopping backend and removing volumes (Postgres data will be wiped)" -ForegroundColor Yellow

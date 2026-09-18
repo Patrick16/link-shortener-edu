@@ -29,8 +29,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$frontendDir = Join-Path $repoRoot 'frontend\app'
+$sandboxRoot = Split-Path -Parent $PSScriptRoot
+$repoRoot = Split-Path -Parent $sandboxRoot
+$frontendDir = Join-Path $repoRoot 'src\frontend\app'
 
 function Write-Step {
     param([string]$Message)
@@ -81,7 +82,7 @@ if (-not $SkipFrontend -and -not (Test-CommandExists 'npm')) {
 
 # --- Backend: docker compose ----------------------------------------------------------
 
-Push-Location $repoRoot
+Push-Location $sandboxRoot
 try {
     if ($Build) {
         Write-Step 'Building backend images (docker compose build)'
@@ -115,7 +116,7 @@ try {
 }
 
 if ($SkipFrontend) {
-    Write-Host "`nBackend is up. Stop it later with: docker compose down" -ForegroundColor Cyan
+    Write-Host "`nBackend is up. Stop it later with: .\stop-stack.ps1" -ForegroundColor Cyan
     exit 0
 }
 
@@ -127,7 +128,7 @@ $envLocal = Join-Path $frontendDir '.env.local'
 $envExample = Join-Path $frontendDir '.env.example'
 if (-not (Test-Path $envLocal)) {
     Copy-Item $envExample $envLocal
-    Write-Host "  Created frontend\app\.env.local from .env.example"
+    Write-Host "  Created src\frontend\app\.env.local from .env.example"
 }
 
 if (-not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
@@ -163,5 +164,5 @@ Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'
 Write-Host '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
 Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis", port 6379)'
 Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
-Write-Host "`nStop the backend with: docker compose down"
+Write-Host "`nStop the backend with: .\stop-stack.ps1"
 Write-Host "Stop the frontend by closing its window (or Ctrl+C in it)."

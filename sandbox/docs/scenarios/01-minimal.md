@@ -20,13 +20,14 @@ tracking — scenario 2 — is also live; see [`docs/scenarios/02-async.md`](02-
 | `traffic-service`    | worker  | —     | consumes `ClickTrackedEvent`, persists the click to Postgres  |
 | `redisinsight`       | infra   | 5540  | Redis GUI — browse keys/TTLs, run commands (add a DB manually: host `redis`, port 6379) |
 | `aspire-dashboard`   | infra   | 18888 / 18889 (OTLP) | logs, metrics, and traces from every .NET service |
-| `frontend/app`       | Vite dev server | 5173 | the demo UI (create a link, log in)                     |
+| `src/frontend/app`   | Vite dev server | 5173 | the demo UI (create a link, log in)                     |
 
 Each of `auth-api`/`shortener-service`/`traffic-service` **owns** one physical database — a
 deliberate choice over schemas-in-one-database, closer to real microservice isolation and matching
 how `pgcat` pools get configured later (scenario 4: one pool per database, not per schema). Each
 owner is the only service that runs `Database.MigrateAsync()` for its database, applied
-automatically on startup (see `infra/postgres/init-databases.sql` for how the three databases get
+automatically on startup (see `infra/postgres/init-databases.sql`, relative to `sandbox/`, for how
+the three databases get
 created in the first place):
 
 - `users_db` — owned by AuthApi
@@ -137,26 +138,27 @@ create/visit links, with their TTL counting down.
 - **Single Postgres instance, no replicas, no sharding.** That's scenarios 3 and 4.
 - **Click *metadata* doesn't exist yet.** The `Clicks` row itself (hash, in/outbound link, timestamp)
   is real — but user-agent/referrer/headers → Mongo `ClicksMeta` isn't built (Mongo isn't in the
-  stack). See `docs/architecture.md`.
+  stack). See `../architecture.md`.
 - **No dead-letter queue.** Both consumers (`ShortenerService`, `TrafficService`) nack-and-requeue
   forever on a persistent processing failure — a poison message would loop indefinitely rather than
   landing somewhere for inspection.
-- **`infra/rabbitmq/definitions.json` is not used.** The exchange/queue/binding topology is declared
-  by the application itself (see `Shared/Infrastructure/RabbitMqPublisher.cs` and `RabbitMqConsumer.cs`),
-  not loaded from a static file.
+- **`infra/rabbitmq/definitions.json` (relative to `sandbox/`) is not used.** The exchange/queue/
+  binding topology is declared by the application itself (see
+  `src/backend/Shared/Infrastructure/RabbitMqPublisher.cs` and `RabbitMqConsumer.cs`), not loaded
+  from a static file.
 
 ## Where the code lives
 
 | What | Path |
 |---|---|
-| AuthApi | `src/Services/AuthApi/` |
-| LinkApi (incl. JWT validation) | `src/Services/LinkApi/` |
-| RedirectApi | `src/Services/RedirectApi/` |
-| ShortenerService | `src/Services/ShortenerService/` |
-| TrafficService | `src/Services/TrafficService/` |
-| Shared event contracts | `src/Shared/Contracts/Events/` |
-| RabbitMQ client/publisher/consumer | `src/Shared/Infrastructure/` |
-| OpenTelemetry wiring (shared) | `src/Shared/ServiceDefaults/` |
-| Frontend | `frontend/app/` |
-| docker-compose | `docker-compose.yml` |
-| Start/stop scripts | `scripts/start-stack.ps1`, `scripts/stop-stack.ps1` |
+| AuthApi | `src/backend/Services/AuthApi/` |
+| LinkApi (incl. JWT validation) | `src/backend/Services/LinkApi/` |
+| RedirectApi | `src/backend/Services/RedirectApi/` |
+| ShortenerService | `src/backend/Services/ShortenerService/` |
+| TrafficService | `src/backend/Services/TrafficService/` |
+| Shared event contracts | `src/backend/Shared/Contracts/Events/` |
+| RabbitMQ client/publisher/consumer | `src/backend/Shared/Infrastructure/` |
+| OpenTelemetry wiring (shared) | `src/backend/Shared/ServiceDefaults/` |
+| Frontend | `src/frontend/app/` |
+| docker-compose | `sandbox/docker-compose.yml` |
+| Start/stop scripts | `sandbox/scripts/start-stack.ps1`, `sandbox/scripts/stop-stack.ps1` |

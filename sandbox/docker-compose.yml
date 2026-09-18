@@ -68,8 +68,8 @@ services:
 
   auth-api:
     build:
-      context: .
-      dockerfile: src/Services/AuthApi/Dockerfile
+      context: ..
+      dockerfile: src/backend/Services/AuthApi/Dockerfile
     ports:
       - "8081:8080"
     environment:
@@ -85,8 +85,8 @@ services:
 
   link-api:
     build:
-      context: .
-      dockerfile: src/Services/LinkApi/Dockerfile
+      context: ..
+      dockerfile: src/backend/Services/LinkApi/Dockerfile
     ports:
       - "8082:8080"
     environment:
@@ -108,8 +108,8 @@ services:
 
   redirect-api:
     build:
-      context: .
-      dockerfile: src/Services/RedirectApi/Dockerfile
+      context: ..
+      dockerfile: src/backend/Services/RedirectApi/Dockerfile
     ports:
       - "8083:8080"
     environment:
@@ -130,8 +130,8 @@ services:
 
   shortener-service:
     build:
-      context: .
-      dockerfile: src/Services/ShortenerService/Dockerfile
+      context: ..
+      dockerfile: src/backend/Services/ShortenerService/Dockerfile
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
@@ -146,8 +146,8 @@ services:
 
   traffic-service:
     build:
-      context: .
-      dockerfile: src/Services/TrafficService/Dockerfile
+      context: ..
+      dockerfile: src/backend/Services/TrafficService/Dockerfile
     environment:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=clicks_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"

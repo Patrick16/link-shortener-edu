@@ -4,5 +4,7 @@
 .git/
 .notes/
 .claude/
-frontend/**/node_modules/
-frontend/**/dist/
+docs/
+sandbox/
+src/frontend/**/node_modules/
+src/frontend/**/dist/

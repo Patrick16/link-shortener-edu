@@ -49,7 +49,7 @@ schemas) — closer to real microservice isolation, and it's the model `pgcat` p
 ## Current Status
 
 **Scenario 1 is fully implemented and verified end-to-end** (backend, infra, frontend). Detailed
-walkthrough, request flow, and things to try by hand: **[`docs/scenarios/01-minimal.md`](scenarios/01-minimal.md)**.
+walkthrough, request flow, and things to try by hand: **[`scenarios/01-minimal.md`](scenarios/01-minimal.md)**.
 
 **Scenario 2's backend and infra are also done** — click tracking works end to end (`RedirectApi` →
 RabbitMQ → `TrafficService` → Postgres Clicks), verified live including the linked trace in the
@@ -71,14 +71,14 @@ Short version of what's real today:
 - RabbitMQ's exchange/queue/binding topology is declared by the application itself at connection
   time (`RabbitMqPublisher`/`RabbitMqConsumer`), not loaded from `infra/rabbitmq/definitions.json` —
   that file is a placeholder for a possible future static-provisioning approach, unused right now
-- Whole stack: `docker compose up -d` (backend) + `frontend/app` dev server — see
-  `scripts/start-stack.ps1` for a one-command version of both
+- Whole stack: `docker compose up -d` (backend, run from `sandbox/`) + `src/frontend/app` dev
+  server — see `sandbox/scripts/start-stack.ps1` for a one-command version of both
 - **Observability:** every .NET service ships logs/metrics/traces (OpenTelemetry SDK, OTLP) to a
   standalone `aspire-dashboard` container — the dashboard half of .NET Aspire, not the full AppHost
   orchestrator (docker-compose still orchestrates everything). RabbitMQ publish/consume spans are
   manually instrumented so a trace shows the full path across the async boundary for both
   `LinkApi` → `ShortenerService` and `RedirectApi` → `TrafficService`. `redisinsight` gives a GUI
-  over the Redis cache. See `docs/scenarios/01-minimal.md#observability`.
+  over the Redis cache. See `scenarios/01-minimal.md#observability`.
 
 ## TODO
 

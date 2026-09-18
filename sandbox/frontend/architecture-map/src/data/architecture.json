@@ -14,8 +14,8 @@
         "technologies": ["React 19", "TypeScript", "Vite", "react-router-dom"],
         "port": 5173,
         "links": {
-          "code": "frontend/app/",
-          "dockerfile": "frontend/app/Dockerfile"
+          "code": "src/frontend/app/",
+          "dockerfile": "src/frontend/app/Dockerfile"
         }
       }
     },
@@ -32,9 +32,9 @@
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "PasswordHasher<T>", "System.IdentityModel.Tokens.Jwt"],
         "port": 8081,
         "links": {
-          "code": "src/Services/AuthApi/",
-          "dockerfile": "src/Services/AuthApi/Dockerfile",
-          "migrations": "src/Services/AuthApi/Migrations/"
+          "code": "src/backend/Services/AuthApi/",
+          "dockerfile": "src/backend/Services/AuthApi/Dockerfile",
+          "migrations": "src/backend/Services/AuthApi/Migrations/"
         }
       }
     },
@@ -51,8 +51,8 @@
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis", "Microsoft.AspNetCore.Authentication.JwtBearer"],
         "port": 8082,
         "links": {
-          "code": "src/Services/LinkApi/",
-          "dockerfile": "src/Services/LinkApi/Dockerfile"
+          "code": "src/backend/Services/LinkApi/",
+          "dockerfile": "src/backend/Services/LinkApi/Dockerfile"
         }
       }
     },
@@ -69,8 +69,8 @@
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis"],
         "port": 8083,
         "links": {
-          "code": "src/Services/RedirectApi/",
-          "dockerfile": "src/Services/RedirectApi/Dockerfile"
+          "code": "src/backend/Services/RedirectApi/",
+          "dockerfile": "src/backend/Services/RedirectApi/Dockerfile"
         }
       }
     },
@@ -89,9 +89,9 @@
         "managementPort": 15672,
         "topology": "topic exchange \"events\"; queue \"shortener-service.link-created\" bound to routing key \"link.created\", queue \"traffic-service.click-tracked\" bound to \"click.tracked\" — both declared by the app itself, not a static definitions.json",
         "links": {
-          "config": "infra/rabbitmq/definitions.json (unused placeholder, see its own comment)",
-          "publisher": "src/Shared/Infrastructure/RabbitMqPublisher.cs",
-          "consumer": "src/Shared/Infrastructure/RabbitMqConsumer.cs"
+          "config": "sandbox/infra/rabbitmq/definitions.json (unused placeholder, see its own comment)",
+          "publisher": "src/backend/Shared/Infrastructure/RabbitMqPublisher.cs",
+          "consumer": "src/backend/Shared/Infrastructure/RabbitMqConsumer.cs"
         }
       }
     },
@@ -107,9 +107,9 @@
         "purpose": "Owns links_db (the only writer, and the only one that migrates it); redelivery-safe (skips if the hash is already stored)",
         "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client"],
         "links": {
-          "code": "src/Services/ShortenerService/",
-          "dockerfile": "src/Services/ShortenerService/Dockerfile",
-          "migrations": "src/Services/ShortenerService/Migrations/"
+          "code": "src/backend/Services/ShortenerService/",
+          "dockerfile": "src/backend/Services/ShortenerService/Dockerfile",
+          "migrations": "src/backend/Services/ShortenerService/Migrations/"
         }
       }
     },
@@ -125,9 +125,9 @@
         "purpose": "Owns clicks_db (the only writer, and the only one that migrates it); redelivery-safe (skips if the event's Id is already stored)",
         "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client"],
         "links": {
-          "code": "src/Services/TrafficService/",
-          "dockerfile": "src/Services/TrafficService/Dockerfile",
-          "migrations": "src/Services/TrafficService/Migrations/"
+          "code": "src/backend/Services/TrafficService/",
+          "dockerfile": "src/backend/Services/TrafficService/Dockerfile",
+          "migrations": "src/backend/Services/TrafficService/Migrations/"
         }
       }
     },
@@ -145,7 +145,7 @@
         "port": 6379,
         "keyFormat": "link:{hash}",
         "links": {
-          "code": "src/Shared/Common/LinkCacheService.cs"
+          "code": "src/backend/Shared/Common/LinkCacheService.cs"
         }
       }
     },
@@ -162,8 +162,8 @@
         "technologies": ["PostgreSQL 16"],
         "port": 5432,
         "links": {
-          "compose": "docker-compose.yml#postgres",
-          "init": "infra/postgres/init-databases.sql"
+          "compose": "sandbox/docker-compose.yml#postgres",
+          "init": "sandbox/infra/postgres/init-databases.sql"
         }
       }
     },
@@ -180,8 +180,8 @@
         "technologies": ["PostgreSQL 16"],
         "port": 5432,
         "links": {
-          "compose": "docker-compose.yml#postgres",
-          "init": "infra/postgres/init-databases.sql"
+          "compose": "sandbox/docker-compose.yml#postgres",
+          "init": "sandbox/infra/postgres/init-databases.sql"
         }
       }
     },
@@ -198,8 +198,8 @@
         "technologies": ["PostgreSQL 16"],
         "port": 5432,
         "links": {
-          "compose": "docker-compose.yml#postgres",
-          "init": "infra/postgres/init-databases.sql"
+          "compose": "sandbox/docker-compose.yml#postgres",
+          "init": "sandbox/infra/postgres/init-databases.sql"
         }
       }
     }

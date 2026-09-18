@@ -1,29 +1,27 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.10.12201.205
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Services", "Services", "{984BB9B3-3FA3-BE33-9484-CAC21695A33C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AuthApi", "src\Services\AuthApi\AuthApi.csproj", "{1EAFD1AF-2773-4AE1-9B80-F4CD16834500}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AuthApi", "Services\AuthApi\AuthApi.csproj", "{1EAFD1AF-2773-4AE1-9B80-F4CD16834500}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Shared", "Shared", "{C8E42992-5E42-0C2B-DBFE-AA848D06431C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Contracts", "src\Shared\Contracts\Contracts.csproj", "{7004B642-990A-4F01-A566-C8F39C3713CA}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Contracts", "Shared\Contracts\Contracts.csproj", "{7004B642-990A-4F01-A566-C8F39C3713CA}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Infrastructure", "src\Shared\Infrastructure\Infrastructure.csproj", "{F96B8995-C227-4897-B75E-B5E098F00AF6}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Infrastructure", "Shared\Infrastructure\Infrastructure.csproj", "{F96B8995-C227-4897-B75E-B5E098F00AF6}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Common", "src\Shared\Common\Common.csproj", "{127DF57C-65F1-4B21-87E1-32690BE47450}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Common", "Shared\Common\Common.csproj", "{127DF57C-65F1-4B21-87E1-32690BE47450}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LinkApi", "src\Services\LinkApi\LinkApi.csproj", "{97ACAC88-3EC2-4DC1-9042-D902E8B3631A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LinkApi", "Services\LinkApi\LinkApi.csproj", "{97ACAC88-3EC2-4DC1-9042-D902E8B3631A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedirectApi", "src\Services\RedirectApi\RedirectApi.csproj", "{D1312114-3FD8-49D3-B384-32ADE264FD4C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedirectApi", "Services\RedirectApi\RedirectApi.csproj", "{D1312114-3FD8-49D3-B384-32ADE264FD4C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShortenerService", "src\Services\ShortenerService\ShortenerService.csproj", "{EF629310-8861-4BF6-954A-33174B77C3AC}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ShortenerService", "Services\ShortenerService\ShortenerService.csproj", "{EF629310-8861-4BF6-954A-33174B77C3AC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TrafficService", "src\Services\TrafficService\TrafficService.csproj", "{0C4461BF-C2FA-42EC-9583-F7E4FA438779}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TrafficService", "Services\TrafficService\TrafficService.csproj", "{0C4461BF-C2FA-42EC-9583-F7E4FA438779}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
 EndProject
@@ -33,14 +31,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RedirectApi.Tests", "tests\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Integration.Tests", "tests\Integration.Tests\Integration.Tests.csproj", "{DE1FF8F3-873F-41D9-891C-0A9D2C121BEF}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "infra", "infra", "{F2FEB02B-596D-4754-8C5A-BC2FA0FA9A14}"
-	ProjectSection(SolutionItems) = preProject
-		docker-compose.shard1.yml = docker-compose.shard1.yml
-		docker-compose.shard2.yml = docker-compose.shard2.yml
-		docker-compose.yml = docker-compose.yml
-	EndProjectSection
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ServiceDefaults", "src\Shared\ServiceDefaults\ServiceDefaults.csproj", "{EB0C0C13-9CB8-40FB-9761-55A97D04E372}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ServiceDefaults", "Shared\ServiceDefaults\ServiceDefaults.csproj", "{EB0C0C13-9CB8-40FB-9761-55A97D04E372}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -201,9 +192,7 @@ Global
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
-		{984BB9B3-3FA3-BE33-9484-CAC21695A33C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{1EAFD1AF-2773-4AE1-9B80-F4CD16834500} = {984BB9B3-3FA3-BE33-9484-CAC21695A33C}
-		{C8E42992-5E42-0C2B-DBFE-AA848D06431C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{7004B642-990A-4F01-A566-C8F39C3713CA} = {C8E42992-5E42-0C2B-DBFE-AA848D06431C}
 		{F96B8995-C227-4897-B75E-B5E098F00AF6} = {C8E42992-5E42-0C2B-DBFE-AA848D06431C}
 		{127DF57C-65F1-4B21-87E1-32690BE47450} = {C8E42992-5E42-0C2B-DBFE-AA848D06431C}

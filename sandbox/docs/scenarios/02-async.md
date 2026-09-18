@@ -33,7 +33,7 @@ the redirect itself.
 
 A `404` (unknown hash) never publishes anything — there's no click to record.
 
-`TrafficService`'s `ClickTrackedConsumer` (`src/Services/TrafficService/ClickTrackedConsumer.cs`):
+`TrafficService`'s `ClickTrackedConsumer` (`src/backend/Services/TrafficService/ClickTrackedConsumer.cs`):
 
 1. Consumes from queue `traffic-service.click-tracked`
 2. Checks whether a `Click` with the event's `Id` already exists — if so, this is a redelivery
@@ -73,8 +73,8 @@ spans into `ShortenerService` (see `docs/scenarios/01-minimal.md#observability`)
 
 | What | Path |
 |---|---|
-| `ClickTrackedEvent` | `src/Shared/Contracts/Events/ClickTrackedEvent.cs` |
-| `Topics.ClickTracked` | `src/Shared/Contracts/Events/Topics.cs` |
-| RedirectApi publish | `src/Services/RedirectApi/Controllers/RedirectController.cs` |
-| TrafficService consumer | `src/Services/TrafficService/ClickTrackedConsumer.cs` |
-| Shared retry worker | `src/Shared/Infrastructure/RabbitMqRetryWorker.cs` |
+| `ClickTrackedEvent` | `src/backend/Shared/Contracts/Events/ClickTrackedEvent.cs` |
+| `Topics.ClickTracked` | `src/backend/Shared/Contracts/Events/Topics.cs` |
+| RedirectApi publish | `src/backend/Services/RedirectApi/Controllers/RedirectController.cs` |
+| TrafficService consumer | `src/backend/Services/TrafficService/ClickTrackedConsumer.cs` |
+| Shared retry worker | `src/backend/Shared/Infrastructure/RabbitMqRetryWorker.cs` |
