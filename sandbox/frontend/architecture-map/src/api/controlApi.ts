@@ -5,7 +5,11 @@ import type {
   EndpointDefinition,
   InfraStatus,
   ManagedContainer,
+  PgcatConnectionStats,
+  PostgresConnectionStats,
   ResourceSample,
+  RunSnapshot,
+  RunSummary,
   ScaleResult,
   TrafficRequest,
 } from '../types/controlApi'
@@ -80,4 +84,10 @@ export const controlApi = {
   listScenarios: () => request<CustomScenario[]>('/api/scenarios'),
   saveScenario: (scenario: CustomScenario) => request<CustomScenario>('/api/scenarios', 'POST', scenario),
   deleteScenario: (name: string) => send(`/api/scenarios/${encodeURIComponent(name)}`, 'DELETE'),
+
+  getPgcatConnections: () => request<PgcatConnectionStats>('/api/containers/pgcat/connections'),
+  getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
+
+  listRuns: () => request<RunSummary[]>('/api/runs'),
+  getRun: (id: string) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}`),
 }

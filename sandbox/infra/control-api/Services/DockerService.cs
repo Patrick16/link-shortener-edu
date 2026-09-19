@@ -235,7 +235,7 @@ public class DockerService : IDockerService
     private static readonly JsonSerializerOptions StepJsonOptions = new(JsonSerializerDefaults.Web);
 
     private sealed record ResolvedStep(
-        string ServiceId, string Method, string PathTemplate, string? BodyTemplate,
+        string Id, string ServiceId, string Method, string PathTemplate, string? BodyTemplate,
         IReadOnlyDictionary<string, string> Produces, double PauseAfterSeconds);
 
     public async Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
@@ -253,7 +253,7 @@ public class DockerService : IDockerService
                 return null;
             }
 
-            resolvedSteps.Add(new ResolvedStep(definition.ServiceId, definition.Method, definition.PathTemplate, definition.BodyTemplate, definition.Produces, step.PauseAfterSeconds));
+            resolvedSteps.Add(new ResolvedStep(definition.Id, definition.ServiceId, definition.Method, definition.PathTemplate, definition.BodyTemplate, definition.Produces, step.PauseAfterSeconds));
         }
 
         if (resolvedSteps.Count == 0)
@@ -358,7 +358,8 @@ public class DockerService : IDockerService
         var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, targetIterations, onProgress, ct);
 
         var inspect = await _client.Containers.InspectContainerAsync(created.ID, ct);
-        var report = await ReadSummaryAsync(created.ID, request.Scenario, inspect.State.ExitCode, output, ct);
+        var stepIds = resolvedSteps.Select(s => s.Id).Distinct().ToList();
+        var report = await ReadSummaryAsync(created.ID, request.Scenario, stepIds, inspect.State.ExitCode, output, ct);
         await _client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
 
         return report;
@@ -533,19 +534,87 @@ public class DockerService : IDockerService
             return null;
         }
 
-        var exec = await _client.Exec.ExecCreateContainerAsync(container.ID, new ContainerExecCreateParameters
+        var output = await ExecAsync(container.ID, ["redis-cli", "FLUSHALL"], ct);
+        _logger.LogWarning("Flushed Redis cache: {Output}", output.Trim());
+        return output.Trim();
+    }
+
+    // Runs a command inside a container via Docker's exec API and returns whichever of
+    // stdout/stderr actually has content - shared by FlushRedisAsync and the connection-stats
+    // queries below, all of which are "shell out to a CLI already inside the target container"
+    // rather than adding a new client library dependency (Npgsql, StackExchange.Redis) to
+    // control-api just to run one read-only command.
+    private async Task<string> ExecAsync(string containerId, IList<string> cmd, CancellationToken ct)
+    {
+        var exec = await _client.Exec.ExecCreateContainerAsync(containerId, new ContainerExecCreateParameters
         {
-            Cmd = ["redis-cli", "FLUSHALL"],
+            Cmd = cmd,
             AttachStdout = true,
             AttachStderr = true,
         }, ct);
 
         using var stream = await _client.Exec.StartAndAttachContainerExecAsync(exec.ID, false, ct);
         var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
+        return string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
+    }
 
-        _logger.LogWarning("Flushed Redis cache: {Output}", stdout.Trim());
+    // `SHOW POOLS` columns (unaligned, pipe-separated): database|user|pool_mode|cl_idle|cl_active|
+    // cl_waiting|cl_cancel_req|sv_active|sv_idle|sv_used|sv_tested|sv_login|maxwait|maxwait_us -
+    // confirmed against a real pgcat before parsing anything, same discipline as everywhere else
+    // this session dealt with an external tool's text output.
+    public async Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(CancellationToken ct)
+    {
+        var container = await FindAsync("pgcat", ct);
+        if (container is null)
+        {
+            return null;
+        }
 
-        return string.IsNullOrWhiteSpace(stdout) ? stderr.Trim() : stdout.Trim();
+        var output = await ExecAsync(container.ID, ["sh", "-c", "PGPASSWORD=admin_pass psql -h 127.0.0.1 -p 6432 -U admin_user pgcat -tAc \"SHOW POOLS\""], ct);
+        var pools = new List<PoolConnectionStats>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var f = line.Split('|');
+            if (f.Length < 10)
+            {
+                continue;
+            }
+
+            pools.Add(new PoolConnectionStats(
+                f[0],
+                int.Parse(f[3], CultureInfo.InvariantCulture),
+                int.Parse(f[4], CultureInfo.InvariantCulture),
+                int.Parse(f[5], CultureInfo.InvariantCulture),
+                int.Parse(f[7], CultureInfo.InvariantCulture),
+                int.Parse(f[8], CultureInfo.InvariantCulture),
+                int.Parse(f[9], CultureInfo.InvariantCulture)));
+        }
+
+        return new PgcatConnectionStats(pools);
+    }
+
+    public async Task<PostgresConnectionStats?> GetPostgresConnectionsAsync(CancellationToken ct)
+    {
+        var container = await FindAsync("postgres", ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var output = await ExecAsync(container.ID,
+            ["psql", "-U", "postgres", "-tAc", "SELECT datname, count(*) FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY datname"], ct);
+
+        var byDatabase = new Dictionary<string, int>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var f = line.Split('|');
+            if (f.Length == 2 && int.TryParse(f[1], out var count))
+            {
+                byDatabase[f[0]] = count;
+            }
+        }
+
+        return new PostgresConnectionStats(byDatabase, byDatabase.Values.Sum());
     }
 
     public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled);
@@ -604,7 +673,7 @@ public class DockerService : IDockerService
 
     public IReadOnlyList<EndpointDefinition> ListKnownEndpoints() => EndpointRegistry;
 
-    private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, long exitCode, string rawOutput, CancellationToken ct)
+    private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, IReadOnlyList<string> stepIds, long exitCode, string rawOutput, CancellationToken ct)
     {
         try
         {
@@ -629,7 +698,7 @@ public class DockerService : IDockerService
 
                 using var streamReader = new StreamReader(entry.DataStream);
                 var json = await streamReader.ReadToEndAsync(ct);
-                return ParseSummary(json, scenario, exitCode, rawOutput);
+                return ParseSummary(json, scenario, stepIds, exitCode, rawOutput);
             }
         }
         catch (Exception ex)
@@ -660,7 +729,7 @@ public class DockerService : IDockerService
         ("0", "No response (connection error / timeout)"),
     ];
 
-    private static TrafficReport ParseSummary(string json, string scenario, long exitCode, string rawOutput)
+    private static TrafficReport ParseSummary(string json, string scenario, IReadOnlyList<string> stepIds, long exitCode, string rawOutput)
     {
         using var doc = JsonDocument.Parse(json);
         var metrics = doc.RootElement.GetProperty("metrics");
@@ -696,10 +765,19 @@ public class DockerService : IDockerService
             }
         }
 
-        var statusBreakdown = TrackedStatusCodes
-            .Select(sc => new StatusCount(sc.Label, GetCount($"http_reqs{{status:{sc.Code}}}")))
-            .Where(sc => sc.Count > 0)
-            .OrderByDescending(sc => sc.Count)
+        // Each request is tagged with its originating step id (see flow.js), and flow.js declares a
+        // threshold for every (stepId, trackedStatusCode) pair up front - only tag combinations with
+        // a declared threshold get retained/exported by k6 at all, and only ones that actually
+        // occurred (Count > 0) are worth showing.
+        var statusByEndpoint = stepIds
+            .Select(id => new EndpointStatusBreakdown(
+                id,
+                TrackedStatusCodes
+                    .Select(sc => new StatusCount(sc.Label, GetCount($"http_reqs{{step:{id},status:{sc.Code}}}")))
+                    .Where(sc => sc.Count > 0)
+                    .OrderByDescending(sc => sc.Count)
+                    .ToList()))
+            .Where(e => e.StatusCounts.Count > 0)
             .ToList();
 
         return new TrafficReport(
@@ -714,7 +792,7 @@ public class DockerService : IDockerService
             (int)GetValue("vus_max"),
             duration,
             checks,
-            statusBreakdown,
+            statusByEndpoint,
             rawOutput);
     }
 

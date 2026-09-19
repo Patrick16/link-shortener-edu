@@ -8,7 +8,9 @@ import { Sparkline } from './Sparkline'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import { statusColor } from '../utils/statusColor'
 import type { ArchComponent } from '../types/architecture'
-import type { InfraStatus, ManagedContainer, ResourceSample } from '../types/controlApi'
+import type { InfraStatus, ManagedContainer, PgcatConnectionStats, PostgresConnectionStats, ResourceSample } from '../types/controlApi'
+
+const CONNECTIONS_POLL_MS = 3000
 
 interface Props {
   component: ArchComponent
@@ -29,6 +31,10 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
   const memMax = Math.max(64, ...memValuesMb) * 1.3
   const primary = instances[0]
   const showsInfraToggle = serviceId === 'nginx' || serviceId === 'pgcat' || serviceId === 'redis'
+  const showsPgcatConnections = serviceId === 'pgcat'
+  const showsPostgresConnections = component.type === 'database'
+  const [pgcatConnections, setPgcatConnections] = useState<PgcatConnectionStats | null>(null)
+  const [postgresConnections, setPostgresConnections] = useState<PostgresConnectionStats | null>(null)
 
   useEffect(() => {
     controlApi.listScalableServices().then(setScalable).catch(() => {})
@@ -38,6 +44,23 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
     if (!showsInfraToggle) return
     controlApi.getInfraStatus().then(setInfraStatus).catch(() => {})
   }, [showsInfraToggle])
+
+  // Polled, not fetch-once - "how many connections are open" is exactly the kind of number that's
+  // stale the moment it's read, unlike the standing infra toggles above.
+  useEffect(() => {
+    if (!showsPgcatConnections && !showsPostgresConnections) return
+    let cancelled = false
+    function refresh() {
+      if (showsPgcatConnections) controlApi.getPgcatConnections().then((s) => !cancelled && setPgcatConnections(s)).catch(() => {})
+      if (showsPostgresConnections) controlApi.getPostgresConnections().then((s) => !cancelled && setPostgresConnections(s)).catch(() => {})
+    }
+    refresh()
+    const interval = setInterval(refresh, CONNECTIONS_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [showsPgcatConnections, showsPostgresConnections])
 
   async function toggleInfra(apply: (enabled: boolean) => Promise<InfraStatus>, enabled: boolean) {
     setInfraBusy(true)
@@ -113,6 +136,35 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
             />
           )}
           {infraError && <p className="service-card-error">{infraError}</p>}
+
+          {pgcatConnections && showsPgcatConnections && (
+            <div className="connection-stats">
+              <h4>Connections</h4>
+              <div className="connection-stats-header">
+                <span />
+                <span>clients</span>
+                <span>servers</span>
+              </div>
+              {pgcatConnections.pools.map((pool) => (
+                <div className="connection-stats-row" key={pool.database}>
+                  <span className="connection-stats-db">{pool.database}</span>
+                  <span className="connection-stats-value">{pool.clientIdle + pool.clientActive + pool.clientWaiting}</span>
+                  <span className="connection-stats-value">{pool.serverActive + pool.serverIdle + pool.serverUsed}</span>
+                </div>
+              ))}
+              <p className="connection-stats-hint">clients: apps → pgcat · servers: pgcat → postgres (the pooling itself)</p>
+            </div>
+          )}
+
+          {postgresConnections && showsPostgresConnections && (
+            <div className="connection-stats">
+              <h4>Connections</h4>
+              <div className="connection-stats-row">
+                <span className="connection-stats-db">{component.name}</span>
+                <span className="connection-stats-value">{postgresConnections.connectionsByDatabase[component.name] ?? 0} backend connections</span>
+              </div>
+            </div>
+          )}
 
           {resourceHistory.length > 0 && (
             <div className="node-panel-charts">

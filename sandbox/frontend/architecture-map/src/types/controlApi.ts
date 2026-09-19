@@ -119,6 +119,13 @@ export interface StatusCount {
   count: number
 }
 
+// Every request is tagged with the step (endpoint id) it came from, so status codes break down per
+// endpoint instead of one pooled total - see EndpointStatusBreakdown on the backend.
+export interface EndpointStatusBreakdown {
+  endpointId: string
+  statusCounts: StatusCount[]
+}
+
 export interface TrafficReport {
   scenario: string
   exitCode: number
@@ -131,7 +138,7 @@ export interface TrafficReport {
   vus: number
   httpReqDuration: LatencyStats | null
   checks: CheckResult[]
-  statusBreakdown: StatusCount[]
+  statusBreakdownByEndpoint: EndpointStatusBreakdown[]
   rawOutput: string
 }
 
@@ -153,4 +160,54 @@ export interface ResourceSample {
   memoryUsageBytes: number
   memoryLimitBytes: number
   timestamp: string
+}
+
+// Client side (app -> pgcat) vs server side (pgcat -> postgres) - the gap between them is the
+// actual point of a connection pooler, so both are shown rather than just a single combined number.
+export interface PoolConnectionStats {
+  database: string
+  clientIdle: number
+  clientActive: number
+  clientWaiting: number
+  serverActive: number
+  serverIdle: number
+  serverUsed: number
+}
+
+export interface PgcatConnectionStats {
+  pools: PoolConnectionStats[]
+}
+
+export interface PostgresConnectionStats {
+  connectionsByDatabase: Record<string, number>
+  total: number
+}
+
+export interface ReplicaCount {
+  serviceId: string
+  count: number
+}
+
+// Full detail for one past run - everything needed to answer "what configuration produced this
+// result", not just the report on its own.
+export interface RunSnapshot {
+  id: string
+  timestamp: string
+  request: TrafficRequest
+  infra: InfraStatus
+  replicas: ReplicaCount[]
+  pgcatConnections: PgcatConnectionStats | null
+  postgresConnections: PostgresConnectionStats | null
+  report: TrafficReport
+}
+
+// Lightweight row for the history list - see RunSummary on the backend for why it's separate from
+// RunSnapshot (avoids pulling every run's full raw k6 output just to render a list).
+export interface RunSummary {
+  id: string
+  timestamp: string
+  scenario: string
+  httpRequests: number
+  failedRequests: number
+  exitCode: number
 }

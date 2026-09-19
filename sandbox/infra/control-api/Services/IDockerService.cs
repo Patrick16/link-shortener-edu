@@ -53,4 +53,10 @@ public interface IDockerService
     // The real routes a traffic run's step sequence can be built from - see EndpointDefinition and
     // k6-scripts/flow.js.
     IReadOnlyList<EndpointDefinition> ListKnownEndpoints();
+
+    // Live connection counts, read directly off pgcat/postgres via `psql` in a Docker exec (same
+    // approach as FlushRedisAsync) - not polled/cached, a fresh snapshot on every call. Null means
+    // the container isn't running.
+    Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(CancellationToken ct);
+    Task<PostgresConnectionStats?> GetPostgresConnectionsAsync(CancellationToken ct);
 }

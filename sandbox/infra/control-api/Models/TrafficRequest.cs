@@ -37,10 +37,16 @@ public record LatencyStats(double Avg, double Min, double Med, double Max, doubl
 public record CheckResult(string Name, int Passes, int Fails);
 
 // One HTTP status code (or "0" for a request that never got a response at all - connection
-// refused/reset/timeout) and how many requests landed on it, across every request the run made.
-// Only codes k6 was told to track via a threshold show up at all (see TrackedStatusCodes in
-// DockerService) and only ones that actually occurred (Count > 0) make it into a report.
+// refused/reset/timeout) and how many requests landed on it. Only codes k6 was told to track via a
+// threshold show up at all (see TrackedStatusCodes in DockerService) and only ones that actually
+// occurred (Count > 0) make it into a report.
 public record StatusCount(string Label, long Count);
+
+// Every request k6 makes is tagged with which step (EndpointDefinition id) it came from, so status
+// codes can be broken down per endpoint instead of one pooled total - "which endpoint actually
+// failed" is the useful question, and a single flat breakdown can't answer it once a sequence has
+// more than one step.
+public record EndpointStatusBreakdown(string EndpointId, IReadOnlyList<StatusCount> StatusCounts);
 
 public record TrafficReport(
     string Scenario,
@@ -54,5 +60,5 @@ public record TrafficReport(
     int Vus,
     LatencyStats? HttpReqDuration,
     IReadOnlyList<CheckResult> Checks,
-    IReadOnlyList<StatusCount> StatusBreakdown,
+    IReadOnlyList<EndpointStatusBreakdown> StatusBreakdownByEndpoint,
     string RawOutput);

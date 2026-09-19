@@ -1,13 +1,109 @@
-main {
-  padding: 0 24px 48px;
+/* App shell: header strip (title + live run result) on top, then a 3-column body - config on the
+   left, the graph filling the center, and either a selected node's detail or run history on the
+   right. */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   text-align: left;
 }
 
+.app-header {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.app-header-title {
+  flex-shrink: 0;
+}
+
+.app-header-title h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.app-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.app-sidebar-left,
+.app-sidebar-right {
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.app-center {
+  flex: 1;
+  min-width: 0;
+  padding: 16px;
+  display: flex;
+}
+
+/* Draggable divider between a sidebar and the center - width itself is set inline from
+   useResizableWidth, this is just the drag handle + a hairline visual border in its place. */
+.app-resizer {
+  flex-shrink: 0;
+  width: 7px;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+}
+
+.app-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--border);
+}
+
+.app-resizer:hover::after,
+.app-resizer:active::after {
+  left: 2px;
+  width: 3px;
+  background: var(--accent-border);
+}
+
+@media (max-width: 1100px) {
+  .app-shell {
+    height: auto;
+  }
+
+  .app-body {
+    flex-direction: column;
+  }
+
+  .app-sidebar-left,
+  .app-sidebar-right {
+    width: auto !important;
+    max-height: 40vh;
+    border: none;
+    border-top: 1px solid var(--border);
+  }
+
+  .app-resizer {
+    display: none;
+  }
+
+  .app-center {
+    min-height: 480px;
+  }
+}
+
 .connection-status {
-  text-align: center;
   color: var(--text);
   font-size: 14px;
-  margin-bottom: 16px;
 }
 
 .status-dot {
@@ -34,7 +130,6 @@ main {
 }
 
 .service-card-actions button,
-.traffic-panel-controls button,
 .service-card-chaos button {
   border: 1px solid var(--border);
   background: transparent;
@@ -46,10 +141,26 @@ main {
 }
 
 .service-card-actions button:hover:not(:disabled),
-.traffic-panel-controls button:hover:not(:disabled),
 .service-card-chaos button:hover:not(:disabled) {
   border-color: var(--accent-border);
   background: var(--accent-bg);
+}
+
+.run-traffic-button {
+  width: 100%;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+
+.run-traffic-button:hover:not(:disabled) {
+  filter: brightness(1.1);
 }
 
 button:disabled {
@@ -84,18 +195,13 @@ button:disabled {
   margin-top: 8px;
 }
 
-/* Diagram + side panel layout */
-
-.diagram-layout {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-}
+/* Diagram - fills .app-center entirely now, no fixed height */
 
 .diagram {
   flex: 1;
   min-width: 0;
-  height: 560px;
+  width: 100%;
+  height: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
@@ -194,14 +300,11 @@ button:disabled {
 /* Side panel (node details / connection details) */
 
 .side-panel {
-  width: 340px;
-  flex-shrink: 0;
+  width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 16px;
   background: var(--code-bg);
-  max-height: 560px;
-  overflow-y: auto;
 }
 
 .side-panel-header {
@@ -312,20 +415,58 @@ button:disabled {
   font-weight: 600;
 }
 
-/* Traffic panel */
+/* Traffic config (left sidebar) / result (header) panels */
 
-.traffic-panel {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
+.traffic-config-panel {
+  min-width: 0;
 }
 
-.traffic-panel-controls {
+.traffic-result-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+.traffic-result-empty {
+  color: var(--text);
+  font-size: 13px;
+  align-self: center;
+}
+
+.traffic-result-header {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.traffic-result-header-label {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.traffic-result-toggle {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.traffic-result-toggle:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+/* A full report can get tall (stat tiles + latency + checks + per-endpoint status + raw output) -
+   cap it and let it scroll instead of pushing the graph/sidebars below the fold. */
+.traffic-result-content {
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .scenario-description-text {
@@ -727,6 +868,53 @@ button:disabled {
   margin: 6px 0 0;
 }
 
+/* Connection stats (pgcat / postgres node panels) */
+
+.connection-stats {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.connection-stats h4 {
+  font-size: 12px;
+  margin: 0 0 6px;
+  color: var(--text-h);
+}
+
+.connection-stats-header,
+.connection-stats-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.connection-stats-header {
+  color: var(--text);
+}
+
+.connection-stats-row {
+  color: var(--text-h);
+}
+
+.connection-stats-db {
+  font-weight: 500;
+}
+
+.connection-stats-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+}
+
+.connection-stats-hint {
+  font-size: 11px;
+  color: var(--text);
+  margin: 6px 0 0;
+}
+
 .progress-bar-track {
   height: 8px;
   border-radius: 4px;
@@ -747,28 +935,14 @@ button:disabled {
   margin: 4px 0 10px;
 }
 
-.traffic-panel-controls select {
+.traffic-config-panel > select {
+  width: 100%;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text-h);
   border-radius: 6px;
   padding: 4px 8px;
-}
-
-.traffic-panel-controls label {
-  display: flex;
-  flex-direction: column;
-  font-size: 12px;
-  gap: 2px;
-}
-
-.traffic-panel-controls input {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-h);
-  border-radius: 6px;
-  padding: 4px 6px;
-  width: 70px;
+  margin-bottom: 6px;
 }
 
 .traffic-report {
@@ -891,6 +1065,23 @@ button:disabled {
   color: var(--text-h);
 }
 
+.status-endpoint-group {
+  margin-bottom: 14px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.status-endpoint-group:last-child {
+  border-bottom: none;
+}
+
+.status-endpoint-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
 .status-row {
   display: grid;
   grid-template-columns: minmax(120px, 200px) 1fr 60px;
@@ -940,4 +1131,117 @@ button:disabled {
   border-radius: 6px;
   font-size: 12px;
   white-space: pre-wrap;
+}
+
+/* Run history (right sidebar) */
+
+.run-history-panel {
+  min-width: 0;
+}
+
+.run-history-empty {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.run-history-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-history-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.run-history-item:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.run-history-item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.run-history-item-meta {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.run-history-item-failed {
+  color: #ef4444;
+}
+
+.run-history-detail-header {
+  margin-bottom: 8px;
+}
+
+.run-history-detail-header button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.run-history-detail-header button:hover {
+  color: var(--text-h);
+}
+
+.run-history-detail-title {
+  font-size: 16px;
+  margin: 0 0 2px;
+}
+
+.run-history-detail-timestamp {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 12px;
+}
+
+.run-history-detail-section {
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.run-history-detail-section h4 {
+  font-size: 12px;
+  margin: 0 0 6px;
+  color: var(--text-h);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.run-history-steps,
+.run-history-infra {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-h);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.run-history-steps {
+  list-style: decimal;
+  padding-left: 18px;
 }

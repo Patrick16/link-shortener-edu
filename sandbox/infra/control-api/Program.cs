@@ -7,6 +7,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<IDockerService, DockerService>();
 builder.Services.AddSingleton<IScenarioStore, ScenarioStore>();
+builder.Services.AddSingleton<IRunHistoryStore, RunHistoryStore>();
 builder.Services.AddSingleton<ResourceStatsStore>();
 builder.Services.AddSignalR();
 builder.Services.AddHostedService<StatusPollerService>();
@@ -95,7 +96,7 @@ app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleR
     return result.Success ? Results.Ok(result) : Results.BadRequest(result);
 });
 
-app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
+app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRunHistoryStore runHistory, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
 {
     if (request.Steps.Count == 0)
     {
@@ -177,6 +178,35 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHub
             if (report is not null)
             {
                 await hub.Clients.All.SendAsync("trafficCompleted", report);
+
+                // Best-effort - a snapshot failing to save shouldn't hide the report the user is
+                // already looking at. Captured right after the run so replica counts/connections
+                // reflect the state the load was actually generated against, not some later moment.
+                try
+                {
+                    var containers = await docker.ListContainersAsync(CancellationToken.None);
+                    var replicas = containers
+                        .GroupBy(c => c.ServiceId)
+                        .Select(g => new ReplicaCount(g.Key, g.Count(c => c.State == "running")))
+                        .ToList();
+
+                    var snapshot = new RunSnapshot(
+                        $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid().ToString("N")[..6]}",
+                        DateTimeOffset.UtcNow,
+                        request,
+                        docker.GetInfraStatus(),
+                        replicas,
+                        await docker.GetPgcatConnectionsAsync(CancellationToken.None),
+                        await docker.GetPostgresConnectionsAsync(CancellationToken.None),
+                        report);
+
+                    await runHistory.SaveAsync(snapshot, CancellationToken.None);
+                    await hub.Clients.All.SendAsync("runSaved", new { snapshot.Id });
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to save run history snapshot for {Scenario}", request.Scenario);
+                }
             }
         }
         catch (Exception ex)
@@ -190,6 +220,18 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHub
 });
 
 app.MapGet("/api/endpoints", (IDockerService docker) => Results.Ok(docker.ListKnownEndpoints()));
+
+app.MapGet("/api/containers/pgcat/connections", async (IDockerService docker, CancellationToken ct) =>
+{
+    var result = await docker.GetPgcatConnectionsAsync(ct);
+    return result is null ? Results.NotFound() : Results.Ok(result);
+});
+
+app.MapGet("/api/containers/postgres/connections", async (IDockerService docker, CancellationToken ct) =>
+{
+    var result = await docker.GetPostgresConnectionsAsync(ct);
+    return result is null ? Results.NotFound() : Results.Ok(result);
+});
 
 app.MapGet("/api/infra/status", (IDockerService docker) => Results.Ok(docker.GetInfraStatus()));
 
@@ -259,5 +301,13 @@ app.MapPost("/api/scenarios", async (CustomScenario scenario, IScenarioStore sto
 
 app.MapDelete("/api/scenarios/{name}", async (string name, IScenarioStore store, CancellationToken ct) =>
     await store.DeleteAsync(name, ct) ? Results.Ok() : Results.NotFound());
+
+app.MapGet("/api/runs", async (IRunHistoryStore store, CancellationToken ct) => Results.Ok(await store.ListAsync(ct)));
+
+app.MapGet("/api/runs/{id}", async (string id, IRunHistoryStore store, CancellationToken ct) =>
+{
+    var snapshot = await store.GetAsync(id, ct);
+    return snapshot is null ? Results.NotFound() : Results.Ok(snapshot);
+});
 
 app.Run();

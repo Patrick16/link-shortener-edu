@@ -10,6 +10,10 @@ export interface TrafficRunState {
   report: TrafficReport | null
   error: string | null
   start: (request: TrafficRequest) => Promise<void>
+  // Bumped (to the new run's id) whenever control-api finishes persisting a run snapshot - a
+  // simple change signal RunHistoryPanel watches to refetch its list, instead of a second SignalR
+  // connection just for that one event.
+  lastSavedRunId: string | null
 }
 
 // Own SignalR connection (separate from useLiveStack's) - keeps this hook fully self-contained
@@ -22,6 +26,7 @@ export function useTrafficRun(): TrafficRunState {
   const [progressHistory, setProgressHistory] = useState<TrafficProgress[]>([])
   const [report, setReport] = useState<TrafficReport | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [lastSavedRunId, setLastSavedRunId] = useState<string | null>(null)
   const connectionRef = useRef<signalR.HubConnection | null>(null)
 
   useEffect(() => {
@@ -49,6 +54,10 @@ export function useTrafficRun(): TrafficRunState {
       setRunning(false)
       setProgress(null)
     })
+    connection.on('runSaved', (e: { id: string }) => {
+      if (cancelled) return
+      setLastSavedRunId(e.id)
+    })
 
     connection.start().catch((err) => !cancelled && setError(String(err)))
     connectionRef.current = connection
@@ -73,5 +82,5 @@ export function useTrafficRun(): TrafficRunState {
     }
   }
 
-  return { running, progress, progressHistory, report, error, start }
+  return { running, progress, progressHistory, report, error, start, lastSavedRunId }
 }

@@ -6,27 +6,10 @@ import { check, sleep } from 'k6';
 // driven by STEPS_JSON - a JSON array control-api built server-side from
 // DockerService.EndpointRegistry, resolved from the ordered step list the UI's sequence builder
 // sent. This script has no built-in knowledge of the app's actual routes; it's a generic
-// interpreter over {serviceId, method, pathTemplate, bodyTemplate, produces, pauseAfterSeconds}
+// interpreter over {id, serviceId, method, pathTemplate, bodyTemplate, produces, pauseAfterSeconds}
 // objects. There's no fixed pause between iterations either - if every step's pauseAfterSeconds is
 // 0, VUs loop as fast as the target can respond, which is a legitimate thing to want (e.g. a Stress
 // preset), not an oversight.
-//
-// See DockerService.TrackedStatusCodes for why these thresholds exist - must match that list.
-export const options = {
-  thresholds: {
-    'http_reqs{status:200}': ['count>=0'],
-    'http_reqs{status:302}': ['count>=0'],
-    'http_reqs{status:401}': ['count>=0'],
-    'http_reqs{status:404}': ['count>=0'],
-    'http_reqs{status:409}': ['count>=0'],
-    'http_reqs{status:500}': ['count>=0'],
-    'http_reqs{status:502}': ['count>=0'],
-    'http_reqs{status:503}': ['count>=0'],
-    'http_reqs{status:504}': ['count>=0'],
-    'http_reqs{status:0}': ['count>=0'],
-  },
-};
-
 const BASE_URLS = {
   'auth-api': __ENV.AUTH_API_URL || 'http://auth-api:8080',
   'link-api': __ENV.LINK_API_URL || 'http://nginx:8082',
@@ -34,6 +17,27 @@ const BASE_URLS = {
 };
 
 const STEPS = JSON.parse(__ENV.STEPS_JSON || '[]');
+
+// Must match DockerService.TrackedStatusCodes exactly (the codes, not the labels). Every request is
+// tagged with which step it came from (below), so status codes can be broken down per endpoint in
+// the report instead of one pooled total - but k6 only retains/exports a tag combination that a
+// threshold explicitly references, and the set of step ids is only known at runtime (whatever
+// sequence the UI sent), so the thresholds themselves have to be built dynamically here rather than
+// listed as a static object literal the way a fixed status-only breakdown could be.
+const TRACKED_STATUS_CODES = ['200', '302', '401', '404', '409', '500', '502', '503', '504', '0'];
+
+function buildThresholds() {
+  const thresholds = {};
+  const stepIds = [...new Set(STEPS.map((s) => s.id))];
+  for (const stepId of stepIds) {
+    for (const code of TRACKED_STATUS_CODES) {
+      thresholds[`http_reqs{step:${stepId},status:${code}}`] = ['count>=0'];
+    }
+  }
+  return thresholds;
+}
+
+export const options = { thresholds: buildThresholds() };
 
 function substitute(template, vars) {
   if (template == null) return null;
@@ -77,8 +81,8 @@ export default function (data) {
     const body = substitute(step.bodyTemplate, vars);
 
     const res = step.method === 'GET'
-      ? http.get(url, { redirects: 0 })
-      : http.request(step.method, url, body, { headers: { 'Content-Type': 'application/json' } });
+      ? http.get(url, { redirects: 0, tags: { step: step.id } })
+      : http.request(step.method, url, body, { headers: { 'Content-Type': 'application/json' }, tags: { step: step.id } });
 
     check(res, { [`${step.serviceId} ${step.method} ${step.pathTemplate}`]: (r) => r.status >= 200 && r.status < 400 });
 
