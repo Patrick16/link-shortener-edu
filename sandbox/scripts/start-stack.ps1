@@ -43,22 +43,44 @@ function Test-CommandExists {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-function Wait-ForPort {
+function Wait-ForHealthReady {
     param(
         [string]$ComputerName = 'localhost',
         [int]$Port,
         [int]$TimeoutSeconds = 60
     )
+    $uri = "http://${ComputerName}:$Port/health/ready"
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         try {
-            $client = [System.Net.Sockets.TcpClient]::new()
-            $client.Connect($ComputerName, $Port)
-            $client.Close()
-            return $true
+            $response = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 3
+            if ($response.StatusCode -eq 200) {
+                return $true
+            }
         } catch {
-            Start-Sleep -Seconds 2
+            # Not up yet, or /health/ready is reporting unhealthy - keep polling.
         }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
+function Wait-ForHealthyContainer {
+    param(
+        [string]$ServiceName,
+        [int]$TimeoutSeconds = 60
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $status = docker compose ps $ServiceName --format json | ConvertFrom-Json
+            if ($status.Health -eq 'healthy') {
+                return $true
+            }
+        } catch {
+            # docker compose ps failed transiently (e.g. container not created yet) - keep polling.
+        }
+        Start-Sleep -Seconds 2
     }
     return $false
 }
@@ -98,17 +120,27 @@ try {
         Write-Error 'docker compose up failed - see output above.'
     }
 
-    Write-Step 'Waiting for the web APIs to start listening'
+    Write-Step 'Waiting for the web APIs to become ready (/health/ready)'
     $apis = @(
         @{ Name = 'AuthApi';     Port = 8081 }
         @{ Name = 'LinkApi';     Port = 8082 }
         @{ Name = 'RedirectApi'; Port = 8083 }
     )
     foreach ($api in $apis) {
-        if (Wait-ForPort -Port $api.Port) {
-            Write-Host "  $($api.Name) is listening on port $($api.Port)" -ForegroundColor Green
+        if (Wait-ForHealthReady -Port $api.Port) {
+            Write-Host "  $($api.Name) is ready" -ForegroundColor Green
         } else {
-            Write-Warning "  $($api.Name) didn't come up within the timeout - check 'docker compose logs $($api.Name.ToLower())'"
+            Write-Warning "  $($api.Name) didn't become ready within the timeout - check 'docker compose logs $($api.Name.ToLower())'"
+        }
+    }
+
+    Write-Step 'Waiting for the worker services to become healthy'
+    $workers = @('shortener-service', 'traffic-service')
+    foreach ($worker in $workers) {
+        if (Wait-ForHealthyContainer -ServiceName $worker) {
+            Write-Host "  $worker is healthy" -ForegroundColor Green
+        } else {
+            Write-Warning "  $worker didn't become healthy within the timeout - check 'docker compose logs $worker'"
         }
     }
 } finally {
