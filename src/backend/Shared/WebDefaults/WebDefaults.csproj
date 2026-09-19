@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!-- Not Sdk.Web: this is a class library, not a host. FrameworkReference alone is enough to
+		     get ProblemDetails/IExceptionHandler types without pulling in a full web SDK. Only the
+		     three controller-based APIs (AuthApi, LinkApi, RedirectApi) reference this project. -->
+		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+</Project>

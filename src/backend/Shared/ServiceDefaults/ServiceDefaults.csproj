@@ -7,10 +7,11 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Deliberately no OpenTelemetry.Instrumentation.AspNetCore here: it pulls in a dependency on
-         the ASP.NET Core shared framework, which ShortenerService/TrafficService (built on the
-         plain dotnet/runtime base image, not dotnet/aspnet) don't have at runtime. The three actual
-         web APIs add it themselves — see their own .csproj and the extra lines after
+    <!-- Deliberately no OpenTelemetry.Instrumentation.AspNetCore here. ShortenerService/TrafficService
+         do run on the ASP.NET Core shared framework now (a minimal Kestrel listener for /health/*
+         only, no controllers) but instrumenting it would trace every health-check ping alongside
+         real request/message spans, which is just noise. The three real web APIs add this
+         instrumentation themselves — see their own .csproj and the extra lines after
          AddServiceDefaults() in their Program.cs. -->
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />

@@ -2,6 +2,7 @@ using AuthApi;
 using AuthApi.Controllers;
 using AuthApi.Models;
 using Common.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -61,7 +62,10 @@ public class AuthControllerTests
             new RegisterRequest { Name = "Alice", Email = "alice@example.com", Password = "Str0ngPassw0rd!" },
             CancellationToken.None);
 
-        Assert.IsType<ConflictObjectResult>(result.Result);
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status409Conflict, objectResult.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(objectResult.Value);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.Status);
         tokenGenerator.Verify(x => x.GenerateToken(It.IsAny<User>()), Times.Never);
         Assert.Equal(1, await context.Users.CountAsync());
     }
@@ -98,7 +102,10 @@ public class AuthControllerTests
             new LoginRequest { Email = "ghost@example.com", Password = "whatever" },
             CancellationToken.None);
 
-        Assert.IsType<UnauthorizedObjectResult>(result.Result);
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status401Unauthorized, objectResult.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(objectResult.Value);
+        Assert.Equal(StatusCodes.Status401Unauthorized, problem.Status);
         tokenGenerator.Verify(x => x.GenerateToken(It.IsAny<User>()), Times.Never);
     }
 
@@ -116,7 +123,10 @@ public class AuthControllerTests
             new LoginRequest { Email = "alice@example.com", Password = "wrong-password" },
             CancellationToken.None);
 
-        Assert.IsType<UnauthorizedObjectResult>(result.Result);
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status401Unauthorized, objectResult.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(objectResult.Value);
+        Assert.Equal(StatusCodes.Status401Unauthorized, problem.Status);
         tokenGenerator.Verify(x => x.GenerateToken(It.IsAny<User>()), Times.Never);
     }
 }

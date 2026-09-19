@@ -10,6 +10,7 @@ using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using ServiceDefaults;
+using WebDefaults;
 // OpenTelemetry.Trace also has a "Link" type (a span link) — alias ours to avoid the clash.
 using Link = Common.Models.Link;
 
@@ -49,6 +50,11 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString(Constants.RedisConnectionString);
     options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
 });
+
+builder.Services.AddApiExceptionHandling();
+builder.Services.AddHealthChecks()
+    .AddCheck<DbContextHealthCheck<DatabaseContext>>("database", tags: ["ready"])
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
 
 var corsOrigins = builder.Configuration.GetSection(Constants.CorsAllowedOriginsSection).Get<string[]>()
     ?? ["http://localhost:5173"];
@@ -91,6 +97,9 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference();
 }
 
+// First in the pipeline so it can catch exceptions thrown by anything downstream.
+app.UseExceptionHandler();
+
 app.UseHttpsRedirection();
 
 app.UseCors(Constants.FrontendCorsPolicy);
@@ -99,5 +108,10 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Liveness: the process can respond at all - no dependency checks. Readiness: can it actually
+// serve traffic right now - runs the "ready"-tagged checks registered above.
+app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") });
 
 app.Run();

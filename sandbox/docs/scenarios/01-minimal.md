@@ -131,6 +131,29 @@ actually means end to end.
 a connection with host `redis`, port `6379`, and you can watch `link:{hash}` keys appear as you
 create/visit links, with their TTL counting down.
 
+## Error format and health checks
+
+`auth-api`, `link-api`, and `redirect-api` answer every error — validation failures, `404`s, and
+anything an unhandled exception would otherwise turn into a bare `500` — in the same
+[RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) `ProblemDetails` shape:
+
+```bash
+curl -s -X POST http://localhost:8081/register -H "Content-Type: application/json" \
+  -d '{"name":"Alice","email":"alice@example.com","password":"Str0ngPassw0rd!"}'
+# repeat the same request - the email is now taken:
+# {"type":"...","title":"Email already registered.","status":409,
+#  "detail":"A user with this email already exists.","traceId":"..."}
+```
+
+All five .NET services also expose `/health/live` (is the process up) and `/health/ready` (can it
+reach Postgres, and RabbitMQ where relevant) — what `docker-compose.yml`'s `healthcheck:` blocks
+poll, and what `nginx` waits on before routing to `link-api`/`redirect-api`:
+
+```bash
+curl http://localhost:8081/health/live   # -> Healthy
+curl http://localhost:8081/health/ready  # -> Healthy, or a non-200 if Postgres/RabbitMQ is down
+```
+
 ## Known limitations (by design, for now)
 
 - **No rate limiting, no input validation beyond "is it well-formed JSON".** Fine for a learning
@@ -157,8 +180,9 @@ create/visit links, with their TTL counting down.
 | ShortenerService | `src/backend/Services/ShortenerService/` |
 | TrafficService | `src/backend/Services/TrafficService/` |
 | Shared event contracts | `src/backend/Shared/Contracts/Events/` |
-| RabbitMQ client/publisher/consumer | `src/backend/Shared/Infrastructure/` |
+| RabbitMQ client/publisher/consumer, health checks | `src/backend/Shared/Infrastructure/` |
 | OpenTelemetry wiring (shared) | `src/backend/Shared/ServiceDefaults/` |
+| Global exception handler / unified error format | `src/backend/Shared/WebDefaults/` |
 | Frontend | `src/frontend/app/` |
 | docker-compose | `sandbox/docker-compose.yml` |
 | Start/stop scripts | `sandbox/scripts/start-stack.ps1`, `sandbox/scripts/stop-stack.ps1` |

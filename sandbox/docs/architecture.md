@@ -79,6 +79,17 @@ Short version of what's real today:
   manually instrumented so a trace shows the full path across the async boundary for both
   `LinkApi` → `ShortenerService` and `RedirectApi` → `TrafficService`. `redisinsight` gives a GUI
   over the Redis cache. See `scenarios/01-minimal.md#observability`.
+- **Error handling:** `AuthApi`, `LinkApi`, `RedirectApi` answer every client and server error in
+  the same [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) `ProblemDetails` JSON shape (`type`,
+  `title`, `status`, `detail`, `traceId`) — a global `IExceptionHandler` catches anything a
+  controller doesn't handle itself, and controller code that used to return a bare string
+  (`Conflict("...")`, `Unauthorized("...")`) now returns `Problem(...)` instead.
+- **Health checks:** all five .NET services expose `/health/live` (process is up, no dependency
+  checks) and `/health/ready` (can it actually serve traffic — Postgres via `CanConnectAsync`, plus
+  RabbitMQ via a real channel-open attempt for the four services that use the bus). `ShortenerService`
+  and `TrafficService` carry a minimal Kestrel listener for these two routes only — they have no
+  other HTTP surface. `docker-compose.yml`'s `healthcheck:` blocks poll `/health/live`; `nginx`
+  waits on `link-api`/`redirect-api` being `service_healthy` before starting.
 
 ## TODO
 

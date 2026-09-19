@@ -1,5 +1,6 @@
 using AuthApi.Models;
 using Common.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -27,7 +28,10 @@ public class AuthController(
         var emailTaken = await _context.Users.AnyAsync(x => x.Email == request.Email, cancellationToken);
         if (emailTaken)
         {
-            return Conflict("A user with this email already exists.");
+            return Problem(
+                detail: "A user with this email already exists.",
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Email already registered.");
         }
 
         // PasswordHasher.HashPassword needs a user instance for context but doesn't read its fields;
@@ -59,16 +63,22 @@ public class AuthController(
         // is wrong — telling those apart lets an attacker enumerate registered emails.
         if (user is null)
         {
-            return Unauthorized("Invalid email or password.");
+            return InvalidCredentials();
         }
 
         var result = PasswordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
         if (result == PasswordVerificationResult.Failed)
         {
-            return Unauthorized("Invalid email or password.");
+            return InvalidCredentials();
         }
 
         var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
         return new AuthResponse(token, expiresAt);
     }
+
+    private ObjectResult InvalidCredentials() =>
+        Problem(
+            detail: "Invalid email or password.",
+            statusCode: StatusCodes.Status401Unauthorized,
+            title: "Authentication failed.");
 }

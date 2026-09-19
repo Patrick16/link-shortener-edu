@@ -1,10 +1,12 @@
 using AuthApi;
 using Common;
+using Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Trace;
 using Scalar.AspNetCore;
 using ServiceDefaults;
+using WebDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
@@ -29,6 +31,10 @@ builder.Services.AddDbContextPool<DatabaseContext>(
 
 builder.Services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
 
+builder.Services.AddApiExceptionHandling();
+builder.Services.AddHealthChecks()
+    .AddCheck<DbContextHealthCheck<DatabaseContext>>("database", tags: ["ready"]);
+
 var corsOrigins = builder.Configuration.GetSection(Constants.CorsAllowedOriginsSection).Get<string[]>()
     ?? ["http://localhost:5173"];
 builder.Services.AddCors(options =>
@@ -39,7 +45,7 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Apply pending EF Core migrations on startup — this service owns the auth-service schema.
+// Apply pending EF Core migrations on startup — this service owns users_db.
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
@@ -53,6 +59,9 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference();
 }
 
+// First in the pipeline so it can catch exceptions thrown by anything downstream.
+app.UseExceptionHandler();
+
 app.UseHttpsRedirection();
 
 app.UseCors(Constants.FrontendCorsPolicy);
@@ -60,5 +69,10 @@ app.UseCors(Constants.FrontendCorsPolicy);
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Liveness: the process can respond at all - no dependency checks. Readiness: can it actually
+// serve traffic right now - runs the "ready"-tagged checks registered above.
+app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") });
 
 app.Run();

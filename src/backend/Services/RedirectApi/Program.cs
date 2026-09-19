@@ -6,6 +6,7 @@ using OpenTelemetry.Trace;
 using RedirectApi;
 using Scalar.AspNetCore;
 using ServiceDefaults;
+using WebDefaults;
 // OpenTelemetry.Trace also has a "Link" type (a span link) — alias ours to avoid the clash.
 using Link = Common.Models.Link;
 
@@ -46,6 +47,11 @@ builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallb
 builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
 builder.Services.AddHostedService<RabbitMqRetryWorker>();
 
+builder.Services.AddApiExceptionHandling();
+builder.Services.AddHealthChecks()
+    .AddCheck<DbContextHealthCheck<DatabaseContext>>("database", tags: ["ready"])
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+
 // A plain <a href> click to a short link is a top-level navigation, not subject to CORS — this is
 // here for consistency with AuthApi/LinkApi and for any future script-initiated call (link preview,
 // existence check, ...).
@@ -66,6 +72,9 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference();
 }
 
+// First in the pipeline so it can catch exceptions thrown by anything downstream.
+app.UseExceptionHandler();
+
 app.UseHttpsRedirection();
 
 app.UseCors(Constants.FrontendCorsPolicy);
@@ -73,5 +82,10 @@ app.UseCors(Constants.FrontendCorsPolicy);
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Liveness: the process can respond at all - no dependency checks. Readiness: can it actually
+// serve traffic right now - runs the "ready"-tagged checks registered above.
+app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
+app.MapHealthChecks("/health/ready", new() { Predicate = check => check.Tags.Contains("ready") });
 
 app.Run();

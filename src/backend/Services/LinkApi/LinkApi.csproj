@@ -20,6 +20,7 @@
 		<ProjectReference Include="..\..\Shared\Infrastructure\Infrastructure.csproj" />
 		<ProjectReference Include="..\..\Shared\Common\Common.csproj" />
 		<ProjectReference Include="..\..\Shared\ServiceDefaults\ServiceDefaults.csproj" />
+		<ProjectReference Include="..\..\Shared\WebDefaults\WebDefaults.csproj" />
 	</ItemGroup>
 
 </Project>

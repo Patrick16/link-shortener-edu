@@ -103,6 +103,11 @@ services:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   link-api:
     build:
@@ -130,6 +135,11 @@ services:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redirect-api:
     build:
@@ -152,6 +162,11 @@ services:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   nginx:
     image: nginx:alpine
@@ -161,8 +176,10 @@ services:
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
-      - link-api
-      - redirect-api
+      link-api:
+        condition: service_healthy
+      redirect-api:
+        condition: service_healthy
 
   shortener-service:
     build:
@@ -179,6 +196,11 @@ services:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   traffic-service:
     build:
@@ -195,6 +217,11 @@ services:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   control-api:
     build:
