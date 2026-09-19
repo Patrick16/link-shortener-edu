@@ -735,6 +735,60 @@ button:disabled {
   margin: 4px 0 0;
 }
 
+/* Data pool (preload real data before a run) */
+
+.data-pool-controls {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.data-pool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.data-pool-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.data-pool-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.data-pool-fields select,
+.data-pool-fields input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+
+.data-pool-fields input[type='number'] {
+  width: 90px;
+}
+
+.data-pool-fields .scenario-description-text {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 .endpoint-sequence-builder {
   border: 1px solid var(--border);
   border-radius: 8px;

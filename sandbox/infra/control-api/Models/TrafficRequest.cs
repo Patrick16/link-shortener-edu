@@ -13,6 +13,14 @@ public record TrafficStage(int DurationSeconds, int TargetVus);
 // stress that exact race.
 public record FlowStep(string EndpointId, double PauseAfterSeconds = 0);
 
+// Preloads real values from a DataSourceDefinition before the run starts and seeds them into every
+// iteration's variable store (see flow.js's POOL_* env vars) - lets a step that consumes a variable
+// without an earlier step in the same sequence producing it fresh (e.g. testing "Resolve link" on
+// its own) hit varied real records instead of the one fixture value every iteration. Mode picks how
+// each iteration draws from the pool: "sequential" cycles through it in order, spread across VUs so
+// concurrent iterations don't all land on the same entry; "random" picks independently each time.
+public record DataPoolRequest(string SourceId, int Count, string Mode);
+
 // Every run goes through the one generic k6-scripts/flow.js now - there's no more "named script"
 // concept. Steps is the ordered sequence to call, once per iteration, in that exact order (see
 // DockerService.EndpointRegistry) - order matters, since later steps can consume variables earlier
@@ -30,7 +38,8 @@ public record TrafficRequest(
     int DurationSeconds,
     IReadOnlyList<FlowStep> Steps,
     IReadOnlyList<TrafficStage>? Stages = null,
-    int? Iterations = null);
+    int? Iterations = null,
+    DataPoolRequest? DataPool = null);
 
 public record LatencyStats(double Avg, double Min, double Med, double Max, double P90, double P95);
 

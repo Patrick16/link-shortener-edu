@@ -48,6 +48,21 @@ export interface FlowStep {
   pauseAfterSeconds: number
 }
 
+// Picks how each iteration draws from a preloaded DataPoolRequest - "sequential" cycles through it
+// in order (spread across VUs/iterations so concurrent draws don't collide), "random" picks
+// independently each time. See DataPoolRequest on the backend.
+export type DataPoolMode = 'sequential' | 'random'
+
+// Preloads Count real values from a DataSourceDefinition before the run starts and seeds them into
+// every iteration, so a step consuming that variable without an earlier step in the same sequence
+// producing it fresh (e.g. testing "Resolve link" alone) hits varied real records instead of the
+// same one fixture value every time - see DataPoolRequest on the backend.
+export interface DataPoolRequest {
+  sourceId: string
+  count: number
+  mode: DataPoolMode
+}
+
 export interface TrafficRequest {
   scenario: string
   vus: number
@@ -55,6 +70,16 @@ export interface TrafficRequest {
   steps: FlowStep[]
   stages?: TrafficStage[]
   iterations?: number
+  dataPool?: DataPoolRequest
+}
+
+// A bulk, paginated read that can preload a DataPoolRequest's pool - see DataSourceDefinition on
+// the backend for why this is a separate, smaller registry from EndpointDefinition/FlowStep.
+export interface DataSourceDefinition {
+  id: string
+  serviceId: string
+  producesVar: string
+  description: string
 }
 
 // One real HTTP route the flow runner can call - see EndpointDefinition on the backend.
@@ -89,6 +114,7 @@ export interface CustomScenario {
   points: ScenarioPoint[]
   vus: number
   iterations: number
+  dataPool?: DataPoolRequest
 }
 
 // NginxBypassed is the one field framed as "the interesting state", not "is it on" - see
@@ -144,6 +170,12 @@ export interface TrafficReport {
 
 // targetIterations is only set for an iteration-count run - the UI shows "X/Y iterations" instead
 // of "Xs/Ys" when it's present, since there's no fixed total duration in that mode.
+//
+// phase is "preparing" for the brief window (if any) where a requested data pool is being fetched
+// from the real app before k6 even starts - preparedCount/preparedTarget carry that fetch's own
+// progress then (percentComplete mirrors them so the same progress bar can be reused); every other
+// field is meaningless during that phase. It's "running" for every push once k6 itself is going,
+// same as before data pools existed.
 export interface TrafficProgress {
   elapsedSeconds: number
   totalSeconds: number
@@ -152,6 +184,9 @@ export interface TrafficProgress {
   iterationsSoFar: number
   iterationsPerSecond: number
   targetIterations: number | null
+  phase: 'preparing' | 'running'
+  preparedCount: number | null
+  preparedTarget: number | null
 }
 
 export interface ResourceSample {

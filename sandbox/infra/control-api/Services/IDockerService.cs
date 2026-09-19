@@ -54,6 +54,9 @@ public interface IDockerService
     // k6-scripts/flow.js.
     IReadOnlyList<EndpointDefinition> ListKnownEndpoints();
 
+    // The bulk, paginated reads a run's DataPoolRequest can preload from - see DataSourceDefinition.
+    IReadOnlyList<DataSourceDefinition> ListDataSources();
+
     // Live connection counts, read directly off pgcat/postgres via `psql` in a Docker exec (same
     // approach as FlushRedisAsync) - not polled/cached, a fresh snapshot on every call. Null means
     // the container isn't running.

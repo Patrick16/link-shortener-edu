@@ -114,6 +114,24 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
         return Results.BadRequest(new { error = "each step's pauseAfterSeconds must be between 0 and 30" });
     }
 
+    if (request.DataPool is { } dataPool)
+    {
+        if (!docker.ListDataSources().Any(s => s.Id == dataPool.SourceId))
+        {
+            return Results.BadRequest(new { error = $"unknown data source: {dataPool.SourceId}" });
+        }
+
+        if (dataPool.Count is < 1 or > 20_000)
+        {
+            return Results.BadRequest(new { error = "dataPool.count must be between 1 and 20000" });
+        }
+
+        if (dataPool.Mode is not ("sequential" or "random"))
+        {
+            return Results.BadRequest(new { error = "dataPool.mode must be 'sequential' or 'random'" });
+        }
+    }
+
     if (request.Iterations is { } iterations)
     {
         // Iteration-count runs use k6's shared-iterations executor - flat VUs, no ramp, so none of
@@ -220,6 +238,8 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
 });
 
 app.MapGet("/api/endpoints", (IDockerService docker) => Results.Ok(docker.ListKnownEndpoints()));
+
+app.MapGet("/api/data-sources", (IDockerService docker) => Results.Ok(docker.ListDataSources()));
 
 app.MapGet("/api/containers/pgcat/connections", async (IDockerService docker, CancellationToken ct) =>
 {

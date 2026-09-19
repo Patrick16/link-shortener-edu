@@ -1,5 +1,6 @@
 import http from 'k6/http';
 import { check, sleep } from 'k6';
+import { SharedArray } from 'k6/data';
 
 // Every traffic run goes through this one script now. Which real endpoints get called, in what
 // order, how data flows from one call into the next, and how long to pause afterward is entirely
@@ -10,6 +11,14 @@ import { check, sleep } from 'k6';
 // objects. There's no fixed pause between iterations either - if every step's pauseAfterSeconds is
 // 0, VUs loop as fast as the target can respond, which is a legitimate thing to want (e.g. a Stress
 // preset), not an oversight.
+//
+// POOL_JSON is a second, optional input: real values control-api preloaded from the app itself
+// (see DockerService.FetchDataPoolAsync) before this container ever started, e.g. a few thousand
+// real link hashes. Without it, a sequence that only resolves a link (no Create step of its own)
+// hits the exact same fixture link every iteration - fine for checking the route works at all, but
+// useless for exercising cache/DB behavior across many different rows. SharedArray is k6's own
+// mechanism for exactly this: a large read-only dataset held once and shared across every VU
+// instead of copied per-VU.
 const BASE_URLS = {
   'auth-api': __ENV.AUTH_API_URL || 'http://auth-api:8080',
   'link-api': __ENV.LINK_API_URL || 'http://nginx:8082',
@@ -17,6 +26,10 @@ const BASE_URLS = {
 };
 
 const STEPS = JSON.parse(__ENV.STEPS_JSON || '[]');
+const POOL_VAR = __ENV.POOL_VAR || null;
+const POOL_MODE = __ENV.POOL_MODE || 'sequential';
+const POOL_VUS_HINT = Math.max(1, Number(__ENV.POOL_VUS_HINT || 1));
+const POOL = new SharedArray('dataPool', () => JSON.parse(__ENV.POOL_JSON || '[]'));
 
 // Must match DockerService.TrackedStatusCodes exactly (the codes, not the labels). Every request is
 // tagged with which step it came from (below), so status codes can be broken down per endpoint in
@@ -73,6 +86,19 @@ export default function (data) {
     originalLink: `https://example.com/${rand}`,
     hash: data.fixtureHash,
   };
+
+  // Overrides the fixture default with a value drawn from the preloaded pool, if one was
+  // requested - before the sequence runs, so a Create step still later in the same sequence (an
+  // uncommon but valid combo) overwrites it with a freshly created value exactly like it always
+  // has, via the ordinary `produces` handling below. "sequential" spreads reads across VUs/
+  // iterations via __VU/__ITER rather than a shared mutable counter (k6 VUs don't share memory);
+  // it's an even-ish walk through the pool, not a strict guarantee once VUs ramp up or down mid-run.
+  if (POOL_VAR && POOL.length > 0) {
+    const index = POOL_MODE === 'random'
+      ? Math.floor(Math.random() * POOL.length)
+      : (__VU - 1 + __ITER * POOL_VUS_HINT) % POOL.length;
+    vars[POOL_VAR] = POOL[index];
+  }
 
   for (const step of STEPS) {
     const base = BASE_URLS[step.serviceId];

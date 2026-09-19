@@ -54,7 +54,9 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
       <div className="traffic-result-header">
         <span className="traffic-result-header-label">
           {running
-            ? 'Running...'
+            ? progress?.phase === 'preparing'
+              ? 'Preparing test data...'
+              : 'Running...'
             : report
               ? `Last run - ${report.httpRequests} requests, ${report.failedRequests} failed`
               : 'Last run'}
@@ -68,7 +70,18 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
 
       {!collapsed && (
         <div className="traffic-result-content">
-          {running && (
+          {running && progress?.phase === 'preparing' && (
+            <div className="traffic-progress">
+              <div className="progress-bar-track">
+                <div className="progress-bar-fill" style={{ width: `${progress.percentComplete}%` }} />
+              </div>
+              <div className="progress-bar-label">
+                Fetching test data - {progress.preparedCount ?? 0}/{progress.preparedTarget ?? '?'} ({progress.percentComplete}%)
+              </div>
+            </div>
+          )}
+
+          {running && progress?.phase !== 'preparing' && (
             <div className="traffic-progress">
               <div className="progress-bar-track">
                 <div className="progress-bar-fill" style={{ width: `${progress?.percentComplete ?? 0}%` }} />

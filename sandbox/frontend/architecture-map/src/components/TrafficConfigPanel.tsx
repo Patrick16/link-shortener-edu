@@ -1,6 +1,7 @@
 import { RAMP_PRESETS, type TrafficConfigState } from '../hooks/useTrafficConfig'
 import { StageGraphEditor } from './StageGraphEditor'
 import { EndpointSequenceBuilder } from './EndpointSequenceBuilder'
+import { DataPoolControls } from './DataPoolControls'
 import { CustomScenarioControls } from './CustomScenarioControls'
 
 interface Props {
@@ -24,6 +25,20 @@ export function TrafficConfigPanel({ config, disabled, running, onRun }: Props) 
 
       <h3 className="traffic-panel-subheading">What to call</h3>
       <EndpointSequenceBuilder disabled={disabled} endpoints={config.endpointOptions} sequence={config.sequence} onChange={config.setSequence} />
+
+      <h3 className="traffic-panel-subheading">Test data</h3>
+      <DataPoolControls
+        disabled={disabled}
+        sources={config.dataSources}
+        enabled={config.dataPoolEnabled}
+        onEnabledChange={config.setDataPoolEnabled}
+        sourceId={config.dataPoolSourceId}
+        onSourceIdChange={config.setDataPoolSourceId}
+        count={config.dataPoolCount}
+        onCountChange={config.setDataPoolCount}
+        mode={config.dataPoolMode}
+        onModeChange={config.setDataPoolMode}
+      />
 
       <h3 className="traffic-panel-subheading">How much load</h3>
       <div className="stop-mode-row">
@@ -90,6 +105,7 @@ export function TrafficConfigPanel({ config, disabled, running, onRun }: Props) 
           points: config.points,
           vus: config.flatVus,
           iterations: config.iterationsTarget,
+          dataPool: config.dataPoolEnabled && config.dataPoolSourceId ? { sourceId: config.dataPoolSourceId, count: config.dataPoolCount, mode: config.dataPoolMode } : undefined,
         }}
         onLoad={config.loadScenario}
         onReset={config.resetScenario}

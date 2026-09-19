@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { controlApi } from '../api/controlApi'
 import type { StagePoint } from '../components/StageGraphEditor'
-import type { CustomScenario, EndpointDefinition, FlowStep, ScenarioMode, TrafficRequest, TrafficStage } from '../types/controlApi'
+import type { CustomScenario, DataPoolMode, DataSourceDefinition, EndpointDefinition, FlowStep, ScenarioMode, TrafficRequest, TrafficStage } from '../types/controlApi'
 
 const DEFAULT_FLAT_VUS = 10
 const DEFAULT_ITERATIONS = 100
+const DEFAULT_DATA_POOL_COUNT = 1000
 
 export interface RampPreset {
   id: string
@@ -84,9 +85,25 @@ export function useTrafficConfig() {
   const [iterationsTarget, setIterationsTarget] = useState(DEFAULT_ITERATIONS)
   const [scenarioName, setScenarioName] = useState('')
 
+  const [dataSources, setDataSources] = useState<DataSourceDefinition[]>([])
+  const [dataPoolEnabled, setDataPoolEnabled] = useState(false)
+  const [dataPoolSourceId, setDataPoolSourceId] = useState('')
+  const [dataPoolCount, setDataPoolCount] = useState(DEFAULT_DATA_POOL_COUNT)
+  const [dataPoolMode, setDataPoolMode] = useState<DataPoolMode>('sequential')
+
   useEffect(() => {
     controlApi.listEndpoints().then(setEndpointOptions).catch(() => {})
+    controlApi.listDataSources().then(setDataSources).catch(() => {})
   }, [])
+
+  // Defaults to whatever the registry offers first, the same pattern EndpointSequenceBuilder uses
+  // for its own service/endpoint pickers - there's currently just the one source, but this stays
+  // correct if a second one is ever added.
+  useEffect(() => {
+    if (dataSources.length > 0 && !dataSources.some((s) => s.id === dataPoolSourceId)) {
+      setDataPoolSourceId(dataSources[0].id)
+    }
+  }, [dataSources, dataPoolSourceId])
 
   // Loads that preset's own starting shape whenever the picker changes. Only meaningful in
   // duration mode - iterations mode has no ramp shape at all (flat VUs by definition).
@@ -107,6 +124,7 @@ export function useTrafficConfig() {
       steps: sequence,
       stages: stopMode === 'duration' ? pointsToStages(points) : undefined,
       iterations: stopMode === 'iterations' ? iterationsTarget : undefined,
+      dataPool: dataPoolEnabled && dataPoolSourceId ? { sourceId: dataPoolSourceId, count: dataPoolCount, mode: dataPoolMode } : undefined,
     }
   }
 
@@ -117,6 +135,12 @@ export function useTrafficConfig() {
     setTotalDuration(saved.totalDurationSeconds)
     setFlatVus(saved.vus)
     setIterationsTarget(saved.iterations)
+    setDataPoolEnabled(saved.dataPool != null)
+    if (saved.dataPool) {
+      setDataPoolSourceId(saved.dataPool.sourceId)
+      setDataPoolCount(saved.dataPool.count)
+      setDataPoolMode(saved.dataPool.mode)
+    }
   }
 
   function resetScenario() {
@@ -126,6 +150,9 @@ export function useTrafficConfig() {
     setTotalDuration(RAMP_PRESETS[0].totalDurationSeconds)
     setFlatVus(DEFAULT_FLAT_VUS)
     setIterationsTarget(DEFAULT_ITERATIONS)
+    setDataPoolEnabled(false)
+    setDataPoolCount(DEFAULT_DATA_POOL_COUNT)
+    setDataPoolMode('sequential')
   }
 
   return {
@@ -146,6 +173,15 @@ export function useTrafficConfig() {
     setIterationsTarget,
     scenarioName,
     setScenarioName,
+    dataSources,
+    dataPoolEnabled,
+    setDataPoolEnabled,
+    dataPoolSourceId,
+    setDataPoolSourceId,
+    dataPoolCount,
+    setDataPoolCount,
+    dataPoolMode,
+    setDataPoolMode,
     canRun,
     buildRequest,
     loadScenario,

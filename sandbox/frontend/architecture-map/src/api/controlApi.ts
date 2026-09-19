@@ -2,6 +2,7 @@ import type {
   ChaosRequest,
   ChaosAction,
   CustomScenario,
+  DataSourceDefinition,
   EndpointDefinition,
   InfraStatus,
   ManagedContainer,
@@ -75,6 +76,7 @@ export const controlApi = {
   flushRedisCache: () => request<{ flushed: string }>('/api/containers/redis/flush-cache', 'POST'),
 
   listEndpoints: () => request<EndpointDefinition[]>('/api/endpoints'),
+  listDataSources: () => request<DataSourceDefinition[]>('/api/data-sources'),
 
   getInfraStatus: () => request<InfraStatus>('/api/infra/status'),
   setNginxEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/nginx', 'POST', { enabled }),

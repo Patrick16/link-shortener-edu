@@ -40,7 +40,13 @@ export function useTrafficRun(): TrafficRunState {
     connection.on('trafficProgress', (p: TrafficProgress) => {
       if (cancelled) return
       setProgress(p)
-      setProgressHistory((prev) => [...prev, p])
+      // A "preparing" push (fetching a requested data pool, before k6 even starts) has no
+      // meaningful elapsedSeconds/activeVus/iterationsPerSecond - keeping it out of history is what
+      // keeps the live VUs/iterations-per-second charts from getting a stray point at x=0 once the
+      // real run starts.
+      if (p.phase !== 'preparing') {
+        setProgressHistory((prev) => [...prev, p])
+      }
     })
     connection.on('trafficCompleted', (r: TrafficReport) => {
       if (cancelled) return

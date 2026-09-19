@@ -66,9 +66,26 @@ public class DockerService : IDockerService
             "redirect-api.resolve", "redirect-api", "GET", "/{{hash}}",
             null,
             new Dictionary<string, string>(), ["hash"],
-            "Resolve a short link and redirect - uses the hash a Create step earlier in the sequence produced, or a fixture link if none ran. Right after Create in the same step, this often 404s: LinkApi returns the hash before ShortenerService has actually persisted it via RabbitMQ - a real eventual-consistency window, not a bug"),
+            "Resolve a short link and redirect - uses the hash a Create step earlier in the sequence produced, a preloaded data pool if one was requested (see DataSourceRegistry), or a fixture link if neither ran. Right after Create in the same step, this often 404s: LinkApi returns the hash before ShortenerService has actually persisted it via RabbitMQ - a real eventual-consistency window, not a bug"),
     ];
 
+    // What a run's optional DataPoolRequest can preload - see DataSourceDefinition for why this is
+    // separate from EndpointRegistry above (a bulk paginated read done once before the run starts,
+    // not a per-iteration call). ProducesVar "hash" is flow.js's own variable name, the same one
+    // link-api.create's Produces entry writes to, so a preloaded pool and a live Create step both
+    // feed the exact same downstream steps without flow.js needing to treat them differently.
+    private static readonly IReadOnlyList<DataSourceDefinition> DataSourceRegistry =
+    [
+        new(
+            "link-api.links", "link-api", "hash",
+            "Existing short links, paged from GET /Links - use this to make a Resolve-only sequence hit varied real records instead of the same one fixture link every iteration"),
+    ];
+
+    // Reused across every FetchDataPoolAsync call rather than one-per-call - this instance is
+    // itself a singleton service, so that's exactly the lifetime HttpClient is meant to be used at
+    // (a fresh instance per call risks socket exhaustion under load, which is ironic for a load
+    // testing tool to hit).
+    private readonly HttpClient _httpClient = new();
     private readonly DockerClient _client;
     private readonly string _composeProject;
     private readonly string _composeNetwork;
@@ -269,6 +286,23 @@ public class DockerService : IDockerService
 
         await EnsureImageAsync(K6Image, ct);
 
+        // A requested data pool is fetched from the real app now, before k6 even starts, and
+        // reported through the same onProgress callback as the run itself (Phase "preparing") so
+        // the UI can show it instead of a frozen "starting..." while a few hundred requests happen
+        // server-side. Null SourceId (unknown - already rejected by Program.cs) falls back to no
+        // pool rather than failing the whole run over it.
+        string? poolVar = null;
+        IReadOnlyList<string>? pool = null;
+        if (request.DataPool is { Count: > 0 } poolRequest)
+        {
+            var source = DataSourceRegistry.FirstOrDefault(s => s.Id == poolRequest.SourceId);
+            if (source is not null)
+            {
+                pool = await FetchDataPoolAsync(source, poolRequest.Count, onProgress, ct);
+                poolVar = source.ProducesVar;
+            }
+        }
+
         // Exactly one of three shapes drives how the run ends - k6's own executors, not reimplemented:
         // a target iteration count (shared-iterations - flat VUs, runs until that many iterations are
         // done, however long that takes), a custom ramp (--stage per segment of the UI's point graph -
@@ -320,6 +354,17 @@ public class DockerService : IDockerService
             $"STEPS_JSON={JsonSerializer.Serialize(resolvedSteps, StepJsonOptions)}",
         };
 
+        if (pool is { Count: > 0 })
+        {
+            env.Add($"POOL_VAR={poolVar}");
+            env.Add($"POOL_MODE={request.DataPool!.Mode}");
+            // Only used for flow.js's sequential round-robin spread - a best-effort approximation
+            // even during a ramp (Vus there is just the ramp's starting point), which is fine since
+            // sequential mode only promises even-ish coverage of the pool, not a strict guarantee.
+            env.Add($"POOL_VUS_HINT={Math.Max(1, request.Vus)}");
+            env.Add($"POOL_JSON={JsonSerializer.Serialize(pool, StepJsonOptions)}");
+        }
+
         var created = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
         {
             Image = K6Image,
@@ -363,6 +408,77 @@ public class DockerService : IDockerService
         await _client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
 
         return report;
+    }
+
+    // Dispatches on the source id so adding a second DataSourceDefinition later only means adding a
+    // case here, not touching RunTrafficAsync. An id that reaches here without a matching case (only
+    // possible if DataSourceRegistry grows a source this switch hasn't been taught yet) yields an
+    // empty pool rather than throwing - a run should still proceed using the fixture fallback.
+    private Task<IReadOnlyList<string>> FetchDataPoolAsync(DataSourceDefinition source, int count, Func<TrafficProgress, Task> onProgress, CancellationToken ct) =>
+        source.Id switch
+        {
+            "link-api.links" => FetchLinkHashesAsync(count, onProgress, ct),
+            _ => Task.FromResult<IReadOnlyList<string>>([]),
+        };
+
+    // Pages through the real GET /Links (the same nginx-bypass-aware URL k6 itself would use) until
+    // `count` hashes are collected or the app runs out of links, pushing a "preparing" progress
+    // update after every page so a large pool doesn't look like a hang. Fewer real links existing
+    // than requested isn't an error - the pool just ends up smaller, which the caller can see in
+    // PreparedCount ending below PreparedTarget in the final push.
+    private async Task<IReadOnlyList<string>> FetchLinkHashesAsync(int count, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
+    {
+        var baseUrl = $"http://{(_nginxBypassed ? "link-api:8080" : "nginx:8082")}";
+        var hashes = new List<string>(count);
+        var page = 1;
+
+        while (hashes.Count < count)
+        {
+            HttpResponseMessage response;
+            try
+            {
+                response = await _httpClient.GetAsync($"{baseUrl}/Links?page={page}", ct);
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogWarning(ex, "Fetching link pool page {Page} failed - stopping with {Count} collected", page, hashes.Count);
+                break;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                break;
+            }
+
+            using var doc = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(ct));
+            var items = doc.RootElement.GetProperty("items");
+            if (items.GetArrayLength() == 0)
+            {
+                break;
+            }
+
+            foreach (var item in items.EnumerateArray())
+            {
+                hashes.Add(item.GetProperty("shortenLink").GetString()!);
+                if (hashes.Count >= count)
+                {
+                    break;
+                }
+            }
+
+            await onProgress(new TrafficProgress(
+                0, 0, (int)Math.Min(100, hashes.Count * 100.0 / count), 0, 0, 0,
+                Phase: "preparing", PreparedCount: hashes.Count, PreparedTarget: count));
+
+            if (page >= doc.RootElement.GetProperty("totalPages").GetInt32())
+            {
+                break;
+            }
+
+            page++;
+        }
+
+        return hashes;
     }
 
     // Follows the container's combined stdout/stderr as it runs, parsing k6's own once-a-second
@@ -672,6 +788,8 @@ public class DockerService : IDockerService
     }
 
     public IReadOnlyList<EndpointDefinition> ListKnownEndpoints() => EndpointRegistry;
+
+    public IReadOnlyList<DataSourceDefinition> ListDataSources() => DataSourceRegistry;
 
     private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, IReadOnlyList<string> stepIds, long exitCode, string rawOutput, CancellationToken ct)
     {

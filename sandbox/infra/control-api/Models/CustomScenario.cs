@@ -17,4 +17,5 @@ public record CustomScenario(
     int TotalDurationSeconds,
     IReadOnlyList<ScenarioPoint> Points,
     int Vus = 1,
-    int Iterations = 100);
+    int Iterations = 100,
+    DataPoolRequest? DataPool = null);
