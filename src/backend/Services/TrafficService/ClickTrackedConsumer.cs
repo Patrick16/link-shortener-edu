@@ -22,7 +22,7 @@ public sealed class ClickTrackedConsumer(
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
         _consumer.ConsumeAsync<ClickTrackedEvent>(QueueName, Topics.ClickTracked, HandleAsync, stoppingToken);
 
-    private async Task HandleAsync(ClickTrackedEvent @event, CancellationToken cancellationToken)
+    internal async Task HandleAsync(ClickTrackedEvent @event, CancellationToken cancellationToken)
     {
         await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 

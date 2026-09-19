@@ -39,7 +39,7 @@ public class StatusPollerService(
         }
     }
 
-    private static bool HasChanged(IReadOnlyList<ManagedContainer> previous, IReadOnlyList<ManagedContainer> current)
+    internal static bool HasChanged(IReadOnlyList<ManagedContainer> previous, IReadOnlyList<ManagedContainer> current)
     {
         if (previous.Count != current.Count)
         {

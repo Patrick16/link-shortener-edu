@@ -22,7 +22,7 @@ public sealed class LinkCreatedConsumer(
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
         _consumer.ConsumeAsync<LinkCreatedEvent>(QueueName, Topics.LinkCreated, HandleAsync, stoppingToken);
 
-    private async Task HandleAsync(LinkCreatedEvent @event, CancellationToken cancellationToken)
+    internal async Task HandleAsync(LinkCreatedEvent @event, CancellationToken cancellationToken)
     {
         await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 

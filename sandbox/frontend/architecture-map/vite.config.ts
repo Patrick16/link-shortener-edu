@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
@@ -8,5 +9,9 @@ export default defineConfig({
     // Fixed (not auto-picked) so it matches ControlApi's default CORS allow-list.
     port: 5174,
     strictPort: true,
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.ts',
   },
 })
