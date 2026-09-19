@@ -20,5 +20,9 @@ public class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbCont
         modelBuilder.Entity<Link>().ToTable(LinksTable);
         modelBuilder.Entity<Link>()
             .HasKey(x => x.Hash);
+        // Backs LinkApi's GET /Links?page=N - filter by UserId (when a token is present) and sort
+        // by CreatedAt in the same query.
+        modelBuilder.Entity<Link>()
+            .HasIndex(x => new { x.UserId, x.CreatedAt });
     }
 }

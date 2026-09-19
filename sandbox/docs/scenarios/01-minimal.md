@@ -14,7 +14,7 @@ tracking — scenario 2 — is also live; see [`docs/scenarios/02-async.md`](02-
 | `redis`              | infra   | 6379  | cache for resolved links                                     |
 | `rabbitmq`           | infra   | 5672 / 15672 (UI) | durable queue between the APIs and their workers  |
 | `auth-api`           | .NET API | 8081  | `POST /register`, `POST /login` — issues a JWT               |
-| `link-api`           | .NET API | 8082  | `POST /links`, `GET /links/{hash}`                            |
+| `link-api`           | .NET API | 8082  | `POST /links`, `GET /links/{hash}`, `GET /links?page=N`       |
 | `redirect-api`       | .NET API | 8083  | `GET /{hash}` → 302 to the original URL                       |
 | `shortener-service`  | worker  | —     | consumes `LinkCreatedEvent`, persists the link to Postgres    |
 | `traffic-service`    | worker  | —     | consumes `ClickTrackedEvent`, persists the click to Postgres  |
@@ -98,6 +98,10 @@ curl -X POST http://localhost:8082/links \
 
 # Follow it (302 to https://example.com)
 curl -i http://localhost:8083/AbC12xYz
+
+# List links, 50 per page - anonymous sees everyone's; with a Bearer token, only the caller's own
+curl "http://localhost:8082/links?page=1"
+curl "http://localhost:8082/links?page=1" -H "Authorization: Bearer <token from register/login>"
 ```
 
 RabbitMQ's management UI (`http://localhost:15672`, guest/guest) is worth a look after creating a

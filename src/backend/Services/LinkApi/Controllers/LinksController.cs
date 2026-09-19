@@ -4,6 +4,7 @@ using Common.Models;
 using Contracts.Events;
 using Infrastructure;
 using LinkApi.Models;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -17,6 +18,8 @@ public class LinksController(
     IMessagePublisher publisher,
     IHashGenerator hashGenerator) : Controller
 {
+    private const int PageSize = 50;
+
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _service = service;
     private readonly IMessagePublisher _publisher = publisher;
@@ -50,6 +53,43 @@ public class LinksController(
         await _publisher.PublishAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
 
         return new LinkResponse(hash, createdAt);
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<LinksPageResponse>> GetLinks(
+        [FromQuery] int page = 1,
+        CancellationToken cancellationToken = default)
+    {
+        if (page < 1)
+        {
+            return Problem(
+                detail: "page must be 1 or greater.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid query parameter.");
+        }
+
+        // Same optional-auth pattern as CreateLink: anonymous callers get every link, a valid
+        // Bearer token narrows the results down to the caller's own.
+        var userIdClaim = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+        var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : (Guid?)null;
+
+        var query = _context.Links.AsNoTracking().AsQueryable();
+        if (userId is not null)
+        {
+            query = query.Where(x => x.UserId == userId);
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var items = await query
+            .OrderByDescending(x => x.CreatedAt)
+            .Skip((page - 1) * PageSize)
+            .Take(PageSize)
+            .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt))
+            .ToListAsync(cancellationToken);
+
+        var totalPages = (int)Math.Ceiling(totalCount / (double)PageSize);
+
+        return new LinksPageResponse(items, page, PageSize, totalCount, totalPages);
     }
 
     [HttpGet("{hash}")]

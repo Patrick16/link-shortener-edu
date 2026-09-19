@@ -126,4 +126,71 @@ public class LinksControllerTests
 
         Assert.IsType<NotFoundResult>(result.Result);
     }
+
+    [Fact]
+    public async Task GetLinks_AnonymousCaller_ReturnsEveryUsersLinks()
+    {
+        await using var context = NewContext();
+        context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, Guid.NewGuid()));
+        context.Links.Add(new Link("bbb22222", "https://b.example", "bbb22222", DateTime.UtcNow, null));
+        await context.SaveChangesAsync();
+        var sut = NewController(context, out _, out _, out _);
+
+        var result = await sut.GetLinks(page: 1, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        Assert.Equal(2, response.TotalCount);
+        Assert.Equal(2, response.Items.Count);
+    }
+
+    [Fact]
+    public async Task GetLinks_AuthenticatedCaller_ReturnsOnlyOwnLinks()
+    {
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, userId));
+        context.Links.Add(new Link("bbb22222", "https://b.example", "bbb22222", DateTime.UtcNow, Guid.NewGuid()));
+        context.Links.Add(new Link("ccc33333", "https://c.example", "ccc33333", DateTime.UtcNow, null));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var result = await sut.GetLinks(page: 1, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        Assert.Equal(1, response.TotalCount);
+        Assert.Equal("aaa11111", Assert.Single(response.Items).ShortenLink);
+    }
+
+    [Fact]
+    public async Task GetLinks_SecondPage_SkipsFirstPageSize()
+    {
+        await using var context = NewContext();
+        for (var i = 0; i < 60; i++)
+        {
+            var hash = $"h{i:D7}";
+            context.Links.Add(new Link(hash, $"https://example.com/{i}", hash, DateTime.UtcNow.AddSeconds(i), null));
+        }
+        await context.SaveChangesAsync();
+        var sut = NewController(context, out _, out _, out _);
+
+        var result = await sut.GetLinks(page: 2, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        Assert.Equal(60, response.TotalCount);
+        Assert.Equal(2, response.TotalPages);
+        Assert.Equal(10, response.Items.Count);
+    }
+
+    [Fact]
+    public async Task GetLinks_InvalidPage_ReturnsProblem()
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out _, out _);
+
+        var result = await sut.GetLinks(page: 0, CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+    }
 }
