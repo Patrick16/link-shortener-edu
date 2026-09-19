@@ -98,8 +98,28 @@ export function StageGraphEditor({ points, onChange, totalDurationSeconds, onTot
     onChange(points.filter((_, i) => i !== index))
   }
 
+  function removePoint(index: number) {
+    if (disabled || index === 0 || index === points.length - 1) return
+    onChange(points.filter((_, i) => i !== index))
+  }
+
   const path = points.map((p) => `${toX(p.t).toFixed(1)},${toY(p.vus).toFixed(1)}`).join(' ')
   const xTicks = [0, Math.round(totalDurationSeconds / 2), totalDurationSeconds]
+
+  // A label per point so its time/VUs are readable while dragging or right after a click adds it,
+  // not just on hover (the <title> tooltip needs a pause to appear). Anchored to the point's own
+  // side at the ends so the text doesn't run past the plot edge, and flipped below the point when
+  // it's too close to the top edge to fit a label above.
+  function labelFor(p: StagePoint, index: number) {
+    const x = toX(p.t)
+    const above = toY(p.vus) - 12
+    const y = above < PAD_TOP + 8 ? toY(p.vus) + 18 : above
+    const isFirst = index === 0
+    const isLast = index === points.length - 1
+    const anchor: 'start' | 'middle' | 'end' = isFirst ? 'start' : isLast ? 'end' : 'middle'
+    const dx = isFirst ? 5 : isLast ? -5 : 0
+    return { x: x + dx, y, anchor }
+  }
 
   return (
     <div className="stage-graph">
@@ -175,8 +195,53 @@ export function StageGraphEditor({ points, onChange, totalDurationSeconds, onTot
             <title>{`${p.t}s → ${p.vus} VUs`}</title>
           </circle>
         ))}
+
+        {points.map((p, i) => {
+          const { x, y, anchor } = labelFor(p, i)
+          return (
+            <text key={`label-${i}`} x={x} y={y} textAnchor={anchor} className="stage-graph-point-label">
+              {p.t}s, {p.vus} VUs
+            </text>
+          )
+        })}
       </svg>
       <p className="stage-graph-hint">Click empty space to add a point, drag a point to reshape the ramp, double-click a middle point to remove it.</p>
+
+      <ul className="stage-graph-points-list">
+        {points.map((p, i) => {
+          const isFirst = i === 0
+          const isLast = i === points.length - 1
+          return (
+            <li className="stage-graph-point-row" key={i}>
+              <span className="stage-graph-point-row-index">{i + 1}</span>
+              <label className="stage-graph-point-row-field">
+                t (s)
+                <input
+                  type="number"
+                  min={0}
+                  max={totalDurationSeconds}
+                  value={p.t}
+                  disabled={disabled || isFirst || isLast}
+                  onChange={(e) => updatePoint(i, { t: Number(e.target.value), vus: p.vus })}
+                />
+              </label>
+              <label className="stage-graph-point-row-field">
+                VUs
+                <input
+                  type="number"
+                  min={0}
+                  value={p.vus}
+                  disabled={disabled}
+                  onChange={(e) => updatePoint(i, { t: p.t, vus: Math.max(0, Number(e.target.value)) })}
+                />
+              </label>
+              <button type="button" onClick={() => removePoint(i)} disabled={disabled || isFirst || isLast}>
+                Remove
+              </button>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
