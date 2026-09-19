@@ -62,6 +62,7 @@ function App() {
             data={data}
             containers={containers}
             trafficActive={trafficRun.running}
+            selectedConnectionIndex={selection?.kind === 'connection' ? selection.index : null}
             onSelectComponent={(id) => setSelection({ kind: 'component', id })}
             onSelectConnection={(index) => setSelection({ kind: 'connection', index })}
           />

@@ -11,6 +11,7 @@ interface Props {
   data: ArchitectureData
   containers: Record<string, ManagedContainer[]>
   trafficActive: boolean
+  selectedConnectionIndex: number | null
   onSelectComponent: (componentId: string) => void
   onSelectConnection: (index: number) => void
 }
@@ -21,7 +22,7 @@ const nodeTypes = { service: ServiceNode }
 // filter here (a "1. Minimal stack" / "2. Click tracking" switcher hiding parts of the graph), but
 // it turned out to add more confusion (what's hidden right now?) than it removed, so the graph now
 // just always draws the whole real topology.
-export function Diagram({ data, containers, trafficActive, onSelectComponent, onSelectConnection }: Props) {
+export function Diagram({ data, containers, trafficActive, selectedConnectionIndex, onSelectComponent, onSelectConnection }: Props) {
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
 
   const computedNodes: Node[] = useMemo(
@@ -64,21 +65,40 @@ export function Diagram({ data, containers, trafficActive, onSelectComponent, on
     () =>
       data.connections.map((connection, index) => {
         const isFlowing = trafficActive && isTrafficFlowEdge(connection.from, connection.to)
+        const isSelected = selectedConnectionIndex === index
+        const isHighlighted = isFlowing || isSelected
         return {
           id: `${connection.from}-${connection.to}-${index}`,
           source: connection.from,
           target: connection.to,
           label: connection.label,
           animated: isFlowing,
-          zIndex: isFlowing ? 1 : 0,
+          // A selected edge always renders above every other edge (including a flowing one it may
+          // overlap with) so clicking it in a dense tangle actually brings it forward, not just
+          // marks it.
+          zIndex: isSelected ? 2 : isFlowing ? 1 : 0,
           style: {
-            stroke: isFlowing ? 'var(--accent)' : 'var(--text)',
-            strokeWidth: isFlowing ? 3 : 2,
+            stroke: isHighlighted ? 'var(--accent)' : 'var(--text)',
+            strokeWidth: isSelected ? 4 : isFlowing ? 3 : 2,
+            filter: isSelected ? 'drop-shadow(0 0 4px var(--accent-border))' : undefined,
           },
-          markerEnd: { type: MarkerType.ArrowClosed, color: isFlowing ? 'var(--accent)' : 'var(--text)' },
+          markerEnd: { type: MarkerType.ArrowClosed, color: isHighlighted ? 'var(--accent)' : 'var(--text)' },
+          // React Flow's edge label default is an opaque white pill - replace it with the app's own
+          // dark surface + hairline border so it reads on the dark canvas instead of standing out as
+          // a stray light rectangle. A selected edge's label gets the same accent treatment as its
+          // line so the two read as one highlighted unit.
+          labelStyle: { fill: isSelected ? 'var(--accent)' : 'var(--text-h)', fontSize: 12, fontWeight: isSelected ? 700 : 500 },
+          labelBgStyle: {
+            fill: 'var(--code-bg)',
+            fillOpacity: 0.92,
+            stroke: isSelected ? 'var(--accent)' : 'var(--border)',
+            strokeWidth: isSelected ? 1.5 : 1,
+          },
+          labelBgPadding: [6, 4] as [number, number],
+          labelBgBorderRadius: 4,
         }
       }),
-    [data.connections, trafficActive],
+    [data.connections, trafficActive, selectedConnectionIndex],
   )
 
   return (
