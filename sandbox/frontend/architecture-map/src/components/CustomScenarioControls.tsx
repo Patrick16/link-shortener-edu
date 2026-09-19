@@ -1,32 +1,20 @@
 import { useEffect, useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import type { CustomScenario } from '../types/controlApi'
-import type { StagePoint } from './StageGraphEditor'
 
 interface Props {
   disabled: boolean
   scenarioName: string
   onScenarioNameChange: (name: string) => void
-  endpoints: string[]
-  points: StagePoint[]
-  totalDurationSeconds: number
+  current: Omit<CustomScenario, 'name'>
   onLoad: (scenario: CustomScenario) => void
   onReset: () => void
 }
 
-// Save/load/delete of a named scenario - the endpoint step sequence itself lives in
-// EndpointSequenceBuilder and the load ramp in StageGraphEditor; this just persists whatever
-// combination of the two is currently set up, under a name, so it can be reloaded later.
-export function CustomScenarioControls({
-  disabled,
-  scenarioName,
-  onScenarioNameChange,
-  endpoints,
-  points,
-  totalDurationSeconds,
-  onLoad,
-  onReset,
-}: Props) {
+// Save/load/delete of a named scenario - the endpoint sequence, ramp graph, and iteration settings
+// all live elsewhere in TrafficPanel; this just persists whatever combination is currently set up
+// (passed in as `current`), under a name, so it can be reloaded later.
+export function CustomScenarioControls({ disabled, scenarioName, onScenarioNameChange, current, onLoad, onReset }: Props) {
   const [scenarios, setScenarios] = useState<CustomScenario[]>([])
   const [selectedName, setSelectedName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -59,12 +47,7 @@ export function CustomScenarioControls({
     setBusy(true)
     setError(null)
     try {
-      const saved = await controlApi.saveScenario({
-        name: scenarioName.trim(),
-        endpoints,
-        totalDurationSeconds,
-        points,
-      })
+      const saved = await controlApi.saveScenario({ name: scenarioName.trim(), ...current })
       refreshScenarios()
       setSelectedName(saved.name)
     } catch (err) {
@@ -116,7 +99,7 @@ export function CustomScenarioControls({
           placeholder="Scenario name"
           disabled={disabled}
         />
-        <button onClick={handleSave} disabled={disabled || busy || !scenarioName.trim() || endpoints.length === 0}>
+        <button onClick={handleSave} disabled={disabled || busy || !scenarioName.trim() || current.steps.length === 0}>
           {busy ? 'Saving...' : selectedName ? 'Save changes' : 'Save as new'}
         </button>
       </div>

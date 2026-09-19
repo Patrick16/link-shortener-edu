@@ -234,15 +234,29 @@ public class DockerService : IDockerService
     // own property names otherwise.
     private static readonly JsonSerializerOptions StepJsonOptions = new(JsonSerializerDefaults.Web);
 
+    private sealed record ResolvedStep(
+        string ServiceId, string Method, string PathTemplate, string? BodyTemplate,
+        IReadOnlyDictionary<string, string> Produces, double PauseAfterSeconds);
+
     public async Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
-        // Every run resolves its ordered endpoint ids against the server-side registry and executes
-        // that exact sequence, once per k6 iteration - see flow.js. Unknown ids are already rejected
-        // by Program.cs before this is ever called; this null-check is just defense in depth.
-        var resolvedSteps = request.Endpoints
-            .Select(id => EndpointRegistry.FirstOrDefault(e => e.Id == id))
-            .ToList();
-        if (resolvedSteps.Count == 0 || resolvedSteps.Any(s => s is null))
+        // Every run resolves its ordered step list against the server-side registry and executes
+        // that exact sequence, once per k6 iteration, each step's own pause included - see flow.js.
+        // Unknown ids are already rejected by Program.cs before this is ever called; the null
+        // return here is just defense in depth.
+        var resolvedSteps = new List<ResolvedStep>();
+        foreach (var step in request.Steps)
+        {
+            var definition = EndpointRegistry.FirstOrDefault(e => e.Id == step.EndpointId);
+            if (definition is null)
+            {
+                return null;
+            }
+
+            resolvedSteps.Add(new ResolvedStep(definition.ServiceId, definition.Method, definition.PathTemplate, definition.BodyTemplate, definition.Produces, step.PauseAfterSeconds));
+        }
+
+        if (resolvedSteps.Count == 0)
         {
             return null;
         }
@@ -255,14 +269,23 @@ public class DockerService : IDockerService
 
         await EnsureImageAsync(K6Image, ct);
 
-        // A custom ramp profile replaces flat --vus/--duration with k6's own --stage flags (one
-        // per segment of the UI's point graph) - --vus still sets the starting VU count k6 ramps
-        // from, it just no longer sets a constant. k6's periodic "running (...), X/Y VUs, N
-        // complete" status line keeps the same overall shape either way - only the elapsed-time
-        // formatting itself depends on total duration, handled by K6ProgressLine above.
+        // Exactly one of three shapes drives how the run ends - k6's own executors, not reimplemented:
+        // a target iteration count (shared-iterations - flat VUs, runs until that many iterations are
+        // done, however long that takes), a custom ramp (--stage per segment of the UI's point graph -
+        // ramping-vus), or a flat --vus/--duration constant. k6's periodic "running (...), X/Y VUs, N
+        // complete" status line keeps the same overall shape in all three (confirmed against real runs
+        // of each before relying on it) - only the elapsed-time formatting depends on total duration
+        // (K6ProgressLine above), and only iterations mode has no fixed total duration at all.
         var cmd = new List<string> { "run", "--no-color", "--summary-export", "/scripts/summary.json", "--vus", request.Vus.ToString() };
         int totalSeconds;
-        if (request.Stages is { Count: > 0 } stages)
+        int? targetIterations = request.Iterations;
+        if (targetIterations is { } iterations)
+        {
+            cmd.Add("--iterations");
+            cmd.Add(iterations.ToString());
+            totalSeconds = 0;
+        }
+        else if (request.Stages is { Count: > 0 } stages)
         {
             foreach (var stage in stages)
             {
@@ -325,12 +348,14 @@ public class DockerService : IDockerService
         }
 
         _logger.LogWarning(
-            "Running k6 scenario {Scenario} ({Vus} start VUs, {Duration}s{StageNote}) as {ContainerId}",
-            request.Scenario, request.Vus, totalSeconds, request.Stages is { Count: > 0 } ? $", {request.Stages.Count} stages" : "", created.ID);
+            "Running k6 scenario {Scenario} ({Vus} VUs{Mode}) as {ContainerId}",
+            request.Scenario, request.Vus,
+            targetIterations is { } t ? $", {t} iterations" : request.Stages is { Count: > 0 } s ? $", {totalSeconds}s, {s.Count} stages" : $", {totalSeconds}s",
+            created.ID);
 
         await _client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
 
-        var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, onProgress, ct);
+        var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, targetIterations, onProgress, ct);
 
         var inspect = await _client.Containers.InspectContainerAsync(created.ID, ct);
         var report = await ReadSummaryAsync(created.ID, request.Scenario, inspect.State.ExitCode, output, ct);
@@ -342,8 +367,11 @@ public class DockerService : IDockerService
     // Follows the container's combined stdout/stderr as it runs, parsing k6's own once-a-second
     // "running (Ns), X/X VUs, N complete..." status lines into progress pushes, while also
     // building up the full text for the raw-output field of the final report. Returns once the
-    // stream hits EOF, which happens when k6 itself exits.
-    private async Task<string> StreamLogsWithProgressAsync(string containerId, int totalSeconds, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
+    // stream hits EOF, which happens when k6 itself exits. targetIterations non-null means an
+    // iteration-count run - there's no fixed total time to measure against, so percent comes from
+    // iterations done/target instead of elapsed/totalSeconds, and the "past the requested duration"
+    // skip below doesn't apply (totalSeconds is 0 in that mode and never meant to bound anything).
+    private async Task<string> StreamLogsWithProgressAsync(string containerId, int totalSeconds, int? targetIterations, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
         var logStream = await _client.Containers.GetContainerLogsAsync(
             containerId,
@@ -382,11 +410,12 @@ public class DockerService : IDockerService
                 var minutes = match.Groups[2].Success ? double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture) : 0;
                 var seconds = double.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
                 var elapsed = hours * 3600 + minutes * 60 + seconds;
-                if (elapsed > totalSeconds)
+                if (targetIterations is null && elapsed > totalSeconds)
                 {
                     // k6 prints one extra status line during its graceful-stop tail, past the
                     // requested duration - skip it rather than report a misleading rate spike from
-                    // the tiny elapsed delta.
+                    // the tiny elapsed delta. Doesn't apply to iteration-count runs, which have no
+                    // requested duration to be "past".
                     continue;
                 }
 
@@ -397,8 +426,10 @@ public class DockerService : IDockerService
                 lastElapsed = elapsed;
                 lastIterations = iterations;
 
-                var percent = (int)Math.Min(100, elapsed / totalSeconds * 100);
-                await onProgress(new TrafficProgress((int)elapsed, totalSeconds, percent, activeVus, iterations, rate));
+                var percent = targetIterations is { } target
+                    ? (int)Math.Min(100, (double)iterations / target * 100)
+                    : (int)Math.Min(100, elapsed / totalSeconds * 100);
+                await onProgress(new TrafficProgress((int)elapsed, totalSeconds, percent, activeVus, iterations, rate, targetIterations));
             }
 
             pendingLine.Clear();

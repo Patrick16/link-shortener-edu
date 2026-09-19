@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { controlApi } from '../api/controlApi'
 import type { TrafficRunState } from '../hooks/useTrafficRun'
-import type { EndpointDefinition, TrafficStage } from '../types/controlApi'
+import type { EndpointDefinition, FlowStep, ScenarioMode, TrafficStage } from '../types/controlApi'
 import { AxisChart } from './AxisChart'
 import { StageGraphEditor, type StagePoint } from './StageGraphEditor'
 import { EndpointSequenceBuilder } from './EndpointSequenceBuilder'
 import { CustomScenarioControls } from './CustomScenarioControls'
+
+const DEFAULT_FLAT_VUS = 10
+const DEFAULT_ITERATIONS = 100
 
 const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: string }> = [
   { key: 'avg', label: 'avg' },
@@ -83,17 +86,21 @@ function pointsToStages(points: StagePoint[]): TrafficStage[] {
 // know whether traffic is running too, to animate the edges the flow actually exercises.
 export function TrafficPanel({ running, progress, progressHistory, report, error, start }: TrafficRunState) {
   const [endpointOptions, setEndpointOptions] = useState<EndpointDefinition[]>([])
-  const [sequence, setSequence] = useState<string[]>([])
+  const [sequence, setSequence] = useState<FlowStep[]>([])
+  const [stopMode, setStopMode] = useState<ScenarioMode>('duration')
   const [rampPreset, setRampPreset] = useState(RAMP_PRESETS[0].id)
   const [totalDuration, setTotalDuration] = useState(RAMP_PRESETS[0].totalDurationSeconds)
   const [points, setPoints] = useState<StagePoint[]>(RAMP_PRESETS[0].points)
+  const [flatVus, setFlatVus] = useState(DEFAULT_FLAT_VUS)
+  const [iterationsTarget, setIterationsTarget] = useState(DEFAULT_ITERATIONS)
   const [scenarioName, setScenarioName] = useState('')
 
   useEffect(() => {
     controlApi.listEndpoints().then(setEndpointOptions).catch(() => {})
   }, [])
 
-  // Loads that preset's own starting shape whenever the picker changes.
+  // Loads that preset's own starting shape whenever the picker changes. Only meaningful in
+  // duration mode - iterations mode has no ramp shape at all (flat VUs by definition).
   useEffect(() => {
     const preset = RAMP_PRESETS.find((p) => p.id === rampPreset)
     if (!preset) return
@@ -103,61 +110,110 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
 
   const maxLatency = report?.httpReqDuration ? Math.max(...LATENCY_ROWS.map((r) => report.httpReqDuration![r.key])) : 0
   const selectedPresetDescription = RAMP_PRESETS.find((p) => p.id === rampPreset)?.description
-  const totalSeconds = progress?.totalSeconds ?? totalDuration
+  // No fixed total duration in iterations mode - the live charts' X axis just tracks how far
+  // elapsed has gotten so far instead of a known end point.
+  const chartTotalSeconds = progress?.targetIterations != null ? Math.max(1, progress.elapsedSeconds) : (progress?.totalSeconds ?? totalDuration)
   const vusPoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.activeVus }))
   const ratePoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.iterationsPerSecond }))
+  const canRun = sequence.length > 0 && (stopMode === 'duration' ? points.length >= 2 : flatVus >= 1 && iterationsTarget >= 1)
+
+  function handleRun() {
+    start({
+      scenario: scenarioName.trim() || 'flow',
+      vus: stopMode === 'iterations' ? flatVus : (points[0]?.vus ?? 0),
+      durationSeconds: totalDuration,
+      steps: sequence,
+      stages: stopMode === 'duration' ? pointsToStages(points) : undefined,
+      iterations: stopMode === 'iterations' ? iterationsTarget : undefined,
+    })
+  }
 
   return (
     <div className="traffic-panel">
       <div className="traffic-panel-controls">
-        <select value={rampPreset} onChange={(e) => setRampPreset(e.target.value)} disabled={running}>
-          {RAMP_PRESETS.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <button
-          onClick={() =>
-            start({
-              scenario: scenarioName.trim() || 'flow',
-              vus: points[0]?.vus ?? 0,
-              durationSeconds: totalDuration,
-              stages: pointsToStages(points),
-              endpoints: sequence,
-            })
-          }
-          disabled={running || sequence.length === 0 || points.length < 2}
-        >
+        <button onClick={handleRun} disabled={running || !canRun}>
           {running ? `Running ${scenarioName.trim() || 'flow'}...` : 'Run traffic'}
         </button>
       </div>
-
-      {selectedPresetDescription && <p className="scenario-description-text">{selectedPresetDescription}</p>}
 
       <h3 className="traffic-panel-subheading">What to call</h3>
       <EndpointSequenceBuilder disabled={running} endpoints={endpointOptions} sequence={sequence} onChange={setSequence} />
 
       <h3 className="traffic-panel-subheading">How much load</h3>
-      <StageGraphEditor points={points} onChange={setPoints} totalDurationSeconds={totalDuration} onTotalDurationChange={setTotalDuration} disabled={running} />
+      <div className="stop-mode-row">
+        <label>
+          <input type="radio" name="stopMode" checked={stopMode === 'duration'} onChange={() => setStopMode('duration')} disabled={running} />
+          Run for a duration
+        </label>
+        <label>
+          <input type="radio" name="stopMode" checked={stopMode === 'iterations'} onChange={() => setStopMode('iterations')} disabled={running} />
+          Run a fixed number of iterations
+        </label>
+      </div>
+
+      {stopMode === 'duration' ? (
+        <>
+          <select value={rampPreset} onChange={(e) => setRampPreset(e.target.value)} disabled={running}>
+            {RAMP_PRESETS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+          {selectedPresetDescription && <p className="scenario-description-text">{selectedPresetDescription}</p>}
+          <StageGraphEditor points={points} onChange={setPoints} totalDurationSeconds={totalDuration} onTotalDurationChange={setTotalDuration} disabled={running} />
+        </>
+      ) : (
+        <div className="iterations-config">
+          <label>
+            VUs
+            <input type="number" min={1} value={flatVus} onChange={(e) => setFlatVus(Math.max(1, Number(e.target.value)))} disabled={running} />
+          </label>
+          <label>
+            Iterations
+            <input
+              type="number"
+              min={1}
+              max={100_000}
+              value={iterationsTarget}
+              onChange={(e) => setIterationsTarget(Math.max(1, Math.min(100_000, Number(e.target.value))))}
+              disabled={running}
+            />
+          </label>
+          <p className="scenario-description-text">
+            Runs until this many iterations complete, shared across the given VUs - however long that takes, independent of any ramp shape.
+          </p>
+        </div>
+      )}
 
       <h3 className="traffic-panel-subheading">Save this combination</h3>
       <CustomScenarioControls
         disabled={running}
         scenarioName={scenarioName}
         onScenarioNameChange={setScenarioName}
-        endpoints={sequence}
-        points={points}
-        totalDurationSeconds={totalDuration}
+        current={{
+          steps: sequence,
+          mode: stopMode,
+          totalDurationSeconds: totalDuration,
+          points,
+          vus: flatVus,
+          iterations: iterationsTarget,
+        }}
         onLoad={(saved) => {
-          setSequence(saved.endpoints)
+          setSequence(saved.steps)
+          setStopMode(saved.mode)
           setPoints(saved.points.map((p) => ({ t: p.t, vus: p.vus })))
           setTotalDuration(saved.totalDurationSeconds)
+          setFlatVus(saved.vus)
+          setIterationsTarget(saved.iterations)
         }}
         onReset={() => {
           setSequence([])
+          setStopMode('duration')
           setPoints(RAMP_PRESETS[0].points)
           setTotalDuration(RAMP_PRESETS[0].totalDurationSeconds)
+          setFlatVus(DEFAULT_FLAT_VUS)
+          setIterationsTarget(DEFAULT_ITERATIONS)
         }}
       />
 
@@ -169,12 +225,16 @@ export function TrafficPanel({ running, progress, progressHistory, report, error
             <div className="progress-bar-fill" style={{ width: `${progress?.percentComplete ?? 0}%` }} />
           </div>
           <div className="progress-bar-label">
-            {progress ? `${progress.elapsedSeconds}s / ${progress.totalSeconds}s (${progress.percentComplete}%)` : 'starting...'}
+            {progress
+              ? progress.targetIterations != null
+                ? `${progress.iterationsSoFar}/${progress.targetIterations} iterations (${progress.percentComplete}%)`
+                : `${progress.elapsedSeconds}s / ${progress.totalSeconds}s (${progress.percentComplete}%)`
+              : 'starting...'}
           </div>
           {progressHistory.length > 1 && (
             <div className="live-charts">
-              <AxisChart title="Active VUs" points={vusPoints} totalSeconds={totalSeconds} formatY={(v) => v.toFixed(0)} />
-              <AxisChart title="Iterations/s" points={ratePoints} totalSeconds={totalSeconds} formatY={(v) => v.toFixed(0)} />
+              <AxisChart title="Active VUs" points={vusPoints} totalSeconds={chartTotalSeconds} formatY={(v) => v.toFixed(0)} />
+              <AxisChart title="Iterations/s" points={ratePoints} totalSeconds={chartTotalSeconds} formatY={(v) => v.toFixed(0)} />
             </div>
           )}
         </div>

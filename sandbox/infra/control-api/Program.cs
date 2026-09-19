@@ -97,47 +97,69 @@ app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleR
 
 app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
 {
-    // With a custom ramp, Vus is just the starting point k6 ramps from - 0 is exactly what a spike
-    // profile (or any "ramp up from idle") wants there. Only the flat constant-VUs run needs it to
-    // be at least 1, since there it's the VU count for the entire run.
-    if (request.Vus < 0 || (request.Stages is not { Count: > 0 } && request.Vus < 1))
-    {
-        return Results.BadRequest(new { error = "vus must be at least 1 (or at least 0 as a ramp's starting point)" });
-    }
-
-    if (request.Stages is { Count: > 0 } stages)
-    {
-        if (stages.Any(s => s.DurationSeconds < 1))
-        {
-            return Results.BadRequest(new { error = "each stage's durationSeconds must be at least 1" });
-        }
-
-        if (stages.Any(s => s.TargetVus < 0))
-        {
-            return Results.BadRequest(new { error = "a stage's targetVus can't be negative" });
-        }
-
-        // A custom ramp is user-drawn, so it isn't bound by the flat run's 120s cap - just a
-        // generous ceiling so a slipped point on the graph can't lock up a k6 container forever.
-        if (stages.Sum(s => s.DurationSeconds) > 600)
-        {
-            return Results.BadRequest(new { error = "total stage duration can't exceed 600 seconds" });
-        }
-    }
-    else if (request.DurationSeconds is < 1 or > 120)
-    {
-        return Results.BadRequest(new { error = "durationSeconds must be between 1 and 120" });
-    }
-
-    if (request.Endpoints.Count == 0)
+    if (request.Steps.Count == 0)
     {
         return Results.BadRequest(new { error = "at least one endpoint step is required" });
     }
 
-    var unknownEndpoints = request.Endpoints.Where(e => !docker.ListKnownEndpoints().Any(ep => ep.Id == e)).ToList();
+    var unknownEndpoints = request.Steps.Where(s => !docker.ListKnownEndpoints().Any(ep => ep.Id == s.EndpointId)).Select(s => s.EndpointId).ToList();
     if (unknownEndpoints.Count > 0)
     {
         return Results.BadRequest(new { error = $"unknown endpoint(s): {string.Join(", ", unknownEndpoints)}" });
+    }
+
+    if (request.Steps.Any(s => s.PauseAfterSeconds is < 0 or > 30))
+    {
+        return Results.BadRequest(new { error = "each step's pauseAfterSeconds must be between 0 and 30" });
+    }
+
+    if (request.Iterations is { } iterations)
+    {
+        // Iteration-count runs use k6's shared-iterations executor - flat VUs, no ramp, so none of
+        // the Stages/DurationSeconds checks below apply.
+        if (request.Vus < 1)
+        {
+            return Results.BadRequest(new { error = "vus must be at least 1 for an iteration-count run" });
+        }
+
+        if (iterations is < 1 or > 100_000)
+        {
+            return Results.BadRequest(new { error = "iterations must be between 1 and 100000" });
+        }
+    }
+    else
+    {
+        // With a custom ramp, Vus is just the starting point k6 ramps from - 0 is exactly what a spike
+        // profile (or any "ramp up from idle") wants there. Only the flat constant-VUs run needs it to
+        // be at least 1, since there it's the VU count for the entire run.
+        if (request.Vus < 0 || (request.Stages is not { Count: > 0 } && request.Vus < 1))
+        {
+            return Results.BadRequest(new { error = "vus must be at least 1 (or at least 0 as a ramp's starting point)" });
+        }
+
+        if (request.Stages is { Count: > 0 } stages)
+        {
+            if (stages.Any(s => s.DurationSeconds < 1))
+            {
+                return Results.BadRequest(new { error = "each stage's durationSeconds must be at least 1" });
+            }
+
+            if (stages.Any(s => s.TargetVus < 0))
+            {
+                return Results.BadRequest(new { error = "a stage's targetVus can't be negative" });
+            }
+
+            // A custom ramp is user-drawn, so it isn't bound by the flat run's 120s cap - just a
+            // generous ceiling so a slipped point on the graph can't lock up a k6 container forever.
+            if (stages.Sum(s => s.DurationSeconds) > 600)
+            {
+                return Results.BadRequest(new { error = "total stage duration can't exceed 600 seconds" });
+            }
+        }
+        else if (request.DurationSeconds is < 1 or > 120)
+        {
+            return Results.BadRequest(new { error = "durationSeconds must be between 1 and 120" });
+        }
     }
 
     // Runs in the background and reports over SignalR (trafficProgress while it runs,
@@ -213,13 +235,20 @@ app.MapPost("/api/scenarios", async (CustomScenario scenario, IScenarioStore sto
     }
 
     var knownIds = docker.ListKnownEndpoints().Select(ep => ep.Id).ToList();
-    var unknown = scenario.Endpoints.Where(e => !knownIds.Contains(e)).ToList();
-    if (scenario.Endpoints.Count == 0 || unknown.Count > 0)
+    var unknown = scenario.Steps.Where(s => !knownIds.Contains(s.EndpointId)).Select(s => s.EndpointId).ToList();
+    if (scenario.Steps.Count == 0 || unknown.Count > 0)
     {
-        return Results.BadRequest(new { error = $"endpoints must be a non-empty sequence drawn from: {string.Join(", ", knownIds)}" });
+        return Results.BadRequest(new { error = $"steps must be a non-empty sequence of endpoints drawn from: {string.Join(", ", knownIds)}" });
     }
 
-    if (scenario.Points.Count < 2)
+    if (scenario.Mode == "iterations")
+    {
+        if (scenario.Vus < 1 || scenario.Iterations < 1)
+        {
+            return Results.BadRequest(new { error = "vus and iterations must be at least 1 in iterations mode" });
+        }
+    }
+    else if (scenario.Points.Count < 2)
     {
         return Results.BadRequest(new { error = "at least 2 points are required" });
     }

@@ -6,23 +6,31 @@ namespace ControlApi.Models;
 // model never needs to know about the graph itself - just what k6's CLI already understands.
 public record TrafficStage(int DurationSeconds, int TargetVus);
 
-// Stages, when present and non-empty, replace the flat Vus+DurationSeconds run entirely: Vus
-// becomes k6's start-VUs (`--vus`) and DurationSeconds is ignored in favor of the stages' own
-// total. Kept both shapes on one request rather than two endpoints since everything downstream
-// (progress reporting, the report itself) is identical either way.
-//
+// One call in the sequence: which EndpointDefinition, and how long to sleep afterward before the
+// next step (or the next iteration, if this is the last step) - lets the UI fix the well-known
+// create-then-resolve eventual-consistency race on demand (add a pause after Create) instead of
+// that being hardcoded into a script, and just as usefully lets it be left at 0 to deliberately
+// stress that exact race.
+public record FlowStep(string EndpointId, double PauseAfterSeconds = 0);
+
 // Every run goes through the one generic k6-scripts/flow.js now - there's no more "named script"
-// concept. Endpoints is the ordered sequence of EndpointDefinition ids to call, once per iteration,
-// in that exact order (see DockerService.EndpointRegistry) - order matters, since later steps can
-// consume variables earlier steps produced (e.g. a "resolve" step needs the "hash" a "create" step
-// earlier in the same sequence produced). Scenario is just a display label for the report/UI (e.g.
-// a saved custom scenario's own name), not a script name.
+// concept. Steps is the ordered sequence to call, once per iteration, in that exact order (see
+// DockerService.EndpointRegistry) - order matters, since later steps can consume variables earlier
+// steps produced (e.g. a "resolve" step needs the "hash" a "create" step earlier in the same
+// sequence produced). Scenario is just a display label for the report/UI (e.g. a saved custom
+// scenario's own name), not a script name.
+//
+// Exactly one of (Iterations) or (Stages, falling back to flat Vus+DurationSeconds) drives how the
+// run ends - k6's shared-iterations executor (a fixed iteration count, VUs stay flat) and its
+// ramping-vus executor (VUs move over time, runs until the ramp's own total duration) are mutually
+// exclusive; when Iterations is set it wins and Stages/DurationSeconds are ignored.
 public record TrafficRequest(
     string Scenario,
     int Vus,
     int DurationSeconds,
-    IReadOnlyList<string> Endpoints,
-    IReadOnlyList<TrafficStage>? Stages = null);
+    IReadOnlyList<FlowStep> Steps,
+    IReadOnlyList<TrafficStage>? Stages = null,
+    int? Iterations = null);
 
 public record LatencyStats(double Avg, double Min, double Med, double Max, double P90, double P95);
 

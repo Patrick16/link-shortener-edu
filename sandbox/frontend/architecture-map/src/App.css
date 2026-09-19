@@ -477,6 +477,56 @@ button:disabled {
   letter-spacing: 0.04em;
 }
 
+/* Duration vs iterations mode */
+
+.stop-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.stop-mode-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.iterations-config {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.iterations-config label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.iterations-config input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 8px;
+  width: 100px;
+}
+
+.iterations-config .scenario-description-text {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+}
+
 .endpoint-sequence-builder {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -530,7 +580,7 @@ button:disabled {
 
 .endpoint-sequence-step {
   display: grid;
-  grid-template-columns: 20px 1fr auto;
+  grid-template-columns: 20px 1fr auto auto;
   align-items: center;
   gap: 10px;
   border: 1px solid var(--border);
@@ -553,6 +603,25 @@ button:disabled {
   grid-column: 2;
   font-size: 11px;
   color: var(--text);
+}
+
+.endpoint-sequence-step-pause {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.endpoint-sequence-step-pause input {
+  width: 48px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 12px;
 }
 
 .endpoint-sequence-step-actions {

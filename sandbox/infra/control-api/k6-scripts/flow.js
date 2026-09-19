@@ -2,11 +2,14 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 // Every traffic run goes through this one script now. Which real endpoints get called, in what
-// order, and how data flows from one call into the next is entirely driven by STEPS_JSON - a JSON
-// array control-api built server-side from DockerService.EndpointRegistry, resolved from the
-// ordered list of endpoint ids the UI's sequence builder sent. This script has no built-in
-// knowledge of the app's actual routes; it's a generic interpreter over {serviceId, method,
-// pathTemplate, bodyTemplate, produces} objects.
+// order, how data flows from one call into the next, and how long to pause afterward is entirely
+// driven by STEPS_JSON - a JSON array control-api built server-side from
+// DockerService.EndpointRegistry, resolved from the ordered step list the UI's sequence builder
+// sent. This script has no built-in knowledge of the app's actual routes; it's a generic
+// interpreter over {serviceId, method, pathTemplate, bodyTemplate, produces, pauseAfterSeconds}
+// objects. There's no fixed pause between iterations either - if every step's pauseAfterSeconds is
+// 0, VUs loop as fast as the target can respond, which is a legitimate thing to want (e.g. a Stress
+// preset), not an oversight.
 //
 // See DockerService.TrackedStatusCodes for why these thresholds exist - must match that list.
 export const options = {
@@ -83,7 +86,7 @@ export default function (data) {
       const value = res.json(field);
       if (value !== undefined && value !== null) vars[varName] = value;
     }
-  }
 
-  sleep(0.2);
+    if (step.pauseAfterSeconds > 0) sleep(step.pauseAfterSeconds);
+  }
 }

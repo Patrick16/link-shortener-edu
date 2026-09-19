@@ -40,12 +40,21 @@ export interface TrafficStage {
   targetVus: number
 }
 
+// Which endpoint, and how long to sleep afterward before the next step (or the next iteration) -
+// see FlowStep on the backend, in particular why this is what lets the well-known create-then-
+// resolve race be fixed (or deliberately left alone) from the UI instead of a hardcoded sleep.
+export interface FlowStep {
+  endpointId: string
+  pauseAfterSeconds: number
+}
+
 export interface TrafficRequest {
   scenario: string
   vus: number
   durationSeconds: number
-  endpoints: string[]
+  steps: FlowStep[]
   stages?: TrafficStage[]
+  iterations?: number
 }
 
 // One real HTTP route the flow runner can call - see EndpointDefinition on the backend.
@@ -68,11 +77,18 @@ export interface ScenarioPoint {
   vus: number
 }
 
+// Mode picks which shape is live - "duration" uses totalDurationSeconds/points (the ramp graph),
+// "iterations" uses vus/iterations (a flat VU count running a fixed shared iteration count).
+export type ScenarioMode = 'duration' | 'iterations'
+
 export interface CustomScenario {
   name: string
-  endpoints: string[]
+  steps: FlowStep[]
+  mode: ScenarioMode
   totalDurationSeconds: number
   points: ScenarioPoint[]
+  vus: number
+  iterations: number
 }
 
 // NginxBypassed is the one field framed as "the interesting state", not "is it on" - see
@@ -119,6 +135,8 @@ export interface TrafficReport {
   rawOutput: string
 }
 
+// targetIterations is only set for an iteration-count run - the UI shows "X/Y iterations" instead
+// of "Xs/Ys" when it's present, since there's no fixed total duration in that mode.
 export interface TrafficProgress {
   elapsedSeconds: number
   totalSeconds: number
@@ -126,6 +144,7 @@ export interface TrafficProgress {
   activeVus: number
   iterationsSoFar: number
   iterationsPerSecond: number
+  targetIterations: number | null
 }
 
 export interface ResourceSample {
