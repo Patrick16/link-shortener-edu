@@ -30,7 +30,7 @@ export function ScaleControl({ serviceId, currentReplicas }: Props) {
     <div className="scale-control">
       <label>
         Replicas
-        <input type="number" value={replicas} onChange={(e) => setReplicas(Number(e.target.value))} min={1} max={10} disabled={busy} />
+        <input type="number" value={replicas} onChange={(e) => setReplicas(Number(e.target.value))} min={1} max={100} disabled={busy} />
       </label>
       <button onClick={apply} disabled={busy || replicas === currentReplicas}>
         {busy ? 'Scaling...' : `Scale to ${replicas}`}

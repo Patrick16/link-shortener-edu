@@ -87,9 +87,9 @@ app.MapPost("/api/containers/redis/flush-cache", async (IDockerService docker, C
 
 app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleRequest request, IDockerService docker, CancellationToken ct) =>
 {
-    if (request.Replicas is < 1 or > 10)
+    if (request.Replicas is < 1 or > 100)
     {
-        return Results.BadRequest(new { error = "replicas must be between 1 and 10" });
+        return Results.BadRequest(new { error = "replicas must be between 1 and 100" });
     }
 
     var result = await docker.ScaleAsync(serviceId, request.Replicas, ct);
