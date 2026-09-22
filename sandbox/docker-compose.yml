@@ -10,11 +10,67 @@ services:
       POSTGRES_PASSWORD: postgres
       # No POSTGRES_DB — the init script below creates the actual databases (one per owning
       # service, not schemas-in-one-database; see infra/postgres/init-databases.sql for why).
+    # wal_level=replica + max_wal_senders/max_replication_slots are what let postgres-replica1/2
+    # stream from this instance at all (off by default); hot_standby is a no-op on a primary but
+    # harmless to set uniformly.
+    command: >
+      postgres
+      -c wal_level=replica
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+      -c hot_standby=on
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+      - ./infra/postgres/init-replication-hba.sh:/docker-entrypoint-initdb.d/init-replication-hba.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Streaming (physical) replicas of the whole cluster — replication in Postgres is cluster-wide,
+  # not per-database, so one primary + these two replicas cover users_db/links_db/clicks_db
+  # together. See replica-entrypoint.sh for how each one bootstraps itself via pg_basebackup on
+  # first start, then runs as a normal hot-standby thereafter.
+  postgres-replica1:
+    image: postgres:16-alpine
+    user: postgres
+    environment:
+      PGUSER: replicator
+      PGPASSWORD: replicator_pass
+    ports:
+      - "5433:5432" # exposed for local inspection - confirm it's actually a standby via `psql ... -c "SELECT pg_is_in_recovery()"`
+    volumes:
+      - postgres-replica1-data:/var/lib/postgresql/data
+      - ./infra/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  postgres-replica2:
+    image: postgres:16-alpine
+    user: postgres
+    environment:
+      PGUSER: replicator
+      PGPASSWORD: replicator_pass
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-replica2-data:/var/lib/postgresql/data
+      - ./infra/postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -30,6 +86,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-replica1:
+        condition: service_healthy
+      postgres-replica2:
+        condition: service_healthy
     healthcheck:
       # pg_isready alone doesn't complete password auth, so pgcat logs a (harmless) warning per
       # check - a real authenticated query against one of the actual pools both avoids the log
@@ -39,12 +99,133 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
+  # Redis HA trio: one master, two replicas, three Sentinels watching them (quorum 2/3 — see
+  # infra/redis/sentinel.conf). link-api/redirect-api connect through the Sentinels, not the master
+  # directly (StackExchange.Redis's `serviceName=` connection-string form talks to the Sentinels
+  # first to discover the current master and auto-reconnects on failover — no app code needed for
+  # this, see Shared/Infrastructure/RedisClickCounterService.cs and Shared/Common/EntityCacheService.cs).
+  redis-master:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-replica1:
+    image: redis:7-alpine
+    command: ["redis-server", "--replicaof", "redis-master", "6379"]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-replica2:
+    image: redis:7-alpine
+    command: ["redis-server", "--replicaof", "redis-master", "6379"]
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-sentinel-1:
+    image: redis:7-alpine
+    # Sentinel rewrites its own config file on every state change, so the template gets copied into
+    # a writable named volume on first start rather than bind-mounted read-only from the repo.
+    entrypoint: ["/bin/sh", "-c"]
+    # Without `sentinel resolve-hostnames` (see infra/redis/sentinel.conf for why), a hostname in
+    # the "sentinel monitor" line still has to resolve once at Sentinel's own startup to seed the
+    # initial IP - but verified live that Sentinel's own internal resolver fails on this hostname
+    # even when `getent`/`redis-cli -h` (this same image, same network) resolve it fine, treating
+    # the failure as FATAL (crash-loops, no retry) rather than transient - looks like a musl/Alpine
+    # resolver quirk in the Sentinel binary itself, not an actual DNS problem. Worked around by
+    # resolving the IP ourselves with `getent` (known-working) and baking the literal IP into the
+    # generated config, so Sentinel's own resolver is never involved at all.
+    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; if [ ! -f /etc/redis/sentinel.conf ]; then MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/redis-master/$$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
+    volumes:
+      - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
+      - redis-sentinel-1-data:/etc/redis
+    ports:
+      - "26379:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica1:
+        condition: service_healthy
+      redis-replica2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    entrypoint: ["/bin/sh", "-c"]
+    # Without `sentinel resolve-hostnames` (see infra/redis/sentinel.conf for why), a hostname in
+    # the "sentinel monitor" line still has to resolve once at Sentinel's own startup to seed the
+    # initial IP - but verified live that Sentinel's own internal resolver fails on this hostname
+    # even when `getent`/`redis-cli -h` (this same image, same network) resolve it fine, treating
+    # the failure as FATAL (crash-loops, no retry) rather than transient - looks like a musl/Alpine
+    # resolver quirk in the Sentinel binary itself, not an actual DNS problem. Worked around by
+    # resolving the IP ourselves with `getent` (known-working) and baking the literal IP into the
+    # generated config, so Sentinel's own resolver is never involved at all.
+    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; if [ ! -f /etc/redis/sentinel.conf ]; then MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/redis-master/$$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
+    volumes:
+      - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
+      - redis-sentinel-2-data:/etc/redis
+    ports:
+      - "26380:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica1:
+        condition: service_healthy
+      redis-replica2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    entrypoint: ["/bin/sh", "-c"]
+    # Without `sentinel resolve-hostnames` (see infra/redis/sentinel.conf for why), a hostname in
+    # the "sentinel monitor" line still has to resolve once at Sentinel's own startup to seed the
+    # initial IP - but verified live that Sentinel's own internal resolver fails on this hostname
+    # even when `getent`/`redis-cli -h` (this same image, same network) resolve it fine, treating
+    # the failure as FATAL (crash-loops, no retry) rather than transient - looks like a musl/Alpine
+    # resolver quirk in the Sentinel binary itself, not an actual DNS problem. Worked around by
+    # resolving the IP ourselves with `getent` (known-working) and baking the literal IP into the
+    # generated config, so Sentinel's own resolver is never involved at all.
+    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; if [ ! -f /etc/redis/sentinel.conf ]; then MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/redis-master/$$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
+    volumes:
+      - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
+      - redis-sentinel-3-data:/etc/redis
+    ports:
+      - "26381:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica1:
+        condition: service_healthy
+      redis-replica2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "26379", "ping"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -63,30 +244,93 @@ services:
       timeout: 5s
       retries: 10
 
-  mongo:
+  # 3-node replica set (mongo1/2/3), no auth (keyless replset — matches the rest of this stack's
+  # no-auth dev posture). mongo-init below runs rs.initiate() once; the members themselves just
+  # need --replSet so they know what set they belong to.
+  mongo1:
     image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017" # exposed for local inspection (mongosh / Compass), same spirit as postgres's 5432
     volumes:
-      - mongo-data:/data/db
+      - mongo1-data:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  mongo2:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo2-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo3:
+    image: mongo:7
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo3-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: initiates rs0 once all 3 members are up, then exits 0. Idempotent across restarts —
+  # rs.status() succeeds (and it just logs "already initialized") once the set exists, so a
+  # `docker compose up` that recreates this container harmlessly no-ops instead of erroring.
+  mongo-init:
+    image: mongo:7
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mongosh --host mongo1:27017 --quiet --eval '
+          try {
+            rs.status();
+            print("replica set already initialized");
+          } catch (e) {
+            rs.initiate({
+              _id: "rs0",
+              members: [
+                { _id: 0, host: "mongo1:27017" },
+                { _id: 1, host: "mongo2:27017" },
+                { _id: 2, host: "mongo3:27017" }
+              ]
+            });
+            print("replica set initiated");
+          }
+        '
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_healthy
+      mongo3:
+        condition: service_healthy
+
   mongo-express:
     image: mongo-express:latest
     ports:
       - "8085:8081"
     environment:
-      ME_CONFIG_MONGODB_URL: "mongodb://mongo:27017/"
+      ME_CONFIG_MONGODB_URL: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0"
       # Dev-only, same spirit as the aspire-dashboard anonymous-access flag below - skips the
       # basic-auth prompt so this behaves like RedisInsight (open the URL, no login).
       ME_CONFIG_BASICAUTH: "false"
     depends_on:
-      mongo:
-        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
 
   redisinsight:
     image: redis/redisinsight:latest
@@ -95,9 +339,11 @@ services:
     volumes:
       - redisinsight-data:/data
     depends_on:
-      redis:
+      redis-master:
         condition: service_healthy
-    # No database is pre-registered — on first open, add one with host "redis", port 6379.
+    # No database is pre-registered — on first open, add one with host "redis-master", port 6379
+    # (RedisInsight itself isn't Sentinel-aware; it's a dev GUI, not the app, so pointing it at the
+    # current master directly is fine — re-add if a failover actually promotes a different node).
 
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
@@ -121,6 +367,9 @@ services:
       # with these overridden to postgres:5432, recreating this service so it demonstrates running
       # without connection pooling instead of just leaving pgcat unused.
       ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=users_db;Username=postgres;Password=postgres"
+      # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
+      # Constants.PostgresPrimaryConnectionString for why.
+      ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
       Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
@@ -143,7 +392,10 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
-      ConnectionStrings__Redis: "redis:6379"
+      # Sentinel-aware form (StackExchange.Redis native support): endpoints are the 3 Sentinels, not
+      # the master directly - the client asks them who's master, connects there, and gets told about
+      # any failover automatically. No code change needed for this vs. a plain host:port string.
+      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
@@ -154,7 +406,11 @@ services:
     depends_on:
       pgcat:
         condition: service_healthy
-      redis:
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -174,14 +430,18 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
-      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
       Cache__Enabled: "${CACHE_ENABLED:-true}"
     depends_on:
       pgcat:
         condition: service_healthy
-      redis:
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
@@ -212,6 +472,9 @@ services:
       dockerfile: src/backend/Services/ShortenerService/Dockerfile
     environment:
       ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
+      # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
+      # Constants.PostgresPrimaryConnectionString for why.
+      ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
@@ -233,16 +496,22 @@ services:
       dockerfile: src/backend/Services/TrafficService/Dockerfile
     environment:
       ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=clicks_db;Username=postgres;Password=postgres"
+      # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
+      # Constants.PostgresPrimaryConnectionString for why.
+      ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=clicks_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
-      ConnectionStrings__Mongo: "mongodb://mongo:27017/clicks_meta_db"
+      # Replica-set-aware URI - the Mongo driver discovers the current primary from these 3 seeds
+      # and auto-reconnects on failover; MongoClickMetaStore already just takes whatever connection
+      # string it's given (database name comes from the URL path), no code change needed.
+      ConnectionStrings__Mongo: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/clicks_meta_db?replicaSet=rs0"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       pgcat:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      mongo:
-        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
       aspire-dashboard:
         condition: service_started
     healthcheck:
@@ -280,6 +549,13 @@ services:
 
 volumes:
   postgres-data:
-  mongo-data:
+  postgres-replica1-data:
+  postgres-replica2-data:
+  mongo1-data:
+  mongo2-data:
+  mongo3-data:
+  redis-sentinel-1-data:
+  redis-sentinel-2-data:
+  redis-sentinel-3-data:
   redisinsight-data:
   control-api-data:

@@ -644,7 +644,9 @@ public class DockerService : IDockerService
 
     public async Task<string?> FlushRedisAsync(CancellationToken ct)
     {
-        var container = await FindAsync("redis", ct);
+        // FLUSHALL against the master alone is enough - Redis propagates it to redis-replica1/2 via
+        // normal command replication, no need to flush each node separately.
+        var container = await FindAsync("redis-master", ct);
         if (container is null)
         {
             return null;

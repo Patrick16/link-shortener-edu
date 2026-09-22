@@ -1,11 +1,16 @@
 #
-# PgCat in front of the single Postgres instance used by scenarios 1-3.
+# PgCat in front of Postgres — one primary + 2 streaming replicas (postgres-replica1/2), same trio
+# for all three databases since replication is cluster-wide, not per-database (see
+# infra/postgres/replica-entrypoint.sh).
 #
 # One pool per physical database (see infra/postgres/init-databases.sql for why they're separate
-# databases, not schemas). Each pool has exactly one shard with a single "primary" server - there's
-# no replica or sharding yet, so this is pure connection pooling: every service talks to pgcat:6432
-# instead of postgres:5432 directly, and pgcat multiplexes many client connections onto a small
-# server-side pool per database.
+# databases, not schemas). Each pool has exactly one shard, with 3 servers: primary + 2 replicas.
+# query_parser_enabled + query_parser_read_write_splitting + primary_reads_enabled means PgCat
+# auto-routes: SELECT (no FOR UPDATE) load balances across all 3 servers, everything else
+# (INSERT/UPDATE/DELETE, DDL, transactions) goes to the primary only — no app-side read/write split
+# needed. query_parser_read_write_splitting is NOT optional/cosmetic here - query_parser_enabled
+# alone does not infer read/write role from the query text (verified live: without it, a plain
+# INSERT and a CREATE TABLE both landed on a replica and were rejected as read-only).
 #
 # Sharding links_db (shard1.toml/shard2.toml, currently TODO stubs) is scenario 4, not this file.
 
@@ -31,6 +36,7 @@ admin_password = "admin_pass"
 pool_mode = "transaction"
 default_role = "primary"
 query_parser_enabled = true
+query_parser_read_write_splitting = true  # see the file header comment - load-bearing, not cosmetic
 primary_reads_enabled = true
 
 [pools.users_db.users.0]
@@ -40,13 +46,14 @@ pool_size = 10
 statement_timeout = 0
 
 [pools.users_db.shards.0]
-servers = [["postgres", 5432, "primary"]]
+servers = [["postgres", 5432, "primary"], ["postgres-replica1", 5432, "replica"], ["postgres-replica2", 5432, "replica"]]
 database = "users_db"
 
 [pools.links_db]
 pool_mode = "transaction"
 default_role = "primary"
 query_parser_enabled = true
+query_parser_read_write_splitting = true  # see the file header comment - load-bearing, not cosmetic
 primary_reads_enabled = true
 
 [pools.links_db.users.0]
@@ -58,13 +65,14 @@ pool_size = 20
 statement_timeout = 0
 
 [pools.links_db.shards.0]
-servers = [["postgres", 5432, "primary"]]
+servers = [["postgres", 5432, "primary"], ["postgres-replica1", 5432, "replica"], ["postgres-replica2", 5432, "replica"]]
 database = "links_db"
 
 [pools.clicks_db]
 pool_mode = "transaction"
 default_role = "primary"
 query_parser_enabled = true
+query_parser_read_write_splitting = true  # see the file header comment - load-bearing, not cosmetic
 primary_reads_enabled = true
 
 [pools.clicks_db.users.0]
@@ -74,5 +82,5 @@ pool_size = 10
 statement_timeout = 0
 
 [pools.clicks_db.shards.0]
-servers = [["postgres", 5432, "primary"]]
+servers = [["postgres", 5432, "primary"], ["postgres-replica1", 5432, "replica"], ["postgres-replica2", 5432, "replica"]]
 database = "clicks_db"

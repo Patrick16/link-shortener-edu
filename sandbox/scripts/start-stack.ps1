@@ -114,7 +114,7 @@ try {
         }
     }
 
-    Write-Step 'Starting backend (postgres, redis, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service)'
+    Write-Step 'Starting backend (postgres + 2 replicas, redis sentinel cluster, mongo replica set, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service)'
     docker compose up -d
     if ($LASTEXITCODE -ne 0) {
         Write-Error 'docker compose up failed - see output above.'
@@ -194,7 +194,8 @@ Write-Host '  AuthApi:          http://localhost:8081/scalar/v1'
 Write-Host '  LinkApi:          http://localhost:8082/scalar/v1'
 Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'
 Write-Host '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
-Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis", port 6379)'
+Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis-master", port 6379)'
+Write-Host '  Mongo Express:    http://localhost:8085'
 Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
 Write-Host "`nStop the backend with: .\stop-stack.ps1"
 Write-Host "Stop the frontend by closing its window (or Ctrl+C in it)."

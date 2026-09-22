@@ -50,11 +50,12 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Apply pending EF Core migrations on startup — this service owns users_db.
-await using (var scope = app.Services.CreateAsyncScope())
+// Apply pending EF Core migrations on startup — this service owns users_db. Connects directly to
+// the primary, bypassing PgCat, for this call specifically (see Constants.PostgresPrimaryConnectionString).
+var migrationConnectionString = builder.Configuration.GetConnectionString(Constants.PostgresPrimaryConnectionString) ?? connectionString;
+await using (var migrationContext = new DatabaseContext(new DbContextOptionsBuilder<DatabaseContext>().UseNpgsql(migrationConnectionString).Options))
 {
-    var db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-    await db.Database.MigrateAsync();
+    await migrationContext.Database.MigrateAsync();
 }
 
 // Configure the HTTP request pipeline.

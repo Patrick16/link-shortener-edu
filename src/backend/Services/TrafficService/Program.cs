@@ -35,12 +35,12 @@ builder.Services.AddHealthChecks()
 
 var app = builder.Build();
 
-// Apply pending EF Core migrations on startup — this service owns clicks_db.
-await using (var scope = app.Services.CreateAsyncScope())
+// Apply pending EF Core migrations on startup — this service owns clicks_db. Connects directly to
+// the primary, bypassing PgCat, for this call specifically (see Constants.PostgresPrimaryConnectionString).
+var migrationConnectionString = builder.Configuration.GetConnectionString(Constants.PostgresPrimaryConnectionString) ?? connectionString;
+await using (var migrationContext = new DatabaseContext(new DbContextOptionsBuilder<DatabaseContext>().UseNpgsql(migrationConnectionString).Options))
 {
-    var dbContextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<DatabaseContext>>();
-    await using var db = await dbContextFactory.CreateDbContextAsync();
-    await db.Database.MigrateAsync();
+    await migrationContext.Database.MigrateAsync();
 }
 
 // The only reason this service has an HTTP listener at all - it doesn't serve any other endpoint.
