@@ -9,7 +9,6 @@ function component(id: string, links?: Record<string, string>): ArchComponent {
     type: 'service',
     icon: 'box',
     description: '',
-    position: { x: 0, y: 0 },
     details: { purpose: '', technologies: [], links },
   }
 }

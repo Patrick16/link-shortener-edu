@@ -5,7 +5,7 @@ import type { CustomScenario, EndpointDefinition } from '../types/controlApi'
 import { pointsToStages, RAMP_PRESETS, useTrafficConfig } from './useTrafficConfig'
 
 vi.mock('../api/controlApi', () => ({
-  controlApi: { listEndpoints: vi.fn() },
+  controlApi: { listEndpoints: vi.fn(), listDataSources: vi.fn() },
 }))
 
 describe('pointsToStages', () => {
@@ -45,6 +45,7 @@ describe('useTrafficConfig', () => {
 
   beforeEach(() => {
     vi.mocked(controlApi.listEndpoints).mockResolvedValue([endpoint])
+    vi.mocked(controlApi.listDataSources).mockResolvedValue([])
   })
 
   it('loads endpoint options on mount', async () => {

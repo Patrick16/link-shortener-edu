@@ -4,6 +4,7 @@ import '@xyflow/react/dist/style.css'
 import { ServiceNode, type ServiceNodeData } from './ServiceNode'
 import { resolveServiceId } from '../utils/resolveServiceId'
 import { isTrafficFlowEdge } from '../utils/trafficFlow'
+import { computeLayout } from '../utils/layoutGraph'
 import type { ArchitectureData } from '../types/architecture'
 import type { ManagedContainer } from '../types/controlApi'
 
@@ -25,6 +26,12 @@ const nodeTypes = { service: ServiceNode }
 export function Diagram({ data, containers, trafficActive, selectedConnectionIndex, onSelectComponent, onSelectConnection }: Props) {
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
 
+  // Positions come from dagre, not hand-authored coordinates in architecture.json - see
+  // layoutGraph.ts for why hand-picking x/y stopped scaling once the graph passed ~15 nodes. This
+  // only depends on the static component/connection lists, not live container data, so it computes
+  // once per mount in practice rather than on every status poll.
+  const layout = useMemo(() => computeLayout(data.components, data.connections), [data.components, data.connections])
+
   const computedNodes: Node[] = useMemo(
     () =>
       data.components.map((component) => {
@@ -33,7 +40,7 @@ export function Diagram({ data, containers, trafficActive, selectedConnectionInd
         return {
           id: component.id,
           type: 'service',
-          position: component.position,
+          position: layout[component.id] ?? { x: 0, y: 0 },
           // Explicit dimensions skip React Flow's async ResizeObserver-based measurement step -
           // a reasonable perf win regardless, and edges need a node's size to compute a path.
           width: 170,
@@ -46,7 +53,7 @@ export function Diagram({ data, containers, trafficActive, selectedConnectionInd
           } satisfies ServiceNodeData,
         }
       }),
-    [data.components, containers, knownServiceIds],
+    [data.components, containers, knownServiceIds, layout],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(computedNodes)
@@ -71,6 +78,10 @@ export function Diagram({ data, containers, trafficActive, selectedConnectionInd
           id: `${connection.from}-${connection.to}-${index}`,
           source: connection.from,
           target: connection.to,
+          // Orthogonal, right-angle routing instead of the default bezier curve - with this many
+          // nodes, curved edges crossing at odd angles were a big part of why the graph read as a
+          // tangle rather than a topology.
+          type: 'step',
           label: connection.label,
           animated: isFlowing,
           // A selected edge always renders above every other edge (including a flowing one it may
