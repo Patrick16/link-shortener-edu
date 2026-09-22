@@ -30,7 +30,7 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
   const cpuMax = Math.max(5, ...cpuValues) * 1.4
   const memMax = Math.max(64, ...memValuesMb) * 1.3
   const primary = instances[0]
-  const showsInfraToggle = serviceId === 'nginx' || serviceId === 'pgcat' || serviceId === 'redis'
+  const showsInfraToggle = serviceId === 'nginx' || serviceId === 'pgcat' || serviceId === 'redis-master'
   const showsPgcatConnections = serviceId === 'pgcat'
   const showsPostgresConnections = component.type === 'database'
   const [pgcatConnections, setPgcatConnections] = useState<PgcatConnectionStats | null>(null)
@@ -106,7 +106,7 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
           <ServiceControls serviceId={primary.serviceId} state={primary.state} />
 
           {serviceId && scalable.includes(serviceId) && <ScaleControl serviceId={serviceId} currentReplicas={instances.length} />}
-          {serviceId === 'redis' && <FlushCacheControl />}
+          {serviceId === 'redis-master' && <FlushCacheControl />}
 
           {infraStatus && serviceId === 'nginx' && (
             <InfraToggleControl
@@ -126,7 +126,7 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
               onToggle={(enabled) => toggleInfra(controlApi.setPgcatEnabled, enabled)}
             />
           )}
-          {infraStatus && serviceId === 'redis' && (
+          {infraStatus && serviceId === 'redis-master' && (
             <InfraToggleControl
               label="Caching"
               description="Off makes LinkApi/RedirectApi skip Redis entirely and always read Postgres - shows the system without caching. Recreates 2 containers, takes a few seconds."

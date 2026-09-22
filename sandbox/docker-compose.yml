@@ -141,7 +141,7 @@ services:
   redis-sentinel-1:
     image: redis:7-alpine
     # Sentinel rewrites its own config file on every state change, so the template gets copied into
-    # a writable named volume on first start rather than bind-mounted read-only from the repo.
+    # a writable named volume rather than bind-mounted read-only from the repo.
     entrypoint: ["/bin/sh", "-c"]
     # Without `sentinel resolve-hostnames` (see infra/redis/sentinel.conf for why), a hostname in
     # the "sentinel monitor" line still has to resolve once at Sentinel's own startup to seed the
@@ -151,7 +151,20 @@ services:
     # resolver quirk in the Sentinel binary itself, not an actual DNS problem. Worked around by
     # resolving the IP ourselves with `getent` (known-working) and baking the literal IP into the
     # generated config, so Sentinel's own resolver is never involved at all.
-    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; if [ ! -f /etc/redis/sentinel.conf ]; then MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/redis-master/$$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
+    # The config is regenerated from the template on EVERY start, not just the first: a literal IP
+    # baked in on one `docker compose up` goes stale the moment redis-master's container gets
+    # recreated, because Docker hands out container IPs from the network's pool in creation order,
+    # not by hostname - a later `up`/`down` cycle can easily reassign that same IP to a different
+    # container (verified live: a stale sentinel.conf here ended up pointing "mymaster" at what had
+    # become redis-replica1's IP, and StackExchange.Redis's Sentinel client rejected it once it saw
+    # `role:slave` in INFO, throwing "Failed connecting to configured primary" on every request). The
+    # sed is also anchored to the `sentinel monitor` line specifically (not a bare `s/redis-master/`)
+    # so it substitutes the IP into the directive without also mangling this comment's own prose.
+    # Regenerating on every start does discard any state Sentinel had rewritten into this file since
+    # container start (known-replicas, epoch, a mid-flight promotion) - acceptable here since that
+    # state is only useful across a Sentinel container's own restart, and Sentinel rediscovers it
+    # within a few cron cycles of reconnecting to whichever container "redis-master" resolves to.
+    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; exec redis-sentinel /etc/redis/sentinel.conf"]
     volumes:
       - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
       - redis-sentinel-1-data:/etc/redis
@@ -173,15 +186,11 @@ services:
   redis-sentinel-2:
     image: redis:7-alpine
     entrypoint: ["/bin/sh", "-c"]
-    # Without `sentinel resolve-hostnames` (see infra/redis/sentinel.conf for why), a hostname in
-    # the "sentinel monitor" line still has to resolve once at Sentinel's own startup to seed the
-    # initial IP - but verified live that Sentinel's own internal resolver fails on this hostname
-    # even when `getent`/`redis-cli -h` (this same image, same network) resolve it fine, treating
-    # the failure as FATAL (crash-loops, no retry) rather than transient - looks like a musl/Alpine
-    # resolver quirk in the Sentinel binary itself, not an actual DNS problem. Worked around by
-    # resolving the IP ourselves with `getent` (known-working) and baking the literal IP into the
-    # generated config, so Sentinel's own resolver is never involved at all.
-    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; if [ ! -f /etc/redis/sentinel.conf ]; then MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/redis-master/$$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
+    # See the matching comment on redis-sentinel-1 for why this resolves "redis-master" itself
+    # (Sentinel's own internal resolver faults on it) and why the config is regenerated fresh from
+    # the template on every start rather than only the first (a baked-in IP goes stale the moment
+    # container recreation reassigns it to a different container).
+    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; exec redis-sentinel /etc/redis/sentinel.conf"]
     volumes:
       - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
       - redis-sentinel-2-data:/etc/redis
@@ -203,15 +212,11 @@ services:
   redis-sentinel-3:
     image: redis:7-alpine
     entrypoint: ["/bin/sh", "-c"]
-    # Without `sentinel resolve-hostnames` (see infra/redis/sentinel.conf for why), a hostname in
-    # the "sentinel monitor" line still has to resolve once at Sentinel's own startup to seed the
-    # initial IP - but verified live that Sentinel's own internal resolver fails on this hostname
-    # even when `getent`/`redis-cli -h` (this same image, same network) resolve it fine, treating
-    # the failure as FATAL (crash-loops, no retry) rather than transient - looks like a musl/Alpine
-    # resolver quirk in the Sentinel binary itself, not an actual DNS problem. Worked around by
-    # resolving the IP ourselves with `getent` (known-working) and baking the literal IP into the
-    # generated config, so Sentinel's own resolver is never involved at all.
-    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; if [ ! -f /etc/redis/sentinel.conf ]; then MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/redis-master/$$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
+    # See the matching comment on redis-sentinel-1 for why this resolves "redis-master" itself
+    # (Sentinel's own internal resolver faults on it) and why the config is regenerated fresh from
+    # the template on every start rather than only the first (a baked-in IP goes stale the moment
+    # container recreation reassigns it to a different container).
+    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; exec redis-sentinel /etc/redis/sentinel.conf"]
     volumes:
       - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
       - redis-sentinel-3-data:/etc/redis

@@ -55,10 +55,10 @@
       "name": "AuthApi",
       "type": "service",
       "icon": "🔑",
-      "description": "Registration / login, issues a JWT",
+      "description": "Registration / login, issues a JWT access token + rotating refresh token",
       "position": { "x": 320, "y": 60 },
       "details": {
-        "purpose": "Owns users_db (the only writer to it, and the only one that migrates it)",
+        "purpose": "Owns users_db (the only writer to it, and the only one that migrates it); refresh tokens are stored there too, one row per issued token, rotated (old one revoked) on every refresh",
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "PasswordHasher<T>", "System.IdentityModel.Tokens.Jwt"],
         "port": 8081,
         "links": {
@@ -76,7 +76,7 @@
       "description": "Creates short links (hash generated here), reads them back through a cache",
       "position": { "x": 320, "y": 260 },
       "details": {
-        "purpose": "POST /links generates the hash, optionally attaches userId from a Bearer token (no [Authorize] — anonymous still works), and publishes it; GET /links/{hash} is a cached read against links_db",
+        "purpose": "POST /links generates the hash, optionally attaches userId from a Bearer token (no [Authorize] — anonymous still works), and publishes it; GET /links/{hash} is a cached read against links_db; GET /links (paginated) lists a user's own links",
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis", "Microsoft.AspNetCore.Authentication.JwtBearer"],
         "port": 8082,
         "links": {
@@ -90,10 +90,10 @@
       "name": "RedirectApi",
       "type": "service",
       "icon": "↪️",
-      "description": "Resolves a short link, issues a 302, and records the click",
+      "description": "Resolves a short link, issues a 302, bumps the click counter, and records the click",
       "position": { "x": 320, "y": 460 },
       "details": {
-        "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; publishes ClickTrackedEvent right before redirecting",
+        "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; increments a Redis click counter (hot path, doesn't wait on Postgres) and publishes ClickTrackedEvent right before redirecting",
         "technologies": [".NET 10", "ASP.NET Core", "EF Core", "StackExchange.Redis"],
         "port": 8083,
         "links": {
@@ -110,11 +110,11 @@
       "description": "Durable queue between the two APIs and their workers",
       "position": { "x": 600, "y": 260 },
       "details": {
-        "purpose": "Decouples each API's synchronous response from the actual Postgres write it triggers",
+        "purpose": "Decouples each API's synchronous response from the actual Postgres/Mongo writes it triggers",
         "technologies": ["RabbitMQ 3", "AMQP 0-9-1"],
         "port": 5672,
         "managementPort": 15672,
-        "topology": "topic exchange \"events\"; queue \"shortener-service.link-created\" bound to routing key \"link.created\", queue \"traffic-service.click-tracked\" bound to \"click.tracked\" — both declared by the app itself, not a static definitions.json",
+        "topology": "topic exchange \"events\"; queue \"shortener-service.link-created\" bound to routing key \"link.created\"; ClickTracked events fan out to two independent queues bound to \"click.tracked\" - \"shortener-service.click-tracked\" (bumps the display click count) and \"traffic-service.click-tracked\" (the durable click record + Mongo metadata) - both declared by the app itself, not a static definitions.json",
         "links": {
           "config": "sandbox/infra/rabbitmq/definitions.json (unused placeholder, see its own comment)",
           "publisher": "src/backend/Shared/Infrastructure/RabbitMqPublisher.cs",
@@ -127,10 +127,10 @@
       "name": "ShortenerService",
       "type": "worker",
       "icon": "⚙️",
-      "description": "Consumes LinkCreatedEvent, persists the link",
+      "description": "Consumes LinkCreatedEvent (persists the link) and ClickTrackedEvent (bumps its click count)",
       "position": { "x": 880, "y": 120 },
       "details": {
-        "purpose": "Owns links_db (the only writer, and the only one that migrates it); redelivery-safe (skips if the hash is already stored)",
+        "purpose": "Owns links_db (the only writer, and the only one that migrates it); both consumers are redelivery-safe - LinkCreated skips if the hash is already stored, ClickTracked just re-increments (an approximate display counter, not the audit trail - that's TrafficService's Clicks table)",
         "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client"],
         "links": {
           "code": "src/backend/Services/ShortenerService/",
@@ -144,11 +144,11 @@
       "name": "TrafficService",
       "type": "worker",
       "icon": "📊",
-      "description": "Consumes ClickTrackedEvent, persists the click",
+      "description": "Consumes ClickTrackedEvent, persists the click record and its enriched metadata",
       "position": { "x": 880, "y": 400 },
       "details": {
-        "purpose": "Owns clicks_db (the only writer, and the only one that migrates it); redelivery-safe (skips if the event's Id is already stored)",
-        "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client"],
+        "purpose": "Owns clicks_db (the only writer, and the only one that migrates it) - Postgres Clicks is the exactly-once audit trail (skips if the event's Id is already stored); also parses the User-Agent and resolves geo-IP, then upserts a ClickMeta document into MongoDB, independently idempotent from the Postgres write",
+        "technologies": [".NET 10 Worker Service", "EF Core", "RabbitMQ.Client", "MongoDB.Driver"],
         "links": {
           "code": "src/backend/Services/TrafficService/",
           "dockerfile": "src/backend/Services/TrafficService/Dockerfile",
@@ -164,7 +164,7 @@
       "description": "Connection pooler in front of Postgres - every service talks to pgcat, never to postgres directly",
       "position": { "x": 990, "y": 260 },
       "details": {
-        "purpose": "One pool per physical database (users_db/links_db/clicks_db), each a single unsharded shard for now; multiplexes many short-lived app connections onto a small server-side pool per database",
+        "purpose": "One pool per physical database (users_db/links_db/clicks_db), each backed by the same 3 physical servers (primary + 2 replicas); query_parser_read_write_splitting auto-routes plain SELECTs across all 3 and everything else (writes, DDL, transactions) to the primary only - no app-side read/write split needed",
         "technologies": ["PgCat"],
         "port": 6432,
         "links": {
@@ -174,19 +174,148 @@
       }
     },
     {
-      "id": "redis",
-      "name": "Redis",
+      "id": "redis-master",
+      "name": "Redis (master)",
       "type": "infrastructure",
       "icon": "🗄️",
-      "description": "Cache of hash → link, shared key format between LinkApi and RedirectApi",
+      "description": "Cache of hash → link, plus the atomic per-link click counter - the actual data-plane target once Sentinel discovery has picked it out",
       "position": { "x": 600, "y": 460 },
       "details": {
-        "purpose": "Cache-aside: read-through on miss, populated by whichever service reads or creates first",
+        "purpose": "Cache-aside for links (read-through on miss, shared key format between LinkApi and RedirectApi) and an INCR-based click counter; link-api/redirect-api never dial this hostname directly - their Sentinel-aware connection string talks to redis-sentinel-1/2/3 first, which report back whichever node is currently master",
         "technologies": ["Redis 7"],
         "port": 6379,
-        "keyFormat": "link:{hash}",
+        "keyFormat": "link:{hash} (cache), link:{hash}:clicks (counter)",
         "links": {
-          "code": "src/backend/Shared/Common/LinkCacheService.cs"
+          "code": "src/backend/Shared/Common/LinkCacheService.cs, src/backend/Shared/Infrastructure/RedisClickCounterService.cs"
+        }
+      }
+    },
+    {
+      "id": "redis-replica1",
+      "name": "Redis Replica 1",
+      "type": "infrastructure",
+      "icon": "🗄️",
+      "description": "Async replica of redis-master - not written to directly by the app, only ever a promotion target",
+      "position": { "x": 750, "y": 340 },
+      "details": {
+        "purpose": "Kept current via Redis's own async replication off redis-master; the three Sentinels promote one of the two replicas to master if redis-master stops responding",
+        "technologies": ["Redis 7"],
+        "links": {
+          "compose": "sandbox/docker-compose.yml#redis-replica1"
+        }
+      }
+    },
+    {
+      "id": "redis-replica2",
+      "name": "Redis Replica 2",
+      "type": "infrastructure",
+      "icon": "🗄️",
+      "description": "Async replica of redis-master - not written to directly by the app, only ever a promotion target",
+      "position": { "x": 750, "y": 520 },
+      "details": {
+        "purpose": "Kept current via Redis's own async replication off redis-master; the three Sentinels promote one of the two replicas to master if redis-master stops responding",
+        "technologies": ["Redis 7"],
+        "links": {
+          "compose": "sandbox/docker-compose.yml#redis-replica2"
+        }
+      }
+    },
+    {
+      "id": "redis-sentinel-1",
+      "name": "Redis Sentinel 1",
+      "type": "infrastructure",
+      "icon": "👁️",
+      "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
+      "position": { "x": 600, "y": 600 },
+      "details": {
+        "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
+        "technologies": ["Redis Sentinel"],
+        "port": 26379,
+        "links": {
+          "config": "sandbox/infra/redis/sentinel.conf"
+        }
+      }
+    },
+    {
+      "id": "redis-sentinel-2",
+      "name": "Redis Sentinel 2",
+      "type": "infrastructure",
+      "icon": "👁️",
+      "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
+      "position": { "x": 700, "y": 640 },
+      "details": {
+        "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
+        "technologies": ["Redis Sentinel"],
+        "port": 26379,
+        "links": {
+          "config": "sandbox/infra/redis/sentinel.conf"
+        }
+      }
+    },
+    {
+      "id": "redis-sentinel-3",
+      "name": "Redis Sentinel 3",
+      "type": "infrastructure",
+      "icon": "👁️",
+      "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
+      "position": { "x": 600, "y": 680 },
+      "details": {
+        "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
+        "technologies": ["Redis Sentinel"],
+        "port": 26379,
+        "links": {
+          "config": "sandbox/infra/redis/sentinel.conf"
+        }
+      }
+    },
+    {
+      "id": "mongo1",
+      "name": "Mongo 1",
+      "type": "infrastructure",
+      "icon": "🍃",
+      "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
+      "position": { "x": 1060, "y": 560 },
+      "details": {
+        "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
+        "technologies": ["MongoDB 7", "replica set"],
+        "port": 27017,
+        "links": {
+          "compose": "sandbox/docker-compose.yml#mongo1",
+          "code": "src/backend/Shared/Infrastructure/MongoClickMetaStore.cs"
+        }
+      }
+    },
+    {
+      "id": "mongo2",
+      "name": "Mongo 2",
+      "type": "infrastructure",
+      "icon": "🍃",
+      "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
+      "position": { "x": 1200, "y": 620 },
+      "details": {
+        "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
+        "technologies": ["MongoDB 7", "replica set"],
+        "port": 27017,
+        "links": {
+          "compose": "sandbox/docker-compose.yml#mongo2",
+          "code": "src/backend/Shared/Infrastructure/MongoClickMetaStore.cs"
+        }
+      }
+    },
+    {
+      "id": "mongo3",
+      "name": "Mongo 3",
+      "type": "infrastructure",
+      "icon": "🍃",
+      "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
+      "position": { "x": 1060, "y": 680 },
+      "details": {
+        "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
+        "technologies": ["MongoDB 7", "replica set"],
+        "port": 27017,
+        "links": {
+          "compose": "sandbox/docker-compose.yml#mongo3",
+          "code": "src/backend/Shared/Infrastructure/MongoClickMetaStore.cs"
         }
       }
     },
@@ -198,7 +327,7 @@
       "description": "Own physical database, not just a schema — real isolation from links_db/clicks_db",
       "position": { "x": 1140, "y": 60 },
       "details": {
-        "purpose": "Users(id, name, email, passwordHash, sault)",
+        "purpose": "Users(id, name, email, passwordHash, sault) + RefreshTokens(id, userId, tokenHash, expiresAt, revokedAt?)",
         "technologies": ["PostgreSQL 16"],
         "port": 5432,
         "links": {
@@ -215,7 +344,7 @@
       "description": "Own physical database — target design shards this one (scenario 4)",
       "position": { "x": 1140, "y": 260 },
       "details": {
-        "purpose": "Links(hash PK, originalLink, shortenLink, createdAt, userId?)",
+        "purpose": "Links(hash PK, originalLink, shortenLink, createdAt, userId?, clickCount)",
         "technologies": ["PostgreSQL 16"],
         "port": 5432,
         "links": {
@@ -238,6 +367,40 @@
         "links": {
           "compose": "sandbox/docker-compose.yml#postgres",
           "init": "sandbox/infra/postgres/init-databases.sql"
+        }
+      }
+    },
+    {
+      "id": "postgres-replica1",
+      "name": "Postgres Replica 1",
+      "type": "infrastructure",
+      "icon": "🐘",
+      "description": "Streaming (physical) replica of the whole cluster - bootstraps via pg_basebackup, then runs as an ordinary hot standby",
+      "position": { "x": 1340, "y": 140 },
+      "details": {
+        "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica2, and the primary",
+        "technologies": ["PostgreSQL 16", "streaming replication"],
+        "port": 5433,
+        "links": {
+          "compose": "sandbox/docker-compose.yml#postgres-replica1",
+          "entrypoint": "sandbox/infra/postgres/replica-entrypoint.sh"
+        }
+      }
+    },
+    {
+      "id": "postgres-replica2",
+      "name": "Postgres Replica 2",
+      "type": "infrastructure",
+      "icon": "🐘",
+      "description": "Streaming (physical) replica of the whole cluster - bootstraps via pg_basebackup, then runs as an ordinary hot standby",
+      "position": { "x": 1340, "y": 380 },
+      "details": {
+        "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica1, and the primary",
+        "technologies": ["PostgreSQL 16", "streaming replication"],
+        "port": 5434,
+        "links": {
+          "compose": "sandbox/docker-compose.yml#postgres-replica2",
+          "entrypoint": "sandbox/infra/postgres/replica-entrypoint.sh"
         }
       }
     }
@@ -291,11 +454,12 @@
     },
     {
       "from": "link-api",
-      "to": "redis",
+      "to": "redis-master",
       "label": "Cache read-through on GET",
       "protocol": "RESP",
       "format": "link:{hash} → JSON",
-      "synchronous": true
+      "synchronous": true,
+      "notes": "Connects via Sentinel discovery (redis-sentinel-1/2/3) - the client asks them who's current master and reconnects automatically on failover, no code involved."
     },
     {
       "from": "link-api",
@@ -330,12 +494,38 @@
       "synchronous": true
     },
     {
+      "from": "rabbitmq",
+      "to": "shortener-service",
+      "label": "Consume ClickTrackedEvent",
+      "protocol": "AMQP 0-9-1",
+      "synchronous": false,
+      "notes": "Fans out to shortener-service alongside traffic-service below - two independent queues bound to the same routing key."
+    },
+    {
+      "from": "shortener-service",
+      "to": "pgcat",
+      "label": "Increment link's click count",
+      "protocol": "PostgreSQL wire (Npgsql)",
+      "format": "an approximate display counter, not the audit trail - see traffic-service's own Clicks table for that",
+      "synchronous": true
+    },
+    {
       "from": "redirect-api",
-      "to": "redis",
+      "to": "redis-master",
       "label": "Cache lookup",
       "protocol": "RESP",
       "format": "link:{hash} → JSON",
-      "synchronous": true
+      "synchronous": true,
+      "notes": "Connects via Sentinel discovery (redis-sentinel-1/2/3) - the client asks them who's current master and reconnects automatically on failover, no code involved."
+    },
+    {
+      "from": "redirect-api",
+      "to": "redis-master",
+      "label": "Increment click counter",
+      "protocol": "RESP",
+      "format": "link:{hash}:clicks → INCR",
+      "synchronous": true,
+      "notes": "Hot path - doesn't wait on Postgres. The durable \"my links\" click count is synced separately, asynchronously, off ClickTrackedEvent via ShortenerService."
     },
     {
       "from": "redirect-api",
@@ -350,7 +540,7 @@
       "to": "rabbitmq",
       "label": "Publish ClickTrackedEvent",
       "protocol": "AMQP 0-9-1",
-      "format": "{ id, hash, inboundLink, outboundLink, clickedAt } → JSON, routing key \"click.tracked\"",
+      "format": "{ id, hash, inboundLink, outboundLink, clickedAt, userAgent, referrer, ipAddress } → JSON, routing key \"click.tracked\"",
       "synchronous": false,
       "notes": "Published right before the 302 response; falls back to the same SQLite-queue pattern as LinkApi if the broker is unreachable. A 404 never publishes anything."
     },
@@ -366,15 +556,24 @@
       "to": "pgcat",
       "label": "Persist the click",
       "protocol": "PostgreSQL wire (Npgsql)",
-      "format": "this is the only writer",
+      "format": "this is the only writer - the exactly-once audit trail",
       "synchronous": true
+    },
+    {
+      "from": "traffic-service",
+      "to": "mongo1",
+      "label": "Write click metadata",
+      "protocol": "MongoDB wire protocol",
+      "format": "clicks_meta_db.clicks, upsert by click id - parsed browser/OS/device + geo-IP",
+      "synchronous": true,
+      "notes": "The driver is seeded with mongo1/2/3 and auto-discovers whichever is currently primary in the replica set - mongo1 here is just the representative seed node, not a fixed primary the way Postgres's primary is."
     },
     {
       "from": "pgcat",
       "to": "users-db",
       "label": "Pooled connection",
       "protocol": "PostgreSQL wire",
-      "format": "pool_mode = transaction, 1 unsharded shard",
+      "format": "pool_mode = transaction, 1 unsharded shard - reads load-balanced across the primary + 2 replicas, writes always to the primary",
       "synchronous": true
     },
     {
@@ -382,7 +581,7 @@
       "to": "links-db",
       "label": "Pooled connection",
       "protocol": "PostgreSQL wire",
-      "format": "pool_mode = transaction, 1 unsharded shard - see scenario 4 for sharding this one",
+      "format": "pool_mode = transaction, 1 unsharded shard - see scenario 4 for sharding this one; reads load-balanced across the primary + 2 replicas, writes always to the primary",
       "synchronous": true
     },
     {
@@ -390,8 +589,101 @@
       "to": "clicks-db",
       "label": "Pooled connection",
       "protocol": "PostgreSQL wire",
-      "format": "pool_mode = transaction, 1 unsharded shard",
+      "format": "pool_mode = transaction, 1 unsharded shard - reads load-balanced across the primary + 2 replicas, writes always to the primary",
       "synchronous": true
+    },
+    {
+      "from": "pgcat",
+      "to": "postgres-replica1",
+      "label": "Pooled read (load-balanced)",
+      "protocol": "PostgreSQL wire",
+      "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db)",
+      "synchronous": true
+    },
+    {
+      "from": "pgcat",
+      "to": "postgres-replica2",
+      "label": "Pooled read (load-balanced)",
+      "protocol": "PostgreSQL wire",
+      "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db)",
+      "synchronous": true
+    },
+    {
+      "from": "links-db",
+      "to": "postgres-replica1",
+      "label": "Streaming replication (WAL)",
+      "protocol": "PostgreSQL replication protocol",
+      "format": "cluster-wide - covers users_db/links_db/clicks_db together, not just this one database",
+      "synchronous": false,
+      "notes": "Drawn from links-db as a representative source since all three logical databases live on the one physical primary and replicate together."
+    },
+    {
+      "from": "links-db",
+      "to": "postgres-replica2",
+      "label": "Streaming replication (WAL)",
+      "protocol": "PostgreSQL replication protocol",
+      "format": "cluster-wide - covers users_db/links_db/clicks_db together, not just this one database",
+      "synchronous": false,
+      "notes": "Drawn from links-db as a representative source since all three logical databases live on the one physical primary and replicate together."
+    },
+    {
+      "from": "redis-master",
+      "to": "redis-replica1",
+      "label": "Async replication",
+      "protocol": "Redis replication (PSYNC)",
+      "synchronous": false
+    },
+    {
+      "from": "redis-master",
+      "to": "redis-replica2",
+      "label": "Async replication",
+      "protocol": "Redis replication (PSYNC)",
+      "synchronous": false
+    },
+    {
+      "from": "redis-sentinel-1",
+      "to": "redis-master",
+      "label": "Monitors health, votes on failover",
+      "protocol": "Redis Sentinel protocol",
+      "format": "quorum 2 of 3 to declare redis-master down and promote a replica",
+      "synchronous": false
+    },
+    {
+      "from": "redis-sentinel-2",
+      "to": "redis-master",
+      "label": "Monitors health, votes on failover",
+      "protocol": "Redis Sentinel protocol",
+      "format": "quorum 2 of 3 to declare redis-master down and promote a replica",
+      "synchronous": false
+    },
+    {
+      "from": "redis-sentinel-3",
+      "to": "redis-master",
+      "label": "Monitors health, votes on failover",
+      "protocol": "Redis Sentinel protocol",
+      "format": "quorum 2 of 3 to declare redis-master down and promote a replica",
+      "synchronous": false
+    },
+    {
+      "from": "mongo1",
+      "to": "mongo2",
+      "label": "Replica set (rs0)",
+      "protocol": "MongoDB replication (oplog)",
+      "synchronous": false
+    },
+    {
+      "from": "mongo2",
+      "to": "mongo3",
+      "label": "Replica set (rs0)",
+      "protocol": "MongoDB replication (oplog)",
+      "synchronous": false
+    },
+    {
+      "from": "mongo3",
+      "to": "mongo1",
+      "label": "Replica set (rs0)",
+      "protocol": "MongoDB replication (oplog)",
+      "synchronous": false
     }
   ]
 }

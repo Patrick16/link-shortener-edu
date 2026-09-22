@@ -14,11 +14,12 @@ export const TRAFFIC_FLOW_EDGES: ReadonlyArray<readonly [string, string]> = [
   ['rabbitmq', 'shortener-service'],
   ['shortener-service', 'pgcat'],
   ['pgcat', 'links-db'],
-  ['redirect-api', 'redis'],
+  ['redirect-api', 'redis-master'],
   ['redirect-api', 'pgcat'],
   ['redirect-api', 'rabbitmq'],
   ['rabbitmq', 'traffic-service'],
   ['traffic-service', 'pgcat'],
+  ['traffic-service', 'mongo1'],
   ['pgcat', 'clicks-db'],
 ]
 
