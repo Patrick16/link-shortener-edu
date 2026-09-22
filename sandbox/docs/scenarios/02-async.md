@@ -65,6 +65,10 @@ docker compose exec mongo mongosh --quiet clicks_meta_db \
   --eval "printjson(db.clicks.find().sort({ClickedAt:-1}).limit(5).toArray())"
 ```
 
+Or `mongo-express` (`http://localhost:8085`) — a GUI over Mongo, same role `redisinsight` plays for
+Redis. No login (`ME_CONFIG_BASICAUTH: "false"`, dev-only); `clicks_meta_db` → `clicks` shows the
+documents.
+
 ## Try it yourself
 
 ```bash

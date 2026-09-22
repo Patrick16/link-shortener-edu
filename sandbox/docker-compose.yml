@@ -75,6 +75,19 @@ services:
       timeout: 5s
       retries: 10
 
+  mongo-express:
+    image: mongo-express:latest
+    ports:
+      - "8085:8081"
+    environment:
+      ME_CONFIG_MONGODB_URL: "mongodb://mongo:27017/"
+      # Dev-only, same spirit as the aspire-dashboard anonymous-access flag below - skips the
+      # basic-auth prompt so this behaves like RedisInsight (open the URL, no login).
+      ME_CONFIG_BASICAUTH: "false"
+    depends_on:
+      mongo:
+        condition: service_healthy
+
   redisinsight:
     image: redis/redisinsight:latest
     ports:
