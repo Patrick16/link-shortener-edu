@@ -17,9 +17,8 @@ right now.
 - **RedirectApi** — accepts a short link, resolves the origin link via `Redis Links` (cache) or
   directly from Postgres, returns the redirect, and publishes a click event to RabbitMQ for
   `TrafficService`.
-- **TrafficService** (worker) — listens on RabbitMQ, writes clicks to `Postgres Clicks`. Target
-  design also has it writing metadata (user-agent, referrer, headers) to `Mongo Clicks meta` — that
-  part isn't built (Mongo isn't in the stack yet).
+- **TrafficService** (worker) — listens on RabbitMQ, writes clicks to `Postgres Clicks` and click
+  metadata (parsed browser/OS/device, IP, geo) to `Mongo Clicks meta`.
 
 ## Storage
 
@@ -33,7 +32,9 @@ schemas) — closer to real microservice isolation, and it's the model `pgcat` p
   createdAt, userId?)
 - `Redis Links` — cache of hash → link for fast redirects (shared key format across LinkApi/RedirectApi)
 - `clicks_db` (owned by TrafficService) — Clicks(id, clickedAt, inboundLink, outboundLink, hash)
-- `Mongo Clicks meta` — target: ClicksMeta(id, clickedAt, userAgent, referrer, origin, headers) — not built yet
+- `clicks_meta_db` (Mongo, owned by TrafficService) — clicks collection, one ClickMeta document per
+  click, `_id` = the same id as the Postgres row: (hash, clickedAt, userAgent, referrer, ipAddress,
+  browser?, os?, deviceType?, country?, city?)
 
 ## Infrastructure for High-Load Practice
 
@@ -52,8 +53,8 @@ schemas) — closer to real microservice isolation, and it's the model `pgcat` p
 walkthrough, request flow, and things to try by hand: **[`scenarios/01-minimal.md`](scenarios/01-minimal.md)**.
 
 **Scenario 2's backend and infra are also done** — click tracking works end to end (`RedirectApi` →
-RabbitMQ → `TrafficService` → Postgres Clicks), verified live including the linked trace in the
-dashboard. Its frontend piece and write-up doc aren't done yet.
+RabbitMQ → `TrafficService` → Postgres Clicks + Mongo ClicksMeta), verified live including the
+linked trace in the dashboard. Its frontend piece isn't done yet.
 
 Short version of what's real today:
 
@@ -66,8 +67,9 @@ Short version of what's real today:
 - One Postgres server hosts three separate databases (`users_db`, `links_db`, `clicks_db`) — real
   database-level isolation between services, not just schemas in one database. No sharding of
   `links_db` yet — that's scenario 4.
-- Click *metadata* (user-agent, referrer, headers → Mongo) is still not built — Mongo isn't in the
-  stack. Only the Postgres `Clicks` row (hash, in/outbound link, timestamp) exists.
+- Click *metadata* (parsed browser/OS/device via `UAParser`, IP, geo via `ip-api.com`) writes to a
+  Mongo `clicks_meta_db.clicks` document alongside the Postgres `Clicks` row, same `Id`. See
+  `scenarios/02-async.md#click-metadata-mongo` for what's captured and known tradeoffs.
 - RabbitMQ's exchange/queue/binding topology is declared by the application itself at connection
   time (`RabbitMqPublisher`/`RabbitMqConsumer`), not loaded from `infra/rabbitmq/definitions.json` —
   that file is a placeholder for a possible future static-provisioning approach, unused right now

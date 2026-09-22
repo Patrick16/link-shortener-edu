@@ -129,3 +129,74 @@ main {
   cursor: pointer;
   align-self: flex-start;
 }
+
+.dashboard {
+  max-width: 560px;
+}
+
+.dashboard h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.link-list-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.link-list-item:last-child {
+  border-bottom: none;
+}
+
+.link-list-item a {
+  color: var(--accent);
+  word-break: break-all;
+}
+
+.link-list-original {
+  color: var(--text);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.link-list-clicks {
+  color: var(--text-h);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.pagination button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--accent-bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.pagination button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

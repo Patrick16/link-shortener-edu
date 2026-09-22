@@ -18,11 +18,20 @@ var rabbitMqConnectionString = builder.Configuration.GetConnectionString(Constan
 builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbitMqConnectionString!));
 builder.Services.AddSingleton<IMessageConsumer, RabbitMqConsumer>();
 
+var mongoConnectionString = builder.Configuration.GetConnectionString(Constants.MongoDbConnectionString);
+builder.Services.AddSingleton<IClickMetaStore>(_ => new MongoClickMetaStore(mongoConnectionString!));
+builder.Services.AddSingleton<IUserAgentParser, UaParserUserAgentParser>();
+builder.Services.AddHttpClient<IGeoIpResolver, IpApiGeoIpResolver>(client =>
+{
+    client.BaseAddress = new Uri("http://ip-api.com");
+});
+
 builder.Services.AddHostedService<ClickTrackedConsumer>();
 
 builder.Services.AddHealthChecks()
     .AddCheck<DbContextFactoryHealthCheck<DatabaseContext>>("database", tags: ["ready"])
-    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+    .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"])
+    .AddCheck<MongoHealthCheck>("mongo", tags: ["ready"]);
 
 var app = builder.Build();
 

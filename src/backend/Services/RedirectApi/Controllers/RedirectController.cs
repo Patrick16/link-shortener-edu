@@ -13,11 +13,13 @@ namespace RedirectApi.Controllers;
 public class RedirectController(
     DatabaseContext context,
     IEntityCacheService<Link> cache,
-    IMessagePublisher publisher) : Controller
+    IMessagePublisher publisher,
+    IClickCounterService clickCounter) : Controller
 {
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _cache = cache;
     private readonly IMessagePublisher _publisher = publisher;
+    private readonly IClickCounterService _clickCounter = clickCounter;
 
     [HttpGet("{hash}")]
     public async Task<IActionResult> RedirectToOrigin(
@@ -33,6 +35,10 @@ public class RedirectController(
             return NotFound();
         }
 
+        // Atomic, cheap, and doesn't touch Postgres - the counter shown on the "my links" page is
+        // synced from Postgres separately, asynchronously, off the ClickTrackedEvent below.
+        await _clickCounter.IncrementAsync(hash, cancellationToken);
+
         var clickEvent = new ClickTrackedEvent
         {
             Id = Guid.NewGuid(),
@@ -40,6 +46,9 @@ public class RedirectController(
             InboundLink = Request.GetDisplayUrl(),
             OutboundLink = link.OriginalLink,
             ClickedAt = DateTime.UtcNow,
+            UserAgent = Request.Headers.UserAgent.ToString(),
+            Referrer = Request.Headers.Referer.ToString(),
+            IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString(),
         };
 
         // Same pattern as LinkApi: published (or SQLite-fallback-queued) before responding, so a

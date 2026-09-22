@@ -63,6 +63,18 @@ services:
       timeout: 5s
       retries: 10
 
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017" # exposed for local inspection (mongosh / Compass), same spirit as postgres's 5432
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   redisinsight:
     image: redis/redisinsight:latest
     ports:
@@ -209,11 +221,14 @@ services:
     environment:
       ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=clicks_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      ConnectionStrings__Mongo: "mongodb://mongo:27017/clicks_meta_db"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       pgcat:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      mongo:
         condition: service_healthy
       aspire-dashboard:
         condition: service_started
@@ -252,5 +267,6 @@ services:
 
 volumes:
   postgres-data:
+  mongo-data:
   redisinsight-data:
   control-api-data:

@@ -6,6 +6,7 @@ using OpenTelemetry.Trace;
 using RedirectApi;
 using Scalar.AspNetCore;
 using ServiceDefaults;
+using StackExchange.Redis;
 using WebDefaults;
 // OpenTelemetry.Trace also has a "Link" type (a span link) — alias ours to avoid the clash.
 using Link = Common.Models.Link;
@@ -38,6 +39,12 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString(Constants.RedisConnectionString);
     options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
 });
+
+// Separate from the IDistributedCache registration above (that's a JSON-blob GET/SET abstraction
+// with no atomic increment) - this is the raw client the click counter needs for INCR.
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    _ => ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString(Constants.RedisConnectionString)!));
+builder.Services.AddSingleton<IClickCounterService, RedisClickCounterService>();
 
 var rabbitMqConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqConnectionString);
 var rabbitMqFallbackConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqFallbackConnectionString);

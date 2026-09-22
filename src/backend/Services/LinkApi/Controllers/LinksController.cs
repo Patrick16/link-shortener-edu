@@ -1,9 +1,11 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using Common;
 using Common.Models;
 using Contracts.Events;
 using Infrastructure;
 using LinkApi.Models;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -55,6 +57,10 @@ public class LinksController(
         return new LinkResponse(hash, createdAt);
     }
 
+    // Unlike CreateLink, this is a listing of one person's own links - anonymous callers have no
+    // "own links" to list, so this requires a valid Bearer token rather than treating auth as
+    // optional.
+    [Authorize]
     [HttpGet]
     public async Task<ActionResult<LinksPageResponse>> GetLinks(
         [FromQuery] int page = 1,
@@ -68,23 +74,17 @@ public class LinksController(
                 title: "Invalid query parameter.");
         }
 
-        // Same optional-auth pattern as CreateLink: anonymous callers get every link, a valid
-        // Bearer token narrows the results down to the caller's own.
-        var userIdClaim = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
-        var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : (Guid?)null;
+        // [Authorize] already guarantees a valid token, so Sub is always present and parseable.
+        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
 
-        var query = _context.Links.AsNoTracking().AsQueryable();
-        if (userId is not null)
-        {
-            query = query.Where(x => x.UserId == userId);
-        }
+        var query = _context.Links.AsNoTracking().Where(x => x.UserId == userId);
 
         var totalCount = await query.CountAsync(cancellationToken);
         var items = await query
             .OrderByDescending(x => x.CreatedAt)
             .Skip((page - 1) * PageSize)
             .Take(PageSize)
-            .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt))
+            .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount))
             .ToListAsync(cancellationToken);
 
         var totalPages = (int)Math.Ceiling(totalCount / (double)PageSize);

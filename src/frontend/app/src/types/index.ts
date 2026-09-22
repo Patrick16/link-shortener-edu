@@ -25,3 +25,18 @@ export type LinkResponse = {
   shortenLink: string
   createdAt: string
 }
+
+export type LinkListItem = {
+  shortenLink: string
+  originalLink: string
+  createdAt: string
+  clickCount: number
+}
+
+export type LinksPage = {
+  items: LinkListItem[]
+  page: number
+  pageSize: number
+  totalCount: number
+  totalPages: number
+}

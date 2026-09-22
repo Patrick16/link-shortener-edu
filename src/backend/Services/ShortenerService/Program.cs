@@ -19,6 +19,7 @@ builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbi
 builder.Services.AddSingleton<IMessageConsumer, RabbitMqConsumer>();
 
 builder.Services.AddHostedService<LinkCreatedConsumer>();
+builder.Services.AddHostedService<ClickTrackedConsumer>();
 
 builder.Services.AddHealthChecks()
     .AddCheck<DbContextFactoryHealthCheck<DatabaseContext>>("database", tags: ["ready"])

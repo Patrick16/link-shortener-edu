@@ -1,3 +1,4 @@
+using Common;
 using Contracts.Events;
 using Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -25,10 +26,18 @@ public class ClickTrackedConsumerTests
         InboundLink = "https://short.example/abc12345",
         OutboundLink = "https://example.com",
         ClickedAt = DateTime.UtcNow,
+        UserAgent = "",
+        Referrer = "",
     };
 
     private static ClickTrackedConsumer NewSut(IDbContextFactory<DatabaseContext> factory) =>
-        new(Mock.Of<IMessageConsumer>(), factory, NullLogger<ClickTrackedConsumer>.Instance);
+        new(
+            Mock.Of<IMessageConsumer>(),
+            factory,
+            Mock.Of<IClickMetaStore>(),
+            Mock.Of<IUserAgentParser>(),
+            Mock.Of<IGeoIpResolver>(),
+            NullLogger<ClickTrackedConsumer>.Instance);
 
     [Fact]
     public async Task HandleAsync_NewClick_PersistsToDatabase()

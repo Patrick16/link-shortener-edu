@@ -1,5 +1,5 @@
 import { apiFetch } from './client'
-import type { LinkCreateRequest, LinkResponse } from '../types'
+import type { LinkCreateRequest, LinkResponse, LinksPage } from '../types'
 
 const LINK_API_URL = import.meta.env.VITE_LINK_API_URL as string
 const REDIRECT_API_URL = import.meta.env.VITE_REDIRECT_API_URL as string
@@ -16,4 +16,10 @@ export function createLink(originalLink: string): Promise<LinkResponse> {
 
 export function getLink(hash: string): Promise<LinkResponse> {
   return apiFetch<LinkResponse>(LINK_API_URL, `/links/${encodeURIComponent(hash)}`)
+}
+
+// Requires auth: the backend rejects anonymous callers with 401, since there's no "your links"
+// to list without knowing who you are.
+export function getLinks(page = 1): Promise<LinksPage> {
+  return apiFetch<LinksPage>(LINK_API_URL, `/links?page=${page}`, { auth: true })
 }

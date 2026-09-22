@@ -5,4 +5,5 @@ public record Link(
     string OriginalLink,
     string ShortenLink,
     DateTime CreatedAt,
-    Guid? UserId);
+    Guid? UserId,
+    int ClickCount = 0);

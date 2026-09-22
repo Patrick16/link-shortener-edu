@@ -51,6 +51,7 @@ public sealed class RabbitMqConsumer(
                 catch (Exception ex)
                 {
                     activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                    _logger.LogError(ex, "Handler failed for message on queue {QueueName}, nacking for requeue", queueName);
                     await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true, cancellationToken);
                 }
             };

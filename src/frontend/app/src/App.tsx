@@ -1,8 +1,18 @@
 import { BrowserRouter, Link, Navigate, Route, Routes } from 'react-router-dom'
 import { AuthProvider, useAuth } from './auth/AuthContext'
 import CreateLinkPage from './pages/CreateLinkPage'
+import DashboardPage from './pages/DashboardPage'
 import LoginPage from './pages/LoginPage'
 import './App.css'
+
+function HomePage() {
+  return (
+    <>
+      <CreateLinkPage />
+      <DashboardPage />
+    </>
+  )
+}
 
 function NavBar() {
   const { user, logout } = useAuth()
@@ -35,7 +45,7 @@ function App() {
         <NavBar />
         <main>
           <Routes>
-            <Route path="/" element={<CreateLinkPage />} />
+            <Route path="/" element={<HomePage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
