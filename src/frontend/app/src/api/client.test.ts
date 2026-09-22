@@ -1,33 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { apiFetch, ApiError, getStoredToken, setStoredToken } from './client'
+import { apiFetch, ApiError, getAccessToken, setAccessToken } from './client'
 
-describe('token storage', () => {
+describe('access token storage', () => {
   beforeEach(() => {
-    localStorage.clear()
+    setAccessToken(null)
   })
 
-  it('getStoredToken returns null when nothing is stored', () => {
-    expect(getStoredToken()).toBeNull()
+  it('getAccessToken returns null when nothing is set', () => {
+    expect(getAccessToken()).toBeNull()
   })
 
-  it('setStoredToken then getStoredToken round-trips the value', () => {
-    setStoredToken('my-token')
+  it('setAccessToken then getAccessToken round-trips the value', () => {
+    setAccessToken('my-token')
 
-    expect(getStoredToken()).toBe('my-token')
+    expect(getAccessToken()).toBe('my-token')
   })
 
-  it('setStoredToken(null) clears a previously stored token', () => {
-    setStoredToken('my-token')
+  it('setAccessToken(null) clears a previously set token', () => {
+    setAccessToken('my-token')
 
-    setStoredToken(null)
+    setAccessToken(null)
 
-    expect(getStoredToken()).toBeNull()
+    expect(getAccessToken()).toBeNull()
   })
 })
 
 describe('apiFetch', () => {
   beforeEach(() => {
-    localStorage.clear()
+    setAccessToken(null)
     vi.stubGlobal('fetch', vi.fn())
   })
 
@@ -61,8 +61,8 @@ describe('apiFetch', () => {
     expect(headers['Content-Type']).toBe('application/json')
   })
 
-  it('attaches a Bearer token when auth is true and a token is stored', async () => {
-    setStoredToken('secret-token')
+  it('attaches a Bearer token when auth is true and a token is set', async () => {
+    setAccessToken('secret-token')
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }))
 
     await apiFetch('https://api.example.com', '/things', { auth: true })
@@ -72,7 +72,7 @@ describe('apiFetch', () => {
     expect(headers['Authorization']).toBe('Bearer secret-token')
   })
 
-  it('does not attach an Authorization header when auth is true but no token is stored', async () => {
+  it('does not attach an Authorization header when auth is true but no token is set', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }))
 
     await apiFetch('https://api.example.com', '/things', { auth: true })

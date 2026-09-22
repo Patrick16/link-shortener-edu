@@ -30,6 +30,8 @@ builder.Services.AddDbContextPool<DatabaseContext>(
     }));
 
 builder.Services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
+// Scoped, not Singleton - it depends on the pooled (scoped) DatabaseContext.
+builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 
 builder.Services.AddApiExceptionHandling();
 builder.Services.AddHealthChecks()
@@ -40,7 +42,10 @@ var corsOrigins = builder.Configuration.GetSection(Constants.CorsAllowedOriginsS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy(Constants.FrontendCorsPolicy, policy =>
-        policy.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader());
+        // AllowCredentials is required for the browser to send/receive the refresh-token cookie
+        // cross-origin; it only works with an explicit origin list (never AllowAnyOrigin/"*"),
+        // which corsOrigins already is.
+        policy.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader().AllowCredentials());
 });
 
 var app = builder.Build();

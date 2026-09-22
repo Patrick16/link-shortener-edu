@@ -11,7 +11,7 @@ export function buildShortUrl(hash: string): string {
 
 export function createLink(originalLink: string): Promise<LinkResponse> {
   const request: LinkCreateRequest = { originalLink }
-  return apiFetch<LinkResponse>(LINK_API_URL, '/links', { method: 'POST', body: request })
+  return apiFetch<LinkResponse>(LINK_API_URL, '/links', { method: 'POST', body: request, auth: true })
 }
 
 export function getLink(hash: string): Promise<LinkResponse> {

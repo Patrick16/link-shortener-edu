@@ -11,46 +11,41 @@ export class ApiError extends Error {
   }
 }
 
-const TOKEN_STORAGE_KEY = 'link-shortener:token'
+// In-memory only, deliberately not persisted to localStorage/sessionStorage: either would be
+// readable by any script on the page, so an XSS bug could exfiltrate a long-lived access token.
+// A hard page reload starts with no token here; AuthProvider restores the session by exchanging
+// the httpOnly refresh-token cookie for a new one via POST /refresh.
+let accessToken: string | null = null
 
-export function getStoredToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY)
-  } catch {
-    // localStorage can throw in some contexts (private browsing, blocked storage) — treat as signed out.
-    return null
-  }
+export function getAccessToken(): string | null {
+  return accessToken
 }
 
-export function setStoredToken(token: string | null): void {
-  try {
-    if (token) {
-      localStorage.setItem(TOKEN_STORAGE_KEY, token)
-    } else {
-      localStorage.removeItem(TOKEN_STORAGE_KEY)
-    }
-  } catch {
-    // Ignore — nothing sensible to do if storage isn't available.
-  }
+export function setAccessToken(token: string | null): void {
+  accessToken = token
 }
 
 type RequestOptions = {
   method?: 'GET' | 'POST'
   body?: unknown
   auth?: boolean
+  // Sends/receives cookies cross-origin (the httpOnly refresh-token cookie AuthApi issues).
+  // Opt-in per call rather than always-on, since it requires the target's CORS policy to allow
+  // credentials, which only AuthApi's does.
+  credentials?: boolean
 }
 
 export async function apiFetch<TResponse>(
   baseUrl: string,
   path: string,
-  { method = 'GET', body, auth = false }: RequestOptions = {},
+  { method = 'GET', body, auth = false, credentials = false }: RequestOptions = {},
 ): Promise<TResponse> {
   const headers: Record<string, string> = {}
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
   }
   if (auth) {
-    const token = getStoredToken()
+    const token = getAccessToken()
     if (token) {
       headers['Authorization'] = `Bearer ${token}`
     }
@@ -60,6 +55,7 @@ export async function apiFetch<TResponse>(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: credentials ? 'include' : 'same-origin',
   })
 
   if (!response.ok) {

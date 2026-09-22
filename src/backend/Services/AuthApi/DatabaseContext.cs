@@ -1,3 +1,4 @@
+using AuthApi.Models;
 using Common.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -8,8 +9,11 @@ namespace AuthApi;
 public class DatabaseContext(DbContextOptions options) : DbContext(options)
 {
     private const string UsersTable = "users";
+    private const string RefreshTokensTable = "refresh_tokens";
 
     internal DbSet<User> Users { get; set; }
+
+    internal DbSet<RefreshToken> RefreshTokens { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -19,5 +23,14 @@ public class DatabaseContext(DbContextOptions options) : DbContext(options)
         modelBuilder.Entity<User>()
             .HasIndex(x => x.Email)
             .IsUnique();
+
+        modelBuilder.Entity<RefreshToken>().ToTable(RefreshTokensTable);
+        modelBuilder.Entity<RefreshToken>()
+            .HasKey(x => x.Id);
+        modelBuilder.Entity<RefreshToken>()
+            .HasIndex(x => x.TokenHash)
+            .IsUnique();
+        modelBuilder.Entity<RefreshToken>()
+            .HasIndex(x => x.UserId);
     }
 }

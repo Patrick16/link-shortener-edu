@@ -1,5 +1,6 @@
 using AuthApi.Models;
 using Common.Models;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -11,12 +12,17 @@ namespace AuthApi.Controllers;
 [Route("/")]
 public class AuthController(
     DatabaseContext context,
-    IJwtTokenGenerator tokenGenerator) : Controller
+    IJwtTokenGenerator tokenGenerator,
+    IRefreshTokenService refreshTokenService,
+    IWebHostEnvironment environment) : Controller
 {
     private static readonly PasswordHasher<User> PasswordHasher = new();
+    private const string RefreshTokenCookieName = "refreshToken";
 
     private readonly DatabaseContext _context = context;
     private readonly IJwtTokenGenerator _tokenGenerator = tokenGenerator;
+    private readonly IRefreshTokenService _refreshTokenService = refreshTokenService;
+    private readonly IWebHostEnvironment _environment = environment;
 
     [HttpPost("register")]
     public async Task<ActionResult<AuthResponse>> Register(
@@ -47,6 +53,7 @@ public class AuthController(
         _context.Users.Add(user);
         await _context.SaveChangesAsync(cancellationToken);
 
+        await IssueRefreshCookieAsync(user.Id, cancellationToken);
         var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
         return new AuthResponse(token, expiresAt);
     }
@@ -72,9 +79,80 @@ public class AuthController(
             return InvalidCredentials();
         }
 
+        await IssueRefreshCookieAsync(user.Id, cancellationToken);
         var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
         return new AuthResponse(token, expiresAt);
     }
+
+    [HttpPost("refresh")]
+    public async Task<ActionResult<AuthResponse>> Refresh(CancellationToken cancellationToken)
+    {
+        if (!Request.Cookies.TryGetValue(RefreshTokenCookieName, out var rawToken) || string.IsNullOrEmpty(rawToken))
+        {
+            return InvalidRefreshToken();
+        }
+
+        var rotated = await _refreshTokenService.RotateAsync(rawToken, cancellationToken);
+        if (rotated is null)
+        {
+            Response.Cookies.Delete(RefreshTokenCookieName, NewRefreshCookieOptions());
+            return InvalidRefreshToken();
+        }
+
+        var user = await _context.Users.FindAsync([rotated.UserId], cancellationToken);
+        if (user is null)
+        {
+            Response.Cookies.Delete(RefreshTokenCookieName, NewRefreshCookieOptions());
+            return InvalidRefreshToken();
+        }
+
+        SetRefreshCookie(rotated.RawToken, rotated.ExpiresAt);
+
+        var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
+        return new AuthResponse(token, expiresAt);
+    }
+
+    [HttpPost("logout")]
+    public async Task<IActionResult> Logout(CancellationToken cancellationToken)
+    {
+        if (Request.Cookies.TryGetValue(RefreshTokenCookieName, out var rawToken) && !string.IsNullOrEmpty(rawToken))
+        {
+            await _refreshTokenService.RevokeAsync(rawToken, cancellationToken);
+        }
+
+        Response.Cookies.Delete(RefreshTokenCookieName, NewRefreshCookieOptions());
+        return NoContent();
+    }
+
+    private async Task IssueRefreshCookieAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var (rawToken, expiresAt) = await _refreshTokenService.IssueAsync(userId, cancellationToken);
+        SetRefreshCookie(rawToken, expiresAt);
+    }
+
+    private void SetRefreshCookie(string rawToken, DateTime expiresAt)
+    {
+        var options = NewRefreshCookieOptions();
+        options.Expires = expiresAt;
+        Response.Cookies.Append(RefreshTokenCookieName, rawToken, options);
+    }
+
+    // Secure requires HTTPS, which this service doesn't terminate in the docker-compose dev
+    // setup (see Program.cs) - only require it outside Development so the cookie still round-trips
+    // locally, same trade-off UseHttpsRedirection already makes there.
+    private CookieOptions NewRefreshCookieOptions() => new()
+    {
+        HttpOnly = true,
+        Secure = !_environment.IsDevelopment(),
+        SameSite = SameSiteMode.Lax,
+        Path = "/",
+    };
+
+    private ObjectResult InvalidRefreshToken() =>
+        Problem(
+            detail: "Refresh token is missing, expired, or invalid.",
+            statusCode: StatusCodes.Status401Unauthorized,
+            title: "Authentication failed.");
 
     private ObjectResult InvalidCredentials() =>
         Problem(
