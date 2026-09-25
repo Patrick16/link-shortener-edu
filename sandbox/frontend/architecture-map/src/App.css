@@ -1,6 +1,7 @@
-/* App shell: header strip (title + live run result) on top, then a 3-column body - config on the
-   left, the graph filling the center, and either a selected node's detail or run history on the
-   right. */
+/* App shell: header strip (title + live run result) on top, then a 2-column body - a single
+   sidebar on the left (a selected node's detail, a selected connection's info, or run history when
+   nothing's selected) and the graph filling the rest. No permanently-visible config sidebar - k6's
+   own config lives in its node panel, see K6ConfigPanel. */
 
 .app-shell {
   display: flex;
@@ -34,8 +35,11 @@
   min-height: 0;
 }
 
-.app-sidebar-left,
-.app-sidebar-right {
+.app-sidebar-left {
+  /* border-box (not the browser default content-box) is what lets a plain `width: 0` while
+     collapsed actually render as 0 - with content-box, the 16px padding on each side would still
+     force a visible 32px-wide sliver even at width: 0. */
+  box-sizing: border-box;
   flex-shrink: 0;
   overflow-y: auto;
   padding: 16px;
@@ -75,6 +79,35 @@
   background: var(--accent-border);
 }
 
+/* Sits on top of the resizer's own drag strip - its own pointerdown/click handlers stop
+   propagation so clicking it toggles collapse instead of starting a drag. Centered vertically and
+   fixed in place regardless of collapsed state, so it's always where the user last looked for it. */
+.app-resizer-toggle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.app-resizer-toggle:hover {
+  border-color: var(--accent-border);
+  color: var(--text-h);
+  background: var(--accent-bg);
+}
+
 @media (max-width: 1100px) {
   .app-shell {
     height: auto;
@@ -84,8 +117,7 @@
     flex-direction: column;
   }
 
-  .app-sidebar-left,
-  .app-sidebar-right {
+  .app-sidebar-left {
     width: auto !important;
     max-height: 40vh;
     border: none;
@@ -198,10 +230,18 @@ button:disabled {
 /* Diagram - fills .app-center entirely now, no fixed height */
 
 .diagram {
+  /* flex + stretch (the default align-items), not width/height: 100% - a percentage height needs
+     its containing block (.app-center) to have a *definite* height, which holds at desktop
+     (.app-shell is a fixed 100vh there) but not at the <=1100px breakpoint, where .app-shell
+     switches to height: auto and .app-center's height comes from flexbox distributing space
+     against min-height: 480px rather than an explicit height - not "definite" by the percentage
+     spec's own rules, so .diagram collapsed to its content's own near-zero intrinsic height
+     instead of filling the space. flex: 1 with min-height: 0 sizes this the same way in both cases
+     without depending on the parent's height being definite at all.
+   */
   flex: 1;
   min-width: 0;
-  width: 100%;
-  height: 100%;
+  min-height: 0;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
@@ -326,6 +366,23 @@ button:disabled {
   font-size: 20px;
   line-height: 1;
   cursor: pointer;
+}
+
+.node-panel-quick-link {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+  margin-bottom: 10px;
+}
+
+.node-panel-quick-link:hover {
+  filter: brightness(1.1);
 }
 
 .node-panel-charts {

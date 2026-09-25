@@ -13,6 +13,7 @@ import { SentinelConfigControl } from './SentinelConfigControl'
 import { Sparkline } from './Sparkline'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import { statusColor } from '../utils/statusColor'
+import { getQuickLink } from '../utils/quickLink'
 import type { ArchComponent } from '../types/architecture'
 import type { InfraStatus, ManagedContainer, PgcatConnectionStats, PostgresConnectionStats, ResourceSample } from '../types/controlApi'
 
@@ -36,6 +37,7 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
   const cpuMax = Math.max(5, ...cpuValues) * 1.4
   const memMax = Math.max(64, ...memValuesMb) * 1.3
   const primary = instances[0]
+  const quickLink = getQuickLink(component)
   const showsInfraToggle = serviceId === 'nginx' || serviceId === 'pgcat' || serviceId === 'redis-master'
   const showsPgcatConnections = serviceId === 'pgcat'
   const showsPostgresConnections = component.type === 'database'
@@ -90,6 +92,12 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
           &times;
         </button>
       </div>
+
+      {quickLink && (
+        <a className="node-panel-quick-link" href={quickLink.url} target="_blank" rel="noreferrer">
+          {quickLink.label} ↗
+        </a>
+      )}
 
       {primary ? (
         <>

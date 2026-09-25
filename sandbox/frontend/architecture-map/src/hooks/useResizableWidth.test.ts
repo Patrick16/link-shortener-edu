@@ -88,4 +88,54 @@ describe('useResizableWidth', () => {
 
     expect(localStorage.getItem('sidebar-width')).toBe('350')
   })
+
+  it('starts expanded when nothing is stored', () => {
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1))
+
+    expect(result.current.collapsed).toBe(false)
+  })
+
+  it('starts collapsed when a previous collapse was persisted', () => {
+    localStorage.setItem('sidebar-width-collapsed', '1')
+
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1))
+
+    expect(result.current.collapsed).toBe(true)
+    expect(result.current.width).toBe(0)
+  })
+
+  it('toggleCollapsed reports width as 0 while collapsed, and restores the remembered width on expand', () => {
+    localStorage.setItem('sidebar-width', '350')
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1))
+
+    act(() => result.current.toggleCollapsed())
+    expect(result.current.collapsed).toBe(true)
+    expect(result.current.width).toBe(0)
+
+    act(() => result.current.toggleCollapsed())
+    expect(result.current.collapsed).toBe(false)
+    expect(result.current.width).toBe(350)
+  })
+
+  it('persists the collapsed flag to localStorage', () => {
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1))
+
+    act(() => result.current.toggleCollapsed())
+    expect(localStorage.getItem('sidebar-width-collapsed')).toBe('1')
+
+    act(() => result.current.toggleCollapsed())
+    expect(localStorage.getItem('sidebar-width-collapsed')).toBe('0')
+  })
+
+  it('ignores a drag start while collapsed', () => {
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1))
+
+    act(() => result.current.toggleCollapsed())
+    act(() => {
+      result.current.onPointerDown({ preventDefault: () => {}, clientX: 100 } as React.PointerEvent)
+    })
+    act(() => firePointer('pointermove', 150))
+
+    expect(result.current.width).toBe(0)
+  })
 })

@@ -11,8 +11,10 @@ interface Props {
   onRun: () => void
 }
 
-// Left sidebar: everything that defines what the next traffic run will do - which endpoints, in
-// what order, and how much load. Purely config; the run's live progress and finished report live
+// Everything that defines what the next traffic run will do - which endpoints, in what order, and
+// how much load. Lives inside the k6 node's own panel (see K6ConfigPanel) rather than a
+// permanently-visible sidebar, the same "click the node to configure it" pattern every other
+// control in this app already uses. Purely config; the run's live progress and finished report live
 // in the header (TrafficResultPanel) instead, since this panel's job ends once "Run traffic" fires.
 export function TrafficConfigPanel({ config, disabled, running, onRun }: Props) {
   const selectedPresetDescription = RAMP_PRESETS.find((p) => p.id === config.rampPreset)?.description
