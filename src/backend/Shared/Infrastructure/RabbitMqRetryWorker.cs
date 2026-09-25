@@ -22,21 +22,37 @@ public class RabbitMqRetryWorker(
         using var timer = new PeriodicTimer(PollInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            var pending = await _fallbackStore.GetPendingAsync(stoppingToken);
-            foreach (var message in pending)
+            try
             {
-                var republished = await _publisher.TryRepublishAsync(message, stoppingToken);
-                if (republished)
-                {
-                    await _fallbackStore.DeleteAsync(message.MessageId, stoppingToken);
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "Retry failed for fallback message {MessageId} (topic {Topic})",
-                        message.MessageId,
-                        message.Topic);
-                }
+                await PollOnceAsync(stoppingToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A transient failure here (e.g. the SQLite fallback file briefly locked by another
+                // replica) must not crash the whole host - .NET's default BackgroundService
+                // exception behavior would otherwise stop the entire API on the next unhandled
+                // exception from this loop.
+                _logger.LogWarning(ex, "Fallback retry tick failed - will retry next tick");
+            }
+        }
+    }
+
+    internal async Task PollOnceAsync(CancellationToken cancellationToken)
+    {
+        var pending = await _fallbackStore.GetPendingAsync(cancellationToken);
+        foreach (var message in pending)
+        {
+            var republished = await _publisher.TryRepublishAsync(message, cancellationToken);
+            if (republished)
+            {
+                await _fallbackStore.DeleteAsync(message.MessageId, cancellationToken);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "Retry failed for fallback message {MessageId} (topic {Topic})",
+                    message.MessageId,
+                    message.Topic);
             }
         }
     }

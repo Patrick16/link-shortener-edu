@@ -484,6 +484,7 @@ public class DockerService : IDockerService
                 break;
             }
 
+            using var responseDisposer = response;
             if (!response.IsSuccessStatusCode)
             {
                 break;
@@ -527,15 +528,24 @@ public class DockerService : IDockerService
     // iteration-count run - there's no fixed total time to measure against, so percent comes from
     // iterations done/target instead of elapsed/totalSeconds, and the "past the requested duration"
     // skip below doesn't apply (totalSeconds is 0 in that mode and never meant to bound anything).
+    // A chaos run (high loss/latency, many VUs, up to 600s) makes k6 print a WARN per failed
+    // request - that can reach tens of MB of text, which then gets held in memory for the run's
+    // whole duration, pushed whole over SignalR on completion, and written into the run's JSON
+    // history file. 1MB is far more than anyone reads of a report by hand; progress parsing below
+    // is unaffected since it works off pendingLine, not this capped copy.
+    private const int MaxRawOutputChars = 1_000_000;
+    private const string RawOutputTruncatedMarker = "\n... [output truncated, exceeded 1MB] ...\n";
+
     private async Task<string> StreamLogsWithProgressAsync(string containerId, int totalSeconds, int? targetIterations, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
-        var logStream = await _client.Containers.GetContainerLogsAsync(
+        using var logStream = await _client.Containers.GetContainerLogsAsync(
             containerId,
             tty: false,
             new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true },
             ct);
 
         var fullOutput = new StringBuilder();
+        var outputTruncated = false;
         var pendingLine = new StringBuilder();
         var buffer = new byte[4096];
         double lastElapsed = 0;
@@ -550,7 +560,10 @@ public class DockerService : IDockerService
             }
 
             var chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            fullOutput.Append(chunk);
+            if (!outputTruncated)
+            {
+                outputTruncated = AppendCapped(fullOutput, chunk, MaxRawOutputChars);
+            }
             pendingLine.Append(chunk);
 
             var lines = pendingLine.ToString().Split('\n');
@@ -595,6 +608,28 @@ public class DockerService : IDockerService
         return fullOutput.ToString();
     }
 
+    // Appends chunk to builder unless/until maxChars is reached, at which point it appends a
+    // truncation marker once and reports "already truncated" from then on - split out from
+    // StreamLogsWithProgressAsync as a pure, static, easily unit-tested piece of an otherwise
+    // heavily Docker-API-coupled method.
+    internal static bool AppendCapped(StringBuilder builder, string chunk, int maxChars)
+    {
+        if (builder.Length >= maxChars)
+        {
+            return true;
+        }
+
+        if (builder.Length + chunk.Length > maxChars)
+        {
+            builder.Append(chunk, 0, Math.Max(0, maxChars - builder.Length));
+            builder.Append(RawOutputTruncatedMarker);
+            return true;
+        }
+
+        builder.Append(chunk);
+        return false;
+    }
+
     public async Task<ResourceSample?> GetResourceSampleAsync(ManagedContainer container, CancellationToken ct)
     {
         if (container.State != "running")
@@ -602,36 +637,52 @@ public class DockerService : IDockerService
             return null;
         }
 
-        // Stream = false still returns one response with both cpu_stats and precpu_stats
-        // populated (two samples internally), which is what the CPU% formula below needs -
-        // same as what `docker stats --no-stream` does under the hood.
-        ContainerStatsResponse? stats = null;
-        await _client.Containers.GetContainerStatsAsync(
-            container.ContainerId,
-            new ContainerStatsParameters { Stream = false },
-            new Progress<ContainerStatsResponse>(s => stats = s),
-            ct);
-
-        if (stats is null)
+        try
         {
+            // Stream = false still returns one response with both cpu_stats and precpu_stats
+            // populated (two samples internally), which is what the CPU% formula below needs -
+            // same as what `docker stats --no-stream` does under the hood.
+            ContainerStatsResponse? stats = null;
+            await _client.Containers.GetContainerStatsAsync(
+                container.ContainerId,
+                new ContainerStatsParameters { Stream = false },
+                new Progress<ContainerStatsResponse>(s => stats = s),
+                ct);
+
+            if (stats is null)
+            {
+                return null;
+            }
+
+            var cpuDelta = (double)(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage);
+            var systemDelta = (double)(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage);
+            // On cgroup v2, OnlineCPUs can come back 0 with PercpuUsage also unset (null) rather
+            // than populated - fall back to 1 rather than dereferencing a null PercpuUsage.
+            var onlineCpus = stats.CPUStats.OnlineCPUs > 0
+                ? stats.CPUStats.OnlineCPUs
+                : (uint)(stats.CPUStats.CPUUsage.PercpuUsage?.Count ?? 1);
+            var cpuPercent = systemDelta > 0 && cpuDelta > 0 ? cpuDelta / systemDelta * onlineCpus * 100.0 : 0.0;
+            var tcpConnections = await GetTcpConnectionCountAsync(container.ContainerId, ct);
+
+            return new ResourceSample(
+                container.ServiceId,
+                container.ContainerId,
+                container.ContainerNumber,
+                cpuPercent,
+                (long)stats.MemoryStats.Usage,
+                (long)stats.MemoryStats.Limit,
+                tcpConnections,
+                DateTimeOffset.UtcNow);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A container that gets removed between ListContainersAsync and here (mid scale-down/
+            // recreate) is routine, not exceptional - the poller runs every container's sample
+            // fetch in one Task.WhenAll, so letting this propagate would drop every other
+            // container's sample for the whole tick too.
+            _logger.LogDebug(ex, "Failed to fetch resource stats for container {ContainerId} - skipping this tick", container.ContainerId);
             return null;
         }
-
-        var cpuDelta = (double)(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage);
-        var systemDelta = (double)(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage);
-        var onlineCpus = stats.CPUStats.OnlineCPUs > 0 ? stats.CPUStats.OnlineCPUs : (uint)stats.CPUStats.CPUUsage.PercpuUsage.Count;
-        var cpuPercent = systemDelta > 0 && cpuDelta > 0 ? cpuDelta / systemDelta * onlineCpus * 100.0 : 0.0;
-        var tcpConnections = await GetTcpConnectionCountAsync(container.ContainerId, ct);
-
-        return new ResourceSample(
-            container.ServiceId,
-            container.ContainerId,
-            container.ContainerNumber,
-            cpuPercent,
-            (long)stats.MemoryStats.Usage,
-            (long)stats.MemoryStats.Limit,
-            tcpConnections,
-            DateTimeOffset.UtcNow);
     }
 
     // Reads the container's own /proc/net/tcp[6] rather than shelling out to ss/netstat - those
@@ -728,18 +779,38 @@ public class DockerService : IDockerService
     // queries below, all of which are "shell out to a CLI already inside the target container"
     // rather than adding a new client library dependency (Npgsql, StackExchange.Redis) to
     // control-api just to run one read-only command.
+    // A netem-partitioned or paused target (chaos testing this very tool enables) can leave a
+    // command like mongosh blocked on its own server-selection timeout for tens of seconds - and
+    // with no bound here at all, a truly stuck exec would freeze whichever poller called this for
+    // the rest of the process's life. 10s is generous for the read-only status/config commands this
+    // is used for (normally under a second) without masking a real hang as "just slow".
+    private static readonly TimeSpan ExecTimeout = TimeSpan.FromSeconds(10);
+
     private async Task<string> ExecAsync(string containerId, IList<string> cmd, CancellationToken ct)
     {
-        var exec = await _client.Exec.ExecCreateContainerAsync(containerId, new ContainerExecCreateParameters
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ExecTimeout);
+        try
         {
-            Cmd = cmd,
-            AttachStdout = true,
-            AttachStderr = true,
-        }, ct);
+            var exec = await _client.Exec.ExecCreateContainerAsync(containerId, new ContainerExecCreateParameters
+            {
+                Cmd = cmd,
+                AttachStdout = true,
+                AttachStderr = true,
+            }, timeoutCts.Token);
 
-        using var stream = await _client.Exec.StartAndAttachContainerExecAsync(exec.ID, false, ct);
-        var (stdout, stderr) = await stream.ReadOutputToEndAsync(ct);
-        return string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
+            using var stream = await _client.Exec.StartAndAttachContainerExecAsync(exec.ID, false, timeoutCts.Token);
+            var (stdout, stderr) = await stream.ReadOutputToEndAsync(timeoutCts.Token);
+            return string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Our own CancelAfter fired, not the caller's token - surface this as a plain failure
+            // (TimeoutException), not OperationCanceledException, so callers/pollers that
+            // deliberately let a real shutdown cancellation propagate don't mistake this timeout
+            // for one and let it kill the whole poller instead of just failing this one tick.
+            throw new TimeoutException($"docker exec timed out after {ExecTimeout} for container {containerId}");
+        }
     }
 
     // `SHOW POOLS` columns (unaligned, pipe-separated): database|user|pool_mode|cl_idle|cl_active|
@@ -1176,12 +1247,13 @@ public class DockerService : IDockerService
         {
             var response = await _client.Containers.GetArchiveFromContainerAsync(
                 containerId, new GetArchiveFromContainerParameters { Path = "/scripts/summary.json" }, false, ct);
+            using var responseStream = response.Stream;
 
             // Buffer fully before handing to TarReader - it does non-sequential-looking reads via
             // SubReadStream over each entry's data, which doesn't play well with the raw chunked
             // HTTP stream the Docker API hands back (hit EndOfStreamException reading directly).
             using var buffered = new MemoryStream();
-            await response.Stream.CopyToAsync(buffered, ct);
+            await responseStream.CopyToAsync(buffered, ct);
             buffered.Position = 0;
 
             using var reader = new TarReader(buffered);
@@ -1305,12 +1377,19 @@ public class DockerService : IDockerService
             var dirEntry = new PaxTarEntry(TarEntryType.Directory, "scripts/") { Mode = (UnixFileMode)0777 };
             await writer.WriteEntryAsync(dirEntry, ct);
 
-            var fileEntry = new PaxTarEntry(TarEntryType.RegularFile, "scripts/scenario.js")
+            // TarEntry doesn't take ownership of/dispose DataStream - PaxTarEntry just holds the
+            // reference and WriteEntryAsync reads from it synchronously within this call, so it's
+            // safe (and necessary) to close the file handle immediately after, rather than leaking
+            // one per traffic run started.
+            using (var scriptStream = File.OpenRead(scriptPath))
             {
-                DataStream = File.OpenRead(scriptPath),
-                Mode = (UnixFileMode)0644,
-            };
-            await writer.WriteEntryAsync(fileEntry, ct);
+                var fileEntry = new PaxTarEntry(TarEntryType.RegularFile, "scripts/scenario.js")
+                {
+                    DataStream = scriptStream,
+                    Mode = (UnixFileMode)0644,
+                };
+                await writer.WriteEntryAsync(fileEntry, ct);
+            }
         }
 
         tarStream.Position = 0;

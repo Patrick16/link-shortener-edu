@@ -33,6 +33,7 @@ public class RefreshTokenService(DatabaseContext context, IConfiguration configu
     {
         var tokenHash = Hash(rawToken);
         var existing = await _context.RefreshTokens
+            .AsNoTracking()
             .FirstOrDefaultAsync(x => x.TokenHash == tokenHash, cancellationToken);
 
         if (existing is null || existing.ExpiresAt <= DateTime.UtcNow)
@@ -40,19 +41,28 @@ public class RefreshTokenService(DatabaseContext context, IConfiguration configu
             return null;
         }
 
-        if (existing.RevokedAt is not null)
+        // Claim this token atomically: only the caller whose UPDATE actually flips RevokedAt from
+        // null to non-null wins the race. Two concurrent calls with the same raw token (a React
+        // StrictMode double-invoke, two tabs refreshing at the same instant, or a genuine stolen-
+        // token replay racing the real client) used to both read RevokedAt == null before either
+        // saved, so both could "win" and the token family would silently fork instead of reuse
+        // detection ever firing. ExecuteUpdateAsync's row count tells us definitively which case
+        // this is - a plain SELECT-then-write can't.
+        var claimed = await _context.RefreshTokens
+            .Where(x => x.TokenHash == tokenHash && x.RevokedAt == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.RevokedAt, DateTime.UtcNow), cancellationToken);
+
+        if (claimed == 0)
         {
-            // This exact token was already rotated away or revoked once before. Seeing it again
-            // means either a stolen copy is being replayed, or a client retried a request that
-            // already succeeded - either way, don't hand out a new token from it. Burn every other
-            // live token for this user too, so a leaked token can't keep refreshing indefinitely.
+            // This exact token was already rotated away or revoked (by the request that won the
+            // race above, or a previous call). Seeing it presented again means either a stolen copy
+            // is being replayed, or a client retried a request that already succeeded - either way,
+            // don't hand out a new token from it. Burn every other live token for this user too, so
+            // a leaked token can't keep refreshing indefinitely.
             await RevokeAllForUserAsync(existing.UserId, cancellationToken);
             return null;
         }
 
-        existing.RevokedAt = DateTime.UtcNow;
-
-        // IssueAsync's SaveChangesAsync flushes both this revocation and the new token insert.
         var (newRawToken, newExpiresAt) = await IssueAsync(existing.UserId, cancellationToken);
 
         return new RefreshRotationResult(existing.UserId, newRawToken, newExpiresAt);

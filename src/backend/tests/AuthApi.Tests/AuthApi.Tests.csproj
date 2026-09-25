@@ -11,6 +11,10 @@
 		<PackageReference Include="coverlet.collector" Version="6.0.4" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.12" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
+		<!-- RefreshTokenServiceTests needs the real Sqlite provider, not InMemory: RotateAsync uses
+		     ExecuteUpdateAsync, which InMemory doesn't support at all. AuthControllerTests in this
+		     same project mocks IRefreshTokenService and still uses InMemory - both coexist fine. -->
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
 		<PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.12" />
 		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
 		<PackageReference Include="Moq" Version="4.20.72" />

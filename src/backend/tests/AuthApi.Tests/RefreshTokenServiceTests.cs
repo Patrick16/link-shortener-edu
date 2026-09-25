@@ -1,17 +1,31 @@
 using AuthApi;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 
 namespace AuthApi.Tests;
 
-public class RefreshTokenServiceTests
+// SQLite in-memory, not EF Core's InMemory provider: RotateAsync uses ExecuteUpdateAsync (a single
+// atomic conditional UPDATE), which InMemory doesn't support at all (it only translates LINQ
+// against SQL-backed providers). Each test opens its own private ":memory:" connection - SQLite
+// tears the database down once the last connection to it closes, so the connection has to stay
+// open for the test's whole lifetime, not just schema creation.
+public class RefreshTokenServiceTests : IDisposable
 {
-    private static DatabaseContext NewContext()
+    private readonly SqliteConnection _connection = new("DataSource=:memory:");
+
+    public RefreshTokenServiceTests() => _connection.Open();
+
+    public void Dispose() => _connection.Dispose();
+
+    private DatabaseContext NewContext()
     {
         var options = new DbContextOptionsBuilder<DatabaseContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .UseSqlite(_connection)
             .Options;
-        return new DatabaseContext(options);
+        var context = new DatabaseContext(options);
+        context.Database.EnsureCreated();
+        return context;
     }
 
     private static IConfiguration Config(int? refreshExpiryDays = null)
@@ -68,7 +82,11 @@ public class RefreshTokenServiceTests
         Assert.Equal(userId, result!.UserId);
         Assert.NotEqual(rawToken, result.RawToken);
 
-        var tokens = await context.RefreshTokens.OrderBy(x => x.CreatedAt).ToListAsync();
+        // AsNoTracking, not a tracked query: RotateAsync's revoke now goes through ExecuteUpdateAsync,
+        // which writes straight to the database and bypasses the change tracker entirely. A tracked
+        // query on this same context would return the stale in-memory instance IssueAsync's Add()
+        // already put in the tracker, instead of the row's actual (now-revoked) database value.
+        var tokens = await context.RefreshTokens.AsNoTracking().OrderBy(x => x.CreatedAt).ToListAsync();
         Assert.Equal(2, tokens.Count);
         Assert.NotNull(tokens[0].RevokedAt);
         Assert.Null(tokens[1].RevokedAt);
@@ -121,6 +139,40 @@ public class RefreshTokenServiceTests
 
         Assert.Null(replayResult);
         var liveTokens = await context.RefreshTokens
+            .Where(x => x.UserId == userId && x.RevokedAt == null)
+            .ToListAsync();
+        Assert.Empty(liveTokens);
+    }
+
+    [Fact]
+    public async Task RotateAsync_TwoConcurrentCallsWithSameToken_OnlyOneWinsAndBothTokensEndUpRevoked()
+    {
+        // Simulates a React StrictMode double-invoke or two browser tabs refreshing at the same
+        // instant: two separate requests (two separate DbContexts, same underlying database) both
+        // present the same still-valid raw token at once. Before the atomic ExecuteUpdateAsync fix,
+        // both could read RevokedAt == null before either saved, so both would "win" and the token
+        // family would silently fork instead of reuse detection ever firing.
+        await using var issuingContext = NewContext();
+        var issuingService = new RefreshTokenService(issuingContext, Config());
+        var userId = Guid.NewGuid();
+        var (rawToken, _) = await issuingService.IssueAsync(userId, CancellationToken.None);
+
+        await using var contextA = NewContext();
+        await using var contextB = NewContext();
+        var serviceA = new RefreshTokenService(contextA, Config());
+        var serviceB = new RefreshTokenService(contextB, Config());
+
+        var resultA = await serviceA.RotateAsync(rawToken, CancellationToken.None);
+        var resultB = await serviceB.RotateAsync(rawToken, CancellationToken.None);
+
+        // Exactly one of the two calls claimed the rotation - never both, and never neither.
+        var winners = new[] { resultA, resultB }.Count(r => r is not null);
+        Assert.Equal(1, winners);
+
+        // The "loser" treats the already-claimed token as a replay and burns every live token for
+        // this user, including the one the "winner" just issued - the family is dead, not forked.
+        await using var verifyContext = NewContext();
+        var liveTokens = await verifyContext.RefreshTokens
             .Where(x => x.UserId == userId && x.RevokedAt == null)
             .ToListAsync();
         Assert.Empty(liveTokens);

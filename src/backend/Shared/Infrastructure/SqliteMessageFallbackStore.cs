@@ -6,6 +6,12 @@ namespace Infrastructure;
 public sealed class SqliteMessageFallbackStore : IMessageFallbackStore
 {
     private const string TableName = "FailedMessages";
+    // Caps how much a single retry-worker tick can load/replay - during a long broker outage under
+    // load, the table can grow into the tens or hundreds of thousands of rows; loading all of them
+    // every 30s would spike memory and turn one tick into an hours-long serial retry pass. Whatever
+    // doesn't fit this batch is simply picked up (oldest-first) on a later tick once the backlog
+    // shrinks.
+    private const int MaxPendingPerFetch = 500;
     private readonly string _connectionString;
 
     public SqliteMessageFallbackStore(string connectionString)
@@ -55,7 +61,7 @@ public sealed class SqliteMessageFallbackStore : IMessageFallbackStore
         await connection.OpenAsync(cancellationToken);
 
         await using var command = connection.CreateCommand();
-        command.CommandText = $"SELECT MessageId, Topic, Payload, CreatedAt FROM {TableName} ORDER BY CreatedAt;";
+        command.CommandText = $"SELECT MessageId, Topic, Payload, CreatedAt FROM {TableName} ORDER BY CreatedAt LIMIT {MaxPendingPerFetch};";
 
         var results = new List<FallbackMessage>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

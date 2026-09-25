@@ -37,4 +37,21 @@ public class ResourceStatsStore
             return list.ToList();
         }
     }
+
+    // Container ids churn constantly here - every scale up/down, every infra toggle that recreates
+    // a service, every plain container replacement mints new ids and abandons the old ones. Without
+    // this, a long control-api session (or a test session that scales 1-100 replicas repeatedly)
+    // would accumulate one dead ~30-sample entry per retired container forever. Called once per
+    // poll tick with that tick's full container list - every key not in it belongs to a container
+    // that no longer exists at all, not just one that's stopped.
+    public void Prune(IReadOnlySet<string> liveContainerIds)
+    {
+        foreach (var containerId in _history.Keys)
+        {
+            if (!liveContainerIds.Contains(containerId))
+            {
+                _history.TryRemove(containerId, out _);
+            }
+        }
+    }
 }

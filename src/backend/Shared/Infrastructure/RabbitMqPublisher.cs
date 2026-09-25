@@ -105,25 +105,44 @@ public sealed class RabbitMqPublisher(
     {
         await _slots.WaitAsync(cancellationToken).ConfigureAwait(false);
 
-        while (_idleChannels.TryDequeue(out var idle))
-        {
-            if (idle.IsOpen)
-            {
-                return idle;
-            }
-
-            await idle.DisposeAsync().ConfigureAwait(false);
-        }
-
+        // Everything from here on holds a slot - any exception (including a stale idle channel
+        // failing to dispose, or the exchange declare below) must release it before propagating, or
+        // the pool permanently loses capacity and every publish eventually blocks forever.
         try
         {
-            var channel = await _connection.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
-            await channel.ExchangeDeclareAsync(
-                MessagingConstants.EventsExchange,
-                ExchangeType.Topic,
-                durable: true,
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-            return channel;
+            while (_idleChannels.TryDequeue(out var idle))
+            {
+                if (idle.IsOpen)
+                {
+                    return idle;
+                }
+
+                await idle.DisposeAsync().ConfigureAwait(false);
+            }
+
+            IChannel? channel = null;
+            try
+            {
+                channel = await _connection.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+                await channel.ExchangeDeclareAsync(
+                    MessagingConstants.EventsExchange,
+                    ExchangeType.Topic,
+                    durable: true,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                return channel;
+            }
+            catch
+            {
+                // The channel opened fine but the declare failed (or was cancelled) - without this,
+                // the open channel is never disposed and leaks on the broker until channel_max is
+                // exhausted.
+                if (channel is not null)
+                {
+                    await channel.DisposeAsync().ConfigureAwait(false);
+                }
+
+                throw;
+            }
         }
         catch
         {
@@ -137,16 +156,24 @@ public sealed class RabbitMqPublisher(
     // starting empty.
     private async Task ReleaseChannelAsync(IChannel channel, bool healthy)
     {
-        if (healthy && channel.IsOpen)
+        try
         {
-            _idleChannels.Enqueue(channel);
+            if (healthy && channel.IsOpen)
+            {
+                _idleChannels.Enqueue(channel);
+            }
+            else
+            {
+                await channel.DisposeAsync().ConfigureAwait(false);
+            }
         }
-        else
+        finally
         {
-            await channel.DisposeAsync().ConfigureAwait(false);
+            // Must run even if DisposeAsync above throws - otherwise the slot is lost permanently,
+            // and the exception would also escape TryPublishAsync's own finally, skipping the
+            // SQLite-fallback path entirely instead of just failing this one publish.
+            _slots.Release();
         }
-
-        _slots.Release();
     }
 
     public async ValueTask DisposeAsync()

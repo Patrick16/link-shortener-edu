@@ -22,6 +22,7 @@ public class ResourceStatsPollerService(
             try
             {
                 var containers = await docker.ListContainersAsync(stoppingToken);
+                store.Prune(containers.Select(c => c.ContainerId).ToHashSet());
 
                 // Each Docker stats call is slow enough (observed ~2s each against Docker Desktop
                 // on Windows) that doing this sequentially for ~10 containers made a full round

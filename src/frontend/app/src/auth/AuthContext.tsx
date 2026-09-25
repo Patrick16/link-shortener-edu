@@ -116,20 +116,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const needsSessionRestoreRef = useRef(!user)
   useEffect(() => {
     if (!needsSessionRestoreRef.current) return
+    // Flip this before the async call goes out, not after it resolves - React StrictMode
+    // double-invokes this effect in dev (mount -> cleanup -> mount again), and the ref otherwise
+    // stays true across both runs. That sent two real POST /refresh requests with the same cookie,
+    // and the refresh-token rotation's reuse detection would treat the second one as a replay and
+    // revoke the whole session, logging the user straight back out after every reload.
+    needsSessionRestoreRef.current = false
 
-    let cancelled = false
+    // Deliberately no "cancelled" guard here: StrictMode's cleanup runs synchronously, before this
+    // promise ever resolves, so a cancelled flag set in that cleanup would discard the one real
+    // restore attempt's result along with the duplicate call this ref already prevents. Applying a
+    // state update after a genuine unmount is a harmless no-op in React 18+, so there's nothing to
+    // guard against by skipping it.
     authApi
       .refresh()
-      .then((response) => {
-        if (!cancelled) applyToken(response.token)
-      })
+      .then((response) => applyToken(response.token))
       .catch(() => {
         // No valid refresh cookie (never logged in, or it expired/was revoked) - stay signed out.
       })
-
-    return () => {
-      cancelled = true
-    }
   }, [applyToken])
 
   return <AuthContext.Provider value={{ user, login, register, logout }}>{children}</AuthContext.Provider>

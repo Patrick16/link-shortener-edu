@@ -73,7 +73,7 @@ public sealed class RabbitMqConsumer(
         }
     }
 
-    private async Task<IChannel> SetUpChannelWithRetryAsync(
+    internal async Task<IChannel> SetUpChannelWithRetryAsync(
         string queueName,
         string routingKey,
         CancellationToken cancellationToken)
@@ -81,9 +81,10 @@ public sealed class RabbitMqConsumer(
         var delay = InitialRetryDelay;
         while (true)
         {
+            IChannel? channel = null;
             try
             {
-                var channel = await _connection.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
+                channel = await _connection.CreateChannelAsync(cancellationToken).ConfigureAwait(false);
 
                 await channel.ExchangeDeclareAsync(
                     MessagingConstants.EventsExchange,
@@ -110,6 +111,14 @@ public sealed class RabbitMqConsumer(
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
+                // The channel may have opened fine even though a later declare/bind/QoS call
+                // failed - without disposing it here, every retry round (up to every 30s during a
+                // sustained outage) leaks another open channel on the broker.
+                if (channel is not null)
+                {
+                    await channel.DisposeAsync().ConfigureAwait(false);
+                }
+
                 _logger.LogWarning(
                     ex,
                     "Failed to set up RabbitMQ consumer for queue {QueueName}, retrying in {Delay}",

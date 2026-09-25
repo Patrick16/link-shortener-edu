@@ -73,4 +73,42 @@ public class ResourceStatsStoreTests
         var history = sut.GetHistory("link-api");
         Assert.Equal([first, second], history);
     }
+
+    [Fact]
+    public void Prune_ContainerNotInLiveSet_RemovesItsHistory()
+    {
+        var sut = new ResourceStatsStore();
+        sut.Add(Sample("link-api-1", 0));
+        sut.Add(Sample("redirect-api-1", 0));
+
+        sut.Prune(new HashSet<string> { "redirect-api-1" });
+
+        Assert.Empty(sut.GetHistory("link-api-1"));
+        Assert.NotEmpty(sut.GetHistory("redirect-api-1"));
+    }
+
+    [Fact]
+    public void Prune_AllContainersStillLive_KeepsEverything()
+    {
+        var sut = new ResourceStatsStore();
+        var sample = Sample("link-api-1", 0);
+        sut.Add(sample);
+
+        sut.Prune(new HashSet<string> { "link-api-1" });
+
+        Assert.Equal([sample], sut.GetHistory("link-api-1"));
+    }
+
+    [Fact]
+    public void Prune_EmptyLiveSet_RemovesEveryEntry()
+    {
+        var sut = new ResourceStatsStore();
+        sut.Add(Sample("link-api-1", 0));
+        sut.Add(Sample("redirect-api-1", 0));
+
+        sut.Prune(new HashSet<string>());
+
+        Assert.Empty(sut.GetHistory("link-api-1"));
+        Assert.Empty(sut.GetHistory("redirect-api-1"));
+    }
 }

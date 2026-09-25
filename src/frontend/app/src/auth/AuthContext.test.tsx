@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as authApi from '../api/authApi'
 import { getAccessToken, setAccessToken } from '../api/client'
@@ -64,6 +65,26 @@ describe('AuthProvider / useAuth', () => {
 
     await waitFor(() => expect(screen.getByTestId('user')).toHaveTextContent('Carol <carol@example.com>'))
     expect(getAccessToken()).toBe(token)
+  })
+
+  it('under StrictMode, the session-restore effect only calls refresh once (regression)', async () => {
+    // StrictMode double-invokes effects in dev (mount -> cleanup -> mount again). The session-
+    // restore effect used to gate on a ref it never flipped off, so the second invocation saw the
+    // same "needs restore" flag and fired a second POST /refresh with the same cookie - which
+    // refresh-token rotation's reuse detection would treat as a replay and log the user back out.
+    const token = fakeJwt({ sub: '1', email: 'carol@example.com', name: 'Carol', exp: 9999999999 })
+    vi.mocked(authApi.refresh).mockResolvedValue({ token, expiresAt: '2099-01-01T00:00:00Z' })
+
+    render(
+      <StrictMode>
+        <AuthProvider>
+          <TestConsumer />
+        </AuthProvider>
+      </StrictMode>,
+    )
+
+    await waitFor(() => expect(screen.getByTestId('user')).toHaveTextContent('Carol <carol@example.com>'))
+    expect(authApi.refresh).toHaveBeenCalledTimes(1)
   })
 
   it('restores the user from a token already held in memory', () => {
