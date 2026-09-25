@@ -37,7 +37,7 @@ public class RunHistoryStore : IRunHistoryStore
                     var snapshot = await JsonSerializer.DeserializeAsync<RunSnapshot>(stream, JsonOptions, ct);
                     if (snapshot is not null)
                     {
-                        summaries.Add(new RunSummary(snapshot.Id, snapshot.Timestamp, snapshot.Request.Scenario, snapshot.Report.HttpRequests, snapshot.Report.FailedRequests, snapshot.Report.ExitCode));
+                        summaries.Add(new RunSummary(snapshot.Id, snapshot.Timestamp, snapshot.Request.Scenario, snapshot.Report.HttpRequests, snapshot.Report.FailedRequests, snapshot.Report.ExitCode, snapshot.Report.HttpRequestRate));
                     }
                 }
                 catch (JsonException)

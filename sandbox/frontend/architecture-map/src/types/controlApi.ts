@@ -191,6 +191,10 @@ export interface TrafficProgress {
 
 export interface ResourceSample {
   serviceId: string
+  // Which specific replica this sample came from - a scaled service (N containers sharing one
+  // serviceId) gets one ResourceSample per running container, never one shared/averaged sample.
+  containerId: string
+  containerNumber: number
   cpuPercent: number
   memoryUsageBytes: number
   memoryLimitBytes: number
@@ -305,4 +309,5 @@ export interface RunSummary {
   httpRequests: number
   failedRequests: number
   exitCode: number
+  httpRequestRate: number
 }

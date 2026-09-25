@@ -17,4 +17,4 @@ public record RunSnapshot(
 
 // Lightweight row for the history list - avoids deserializing every run's full report (including
 // its potentially large RawOutput) just to render a list of past runs.
-public record RunSummary(string Id, DateTimeOffset Timestamp, string Scenario, long HttpRequests, long FailedRequests, long ExitCode);
+public record RunSummary(string Id, DateTimeOffset Timestamp, string Scenario, long HttpRequests, long FailedRequests, long ExitCode, double HttpRequestRate);

@@ -545,26 +545,26 @@ button:disabled {
   background: var(--accent-bg);
 }
 
-/* Pinned node metrics (fixed top-right overlay, independent of the sidebar/selection). One grid
-   across every row (see PinnedMetrics) - each of the 5 cells per row lands in the same grid column
-   as every other row's, so the CPU/RAM/TCP numbers line up at a shared width no matter how long a
-   node's own name is, instead of each row sizing itself independently. */
+/* Pinned node metrics - a block in the header's own flex row (see App), not a position: fixed
+   overlay, so it can never cover TrafficResultPanel's "Show details" toggle sitting in that same
+   top-right corner; the header's flex-wrap pushes it below on narrow viewports instead of
+   overlapping anything. One grid across every row (see PinnedMetrics) - each of the 5 cells per row
+   lands in the same grid column as every other row's, so the CPU/RAM/TCP numbers line up at a
+   shared width no matter how long a node's own name is, instead of each row sizing itself
+   independently. */
 
 .pinned-metrics {
-  position: fixed;
-  top: 12px;
-  right: 12px;
-  z-index: 50;
   display: grid;
   grid-template-columns: minmax(0, 1fr) repeat(3, auto) auto;
   align-items: center;
   column-gap: 10px;
   row-gap: 3px;
+  flex-shrink: 0;
+  align-self: flex-start;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px 10px;
   background: var(--code-bg);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   font-size: 12px;
   color: var(--text-h);
   font-variant-numeric: tabular-nums;
@@ -1699,6 +1699,11 @@ button:disabled {
 .run-history-item-meta {
   font-size: 11px;
   color: var(--text);
+}
+
+.run-history-item-rps {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .run-history-item-failed {

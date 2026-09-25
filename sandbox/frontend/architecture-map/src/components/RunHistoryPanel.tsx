@@ -126,7 +126,8 @@ export function RunHistoryPanel({ lastSavedRunId }: Props) {
             <button className="run-history-item" onClick={() => openRun(run.id)} disabled={loadingId === run.id}>
               <span className="run-history-item-name">{run.scenario}</span>
               <span className="run-history-item-meta">
-                {formatTimestamp(run.timestamp)} · {run.httpRequests} reqs
+                {formatTimestamp(run.timestamp)} · {run.httpRequests} reqs ·{' '}
+                <span className="run-history-item-rps">{run.httpRequestRate.toFixed(1)} rps</span>
                 {run.failedRequests > 0 && <span className="run-history-item-failed"> · {run.failedRequests} failed</span>}
               </span>
             </button>
