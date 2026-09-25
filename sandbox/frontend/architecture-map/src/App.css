@@ -548,22 +548,11 @@ button:disabled {
 /* Pinned node metrics - rendered as a React Flow <Panel position="top-right"> inside the graph
    itself (see Diagram), not position: fixed on the page. That anchors it to the graph pane
    specifically: it survives pan/zoom, and it can never cover TrafficResultPanel's own "Show
-   details" toggle in the header's top-right corner the way an earlier page-fixed version did. A
-   long pinned list (many rows for one scaled service) scrolls within its own max-height instead of
-   spilling out past the graph pane's top edge. One grid across every row (see PinnedMetrics) - each
-   of the 5 cells per row lands in the same grid column as every other row's, so the CPU/RAM/TCP
-   numbers line up at a shared width no matter how long a node's own name is, instead of each row
-   sizing itself independently. */
+   details" toggle in the header's top-right corner the way an earlier page-fixed version did. */
 
 .pinned-metrics {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) repeat(3, auto) auto;
-  align-items: center;
-  column-gap: 10px;
-  row-gap: 3px;
-  align-content: start;
-  max-height: 40vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px 10px;
@@ -573,6 +562,84 @@ button:disabled {
   color: var(--text-h);
   font-variant-numeric: tabular-nums;
   max-width: 320px;
+}
+
+.pinned-metrics-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pinned-metrics-count {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.pinned-metrics-collapse-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pinned-metrics-collapse-btn:hover {
+  color: var(--text-h);
+}
+
+/* The rows scroll (many rows for one scaled service can outgrow the graph pane) while the toolbar
+   above stays put; the column headers scroll with the rows but stay stuck to the top of that
+   scroll area via position: sticky, so they're still visible while scanning a long, scrolled list.
+   One grid across every row (see PinnedMetrics) - each of the 5 cells per row lands in the same
+   grid column as every other row's, so the CPU/RAM/TCP numbers line up at a shared width no matter
+   how long a node's own name is, instead of each row sizing itself independently. */
+
+.pinned-metrics-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 3px;
+  align-content: start;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+
+.pinned-metrics-col-header {
+  position: sticky;
+  top: 0;
+  background: var(--code-bg);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text);
+}
+
+.pinned-metrics-sort-btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.pinned-metrics-sort-btn:hover {
+  color: var(--text-h);
+}
+
+.pinned-metrics-sort-arrow {
+  font-size: 9px;
 }
 
 .pinned-metrics-name {
@@ -586,7 +653,7 @@ button:disabled {
   color: var(--text);
 }
 
-.pinned-metrics button {
+.pinned-metrics-unpin-btn {
   flex-shrink: 0;
   border: none;
   background: transparent;
@@ -597,7 +664,7 @@ button:disabled {
   padding: 0;
 }
 
-.pinned-metrics button:hover {
+.pinned-metrics-unpin-btn:hover {
   color: var(--text-h);
 }
 
