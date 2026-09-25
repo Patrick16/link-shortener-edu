@@ -62,4 +62,36 @@ public interface IDockerService
     // the container isn't running.
     Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(CancellationToken ct);
     Task<PostgresConnectionStats?> GetPostgresConnectionsAsync(CancellationToken ct);
+
+    // pgcat.toml pool_mode/read-write-splitting/pool_size - rewrites the file directly and relies on
+    // pgcat's own autoreload, no docker compose recreate involved. See PgcatPoolSettings.
+    PgcatPoolSettings GetPgcatPoolSettings();
+    Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct);
+
+    // Artificial WAL-replay delay on one Postgres standby (postgres-replica1/postgres-replica2) via
+    // recovery_min_apply_delay - live SQL against the target container, no file edit or restart.
+    // Null means the given serviceId isn't a known replica.
+    Task<ReplicationLag?> GetReplicationLagAsync(string serviceId, CancellationToken ct);
+    Task<ReplicationLag?> SetReplicationLagAsync(string serviceId, int delayMs, CancellationToken ct);
+
+    // Redis Sentinel's own live SENTINEL SET/MASTER commands - applied to all 3 sentinel containers
+    // at once (each tracks its own local config independently). See SentinelConfig.
+    Task<SentinelConfig?> GetSentinelConfigAsync(CancellationToken ct);
+    Task<SentinelConfig> SetSentinelConfigAsync(SentinelConfig config, CancellationToken ct);
+
+    // Consumer QoS - read once at RabbitMqConsumer startup, so this recreates shortener-service and
+    // traffic-service (same env-var + --force-recreate --no-deps shape as the pgcat/cache toggles).
+    int GetRabbitMqPrefetch();
+    Task<int> SetRabbitMqPrefetchAsync(int prefetchCount, CancellationToken ct);
+
+    // readPreference on traffic-service's Mongo connection string - "primary" or
+    // "secondaryPreferred". Recreates just traffic-service.
+    string GetMongoReadPreference();
+    Task<string> SetMongoReadPreferenceAsync(string preference, CancellationToken ct);
+
+    // Npgsql's own client-side "Maximum Pool Size" on every DB-touching service's connection string -
+    // the client-pool-size half of the picture pgcat's own connection-stats panel already shows the
+    // server-pool-size half of. Recreates the same DbTouchingServices set the pgcat toggle does.
+    int GetNpgsqlPoolSize();
+    Task<int> SetNpgsqlPoolSizeAsync(int poolSize, CancellationToken ct);
 }

@@ -7,11 +7,18 @@ import type {
   InfraStatus,
   ManagedContainer,
   PgcatConnectionStats,
+  PgcatPoolSettings,
+  MongoReadPreference,
+  MongoReadPreferenceStatus,
+  NpgsqlPoolSize,
   PostgresConnectionStats,
+  RabbitMqPrefetch,
+  ReplicationLag,
   ResourceSample,
   RunSnapshot,
   RunSummary,
   ScaleResult,
+  SentinelConfig,
   TrafficRequest,
 } from '../types/controlApi'
 
@@ -89,6 +96,26 @@ export const controlApi = {
 
   getPgcatConnections: () => request<PgcatConnectionStats>('/api/containers/pgcat/connections'),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
+
+  getPgcatPoolSettings: () => request<PgcatPoolSettings>('/api/infra/pgcat-pool'),
+  setPgcatPoolSettings: (settings: PgcatPoolSettings) => request<PgcatPoolSettings>('/api/infra/pgcat-pool', 'POST', settings),
+
+  getReplicationLag: (serviceId: string) => request<ReplicationLag>(`/api/containers/${serviceId}/replication-lag`),
+  setReplicationLag: (serviceId: string, delayMs: number) =>
+    request<ReplicationLag>(`/api/containers/${serviceId}/replication-lag`, 'POST', { delayMs }),
+
+  getSentinelConfig: () => request<SentinelConfig>('/api/infra/sentinel'),
+  setSentinelConfig: (config: SentinelConfig) => request<SentinelConfig>('/api/infra/sentinel', 'POST', config),
+
+  getRabbitMqPrefetch: () => request<RabbitMqPrefetch>('/api/infra/rabbitmq-prefetch'),
+  setRabbitMqPrefetch: (prefetchCount: number) => request<RabbitMqPrefetch>('/api/infra/rabbitmq-prefetch', 'POST', { prefetchCount }),
+
+  getMongoReadPreference: () => request<MongoReadPreferenceStatus>('/api/infra/mongo-read-preference'),
+  setMongoReadPreference: (preference: MongoReadPreference) =>
+    request<MongoReadPreferenceStatus>('/api/infra/mongo-read-preference', 'POST', { preference }),
+
+  getNpgsqlPoolSize: () => request<NpgsqlPoolSize>('/api/infra/npgsql-pool-size'),
+  setNpgsqlPoolSize: (poolSize: number) => request<NpgsqlPoolSize>('/api/infra/npgsql-pool-size', 'POST', { poolSize }),
 
   listRuns: () => request<RunSummary[]>('/api/runs'),
   getRun: (id: string) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}`),

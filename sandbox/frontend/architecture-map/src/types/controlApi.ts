@@ -223,6 +223,52 @@ export interface ReplicaCount {
   count: number
 }
 
+// pgcat.toml pool_mode/read-write-splitting/pool_size, applied identically to all 3 pools - see
+// PgcatPoolSettings on the backend for why (collapses the file's original differentiated 10/20/10
+// pool sizes into one shared value once this control is used).
+export type PgcatPoolMode = 'transaction' | 'session'
+
+export interface PgcatPoolSettings {
+  poolMode: PgcatPoolMode
+  readWriteSplitting: boolean
+  poolSize: number
+}
+
+// Artificial WAL-replay delay on a Postgres standby (recovery_min_apply_delay) - see ReplicationLag
+// on the backend.
+export interface ReplicationLag {
+  delayMs: number
+}
+
+// The 3 Sentinel-tunable failover parameters, applied to all three redis-sentinel-N containers at
+// once - see SentinelConfig on the backend.
+export interface SentinelConfig {
+  downAfterMs: number
+  quorum: number
+  failoverTimeoutMs: number
+}
+
+// Consumer QoS for shortener-service/traffic-service's RabbitMQ consumers - read once at consumer
+// startup, so setting this recreates both containers (see SetRabbitMqPrefetchAsync on the backend).
+export interface RabbitMqPrefetch {
+  prefetchCount: number
+}
+
+// readPreference on traffic-service's Mongo connection string - see SetMongoReadPreferenceAsync on
+// the backend.
+export type MongoReadPreference = 'primary' | 'secondaryPreferred'
+
+export interface MongoReadPreferenceStatus {
+  preference: MongoReadPreference
+}
+
+// Npgsql's own client-side "Maximum Pool Size", applied to every DB-touching service - the
+// client-pool-size half of the same picture PgcatConnectionStats shows the server-pool-size half
+// of. See SetNpgsqlPoolSizeAsync on the backend.
+export interface NpgsqlPoolSize {
+  poolSize: number
+}
+
 // Full detail for one past run - everything needed to answer "what configuration produced this
 // result", not just the report on its own.
 export interface RunSnapshot {

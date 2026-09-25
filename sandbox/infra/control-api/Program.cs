@@ -77,6 +77,23 @@ app.MapPost("/api/containers/{serviceId}/heal", async (string serviceId, IDocker
 app.MapGet("/api/containers/{serviceId}/stats/history", (string serviceId, ResourceStatsStore store) =>
     Results.Ok(store.GetHistory(serviceId)));
 
+app.MapGet("/api/containers/{serviceId}/replication-lag", async (string serviceId, IDockerService docker, CancellationToken ct) =>
+{
+    var result = await docker.GetReplicationLagAsync(serviceId, ct);
+    return result is null ? Results.NotFound() : Results.Ok(result);
+});
+
+app.MapPost("/api/containers/{serviceId}/replication-lag", async (string serviceId, ReplicationLag request, IDockerService docker, CancellationToken ct) =>
+{
+    if (request.DelayMs is < 0 or > 60_000)
+    {
+        return Results.BadRequest(new { error = "delayMs must be between 0 and 60000" });
+    }
+
+    var result = await docker.SetReplicationLagAsync(serviceId, request.DelayMs, ct);
+    return result is null ? Results.NotFound() : Results.Ok(result);
+});
+
 app.MapGet("/api/containers/scalable", (IDockerService docker) => Results.Ok(docker.ListScalableServices()));
 
 app.MapPost("/api/containers/redis/flush-cache", async (IDockerService docker, CancellationToken ct) =>
@@ -283,6 +300,117 @@ app.MapPost("/api/infra/cache", async (InfraToggleRequest request, IDockerServic
     catch (Exception ex)
     {
         logger.LogError(ex, "Toggling cache to {Enabled} failed", request.Enabled);
+        return Results.Problem(ex.Message);
+    }
+});
+
+app.MapGet("/api/infra/pgcat-pool", (IDockerService docker) => Results.Ok(docker.GetPgcatPoolSettings()));
+
+app.MapPost("/api/infra/pgcat-pool", async (PgcatPoolSettings request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
+{
+    if (request.PoolMode is not ("transaction" or "session"))
+    {
+        return Results.BadRequest(new { error = "poolMode must be 'transaction' or 'session'" });
+    }
+
+    if (request.PoolSize is < 1 or > 200)
+    {
+        return Results.BadRequest(new { error = "poolSize must be between 1 and 200" });
+    }
+
+    try
+    {
+        return Results.Ok(await docker.SetPgcatPoolSettingsAsync(request, ct));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Setting pgcat pool settings failed");
+        return Results.Problem(ex.Message);
+    }
+});
+
+app.MapGet("/api/infra/sentinel", async (IDockerService docker, CancellationToken ct) =>
+{
+    var result = await docker.GetSentinelConfigAsync(ct);
+    return result is null ? Results.NotFound() : Results.Ok(result);
+});
+
+app.MapPost("/api/infra/sentinel", async (SentinelConfig request, IDockerService docker, CancellationToken ct) =>
+{
+    if (request.DownAfterMs is < 100 or > 60_000)
+    {
+        return Results.BadRequest(new { error = "downAfterMs must be between 100 and 60000" });
+    }
+
+    if (request.Quorum is < 1 or > 3)
+    {
+        return Results.BadRequest(new { error = "quorum must be between 1 and 3" });
+    }
+
+    if (request.FailoverTimeoutMs is < 1000 or > 300_000)
+    {
+        return Results.BadRequest(new { error = "failoverTimeoutMs must be between 1000 and 300000" });
+    }
+
+    return Results.Ok(await docker.SetSentinelConfigAsync(request, ct));
+});
+
+app.MapGet("/api/infra/rabbitmq-prefetch", (IDockerService docker) => Results.Ok(new { prefetchCount = docker.GetRabbitMqPrefetch() }));
+
+app.MapPost("/api/infra/rabbitmq-prefetch", async (RabbitMqPrefetchRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
+{
+    if (request.PrefetchCount is < 1 or > 1000)
+    {
+        return Results.BadRequest(new { error = "prefetchCount must be between 1 and 1000" });
+    }
+
+    try
+    {
+        return Results.Ok(new { prefetchCount = await docker.SetRabbitMqPrefetchAsync(request.PrefetchCount, ct) });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Setting RabbitMQ prefetch failed");
+        return Results.Problem(ex.Message);
+    }
+});
+
+app.MapGet("/api/infra/mongo-read-preference", (IDockerService docker) => Results.Ok(new { preference = docker.GetMongoReadPreference() }));
+
+app.MapPost("/api/infra/mongo-read-preference", async (MongoReadPreferenceRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
+{
+    if (request.Preference is not ("primary" or "secondaryPreferred"))
+    {
+        return Results.BadRequest(new { error = "preference must be 'primary' or 'secondaryPreferred'" });
+    }
+
+    try
+    {
+        return Results.Ok(new { preference = await docker.SetMongoReadPreferenceAsync(request.Preference, ct) });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Setting Mongo read preference failed");
+        return Results.Problem(ex.Message);
+    }
+});
+
+app.MapGet("/api/infra/npgsql-pool-size", (IDockerService docker) => Results.Ok(new { poolSize = docker.GetNpgsqlPoolSize() }));
+
+app.MapPost("/api/infra/npgsql-pool-size", async (NpgsqlPoolSizeRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
+{
+    if (request.PoolSize is < 1 or > 500)
+    {
+        return Results.BadRequest(new { error = "poolSize must be between 1 and 500" });
+    }
+
+    try
+    {
+        return Results.Ok(new { poolSize = await docker.SetNpgsqlPoolSizeAsync(request.PoolSize, ct) });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Setting Npgsql pool size failed");
         return Results.Problem(ex.Message);
     }
 });

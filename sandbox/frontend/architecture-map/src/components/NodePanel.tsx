@@ -4,6 +4,12 @@ import { ServiceControls } from './ServiceControls'
 import { ScaleControl } from './ScaleControl'
 import { FlushCacheControl } from './FlushCacheControl'
 import { InfraToggleControl } from './InfraToggleControl'
+import { MongoReadPreferenceControl } from './MongoReadPreferenceControl'
+import { NpgsqlPoolSizeControl } from './NpgsqlPoolSizeControl'
+import { PgcatPoolControl } from './PgcatPoolControl'
+import { RabbitMqPrefetchControl } from './RabbitMqPrefetchControl'
+import { ReplicationLagControl } from './ReplicationLagControl'
+import { SentinelConfigControl } from './SentinelConfigControl'
 import { Sparkline } from './Sparkline'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import { statusColor } from '../utils/statusColor'
@@ -136,6 +142,13 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
             />
           )}
           {infraError && <p className="service-card-error">{infraError}</p>}
+
+          {serviceId === 'pgcat' && <PgcatPoolControl />}
+          {serviceId === 'pgcat' && <NpgsqlPoolSizeControl />}
+          {(serviceId === 'postgres-replica1' || serviceId === 'postgres-replica2') && <ReplicationLagControl serviceId={serviceId} />}
+          {serviceId?.startsWith('redis-sentinel') && <SentinelConfigControl />}
+          {serviceId === 'rabbitmq' && <RabbitMqPrefetchControl />}
+          {serviceId?.startsWith('mongo') && <MongoReadPreferenceControl />}
 
           {pgcatConnections && showsPgcatConnections && (
             <div className="connection-stats">

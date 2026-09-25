@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
@@ -9,13 +10,20 @@ namespace Infrastructure;
 
 public sealed class RabbitMqConsumer(
     IRabbitMqConnection connection,
-    ILogger<RabbitMqConsumer> logger) : IMessageConsumer
+    ILogger<RabbitMqConsumer> logger,
+    IConfiguration configuration) : IMessageConsumer
 {
     private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
     private readonly IRabbitMqConnection _connection = connection;
     private readonly ILogger<RabbitMqConsumer> _logger = logger;
+
+    // How many unacked deliveries this consumer's channel can hold at once - the classic
+    // competing-consumers throughput/fairness knob. Config-bound (not hardcoded) specifically so
+    // control-api's experimental prefetch control can change it via a container recreate - see
+    // RabbitMq__PrefetchCount in docker-compose.yml.
+    private readonly ushort _prefetchCount = configuration.GetValue<ushort?>("RabbitMq:PrefetchCount") ?? 10;
 
     public async Task ConsumeAsync<TMessage>(
         string queueName,
@@ -96,7 +104,7 @@ public sealed class RabbitMqConsumer(
                     routingKey,
                     cancellationToken: cancellationToken);
 
-                await channel.BasicQosAsync(0, prefetchCount: 10, global: false, cancellationToken: cancellationToken);
+                await channel.BasicQosAsync(0, prefetchCount: _prefetchCount, global: false, cancellationToken: cancellationToken);
 
                 return channel;
             }

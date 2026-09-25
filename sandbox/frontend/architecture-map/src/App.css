@@ -1036,6 +1036,105 @@ button:disabled {
   margin: 6px 0 0;
 }
 
+/* Enum toggle (pool mode / read preference pickers) */
+
+.enum-toggle-control {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.enum-toggle-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-h);
+  display: block;
+  margin-bottom: 6px;
+}
+
+.enum-toggle-options {
+  display: flex;
+  gap: 6px;
+}
+
+.enum-toggle-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.enum-toggle-btn-active {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.enum-toggle-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* PgCat pool settings + Npgsql client pool size */
+
+.pgcat-pool-control {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.pgcat-pool-control h4 {
+  font-size: 12px;
+  margin: 0 0 6px;
+  color: var(--text-h);
+}
+
+.pgcat-pool-control .infra-toggle-control,
+.pgcat-pool-control .pgcat-pool-size {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.pgcat-pool-size {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 2px;
+  border-top: 1px solid var(--border);
+}
+
+.pgcat-pool-size input {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 6px;
+  width: 70px;
+}
+
+.pgcat-pool-control > button {
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pgcat-pool-control > button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.pgcat-pool-control > button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .progress-bar-track {
   height: 8px;
   border-radius: 4px;

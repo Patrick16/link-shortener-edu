@@ -370,8 +370,11 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       # DB_HOST/DB_PORT default to pgcat - control-api's pgcat toggle re-runs `docker compose up`
       # with these overridden to postgres:5432, recreating this service so it demonstrates running
-      # without connection pooling instead of just leaving pgcat unused.
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=users_db;Username=postgres;Password=postgres"
+      # without connection pooling instead of just leaving pgcat unused. Maximum Pool Size (Npgsql's
+      # own client-side pool, distinct from pgcat's server-side pool) is 100 by default - the
+      # experimental control lets it be shrunk to demonstrate Npgsql's own pool-wait saturation
+      # independent of pgcat's, see SetNpgsqlPoolSizeAsync.
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=users_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
@@ -396,7 +399,7 @@ services:
     # bind the same host port. nginx is the external entry point on 8082 instead (see below).
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # Sentinel-aware form (StackExchange.Redis native support): endpoints are the 3 Sentinels, not
       # the master directly - the client asks them who's master, connects there, and gets told about
       # any failover automatically. No code change needed for this vs. a plain host:port string.
@@ -434,7 +437,7 @@ services:
     # No host port mapping - see the note on link-api above; nginx exposes this on 8083 instead.
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
@@ -476,11 +479,14 @@ services:
       context: ..
       dockerfile: src/backend/Services/ShortenerService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      # Consumer QoS (unacked deliveries in flight) - read once at consumer startup, so changing it
+      # needs a recreate, not a live toggle. See RabbitMqConsumer's own _prefetchCount field.
+      RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       pgcat:
@@ -500,7 +506,7 @@ services:
       context: ..
       dockerfile: src/backend/Services/TrafficService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=clicks_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=clicks_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=clicks_db;Username=postgres;Password=postgres"
@@ -508,7 +514,11 @@ services:
       # Replica-set-aware URI - the Mongo driver discovers the current primary from these 3 seeds
       # and auto-reconnects on failover; MongoClickMetaStore already just takes whatever connection
       # string it's given (database name comes from the URL path), no code change needed.
-      ConnectionStrings__Mongo: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/clicks_meta_db?replicaSet=rs0"
+      # readPreference is the only part of this driven by the experimental control - see
+      # SetMongoReadPreferenceAsync. MongoClickMetaStore itself needs no code change; it already
+      # just takes whatever connection string it's given.
+      ConnectionStrings__Mongo: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/clicks_meta_db?replicaSet=rs0&readPreference=${MONGO_READ_PREFERENCE:-primary}"
+      RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
     depends_on:
       pgcat:
@@ -535,6 +545,7 @@ services:
       Docker__Endpoint: "unix:///var/run/docker.sock"
       Docker__ComposeProject: "sandbox"
       Docker__ComposeFile: "/workspace/docker-compose.yml"
+      Pgcat__ConfigDir: "/pgcat-config"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Cors__AllowedOrigins__1: "http://localhost:5174"
       Scenarios__DataDir: "/data"
@@ -547,6 +558,11 @@ services:
       # can find docker-compose.yml to run `--scale`. Compose itself does the actual work against
       # the Docker Engine via the socket above; this mount is just so it can read its own file.
       - ./:/workspace:ro
+      # Separate, writable mount of the same host directory the pgcat service reads its config from
+      # (read-only, below) - lets control-api rewrite pgcat.toml directly for the pool-settings
+      # control without touching the read-only /workspace mount above. pgcat's own `autoreload`
+      # picks up the change on its own; see DockerService.SetPgcatPoolSettingsAsync.
+      - ./infra/pgcat:/pgcat-config
       # Saved custom traffic scenarios (endpoints + load ramp) - a real volume, not the read-only
       # workspace mount above, so they survive a control-api rebuild the same way postgres-data
       # survives one.

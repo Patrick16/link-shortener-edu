@@ -23,11 +23,14 @@ public class DockerService : IDockerService
     private const string ChaosTargetLabel = "control-api.chaos-target";
     private const string K6Image = "grafana/k6:latest";
 
-    // Only services nginx actually fronts (see sandbox/infra/nginx/nginx.conf) have a reason to
-    // run more than one replica right now - an explicit allowlist rather than "anything in the
-    // compose file" so scaling a stateful/singleton service (postgres, rabbitmq, ...) isn't even
-    // an option to try by mistake.
-    private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api"];
+    // link-api/redirect-api scale because nginx fronts them (see sandbox/infra/nginx/nginx.conf);
+    // shortener-service/traffic-service scale as RabbitMQ competing consumers instead - no load
+    // balancer involved, RabbitMQ itself round-robins unacked deliveries across every consumer on a
+    // queue. Still an explicit allowlist, not "anything in the compose file", so a stateful/singleton
+    // service (postgres, rabbitmq, pgcat, ...) isn't even an option to try by mistake - both workers
+    // are volume-free, same property ScaleAsync already relies on for --force-recreate safety
+    // elsewhere (see RunComposeAsync's own comment).
+    private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api", "shortener-service", "traffic-service"];
 
     // Every DB-touching service - pgcat's toggle recreates all of them, since "the system without
     // connection pooling" means the whole system, not just the two APIs a k6 test happens to hit.
@@ -37,6 +40,18 @@ public class DockerService : IDockerService
     // Only these two actually read/populate the Redis cache (see LinkCacheService) - shortener-
     // service/traffic-service/auth-api have no cache to disable.
     private static readonly IReadOnlyList<string> CacheUsingServices = ["link-api", "redirect-api"];
+
+    // The two standbys recovery_min_apply_delay can be set on - not the primary, which has no
+    // concept of replay delay.
+    private static readonly IReadOnlyList<string> PostgresReplicas = ["postgres-replica1", "postgres-replica2"];
+
+    // SENTINEL SET is local to whichever Sentinel instance receives it - not gossiped to the other
+    // two - so every config change loops over all three to keep them in sync.
+    private static readonly IReadOnlyList<string> SentinelContainers = ["redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3"];
+
+    // The two RabbitMQ consumers - workers that each run a LinkCreatedConsumer and/or
+    // ClickTrackedConsumer, all sharing RabbitMqConsumer's own _prefetchCount field.
+    private static readonly IReadOnlyList<string> RabbitMqConsumingServices = ["shortener-service", "traffic-service"];
 
     // The real routes a traffic run's step sequence can be built from - the server-side source of
     // truth (see EndpointDefinition) so k6-scripts/flow.js stays a generic interpreter with no
@@ -91,6 +106,7 @@ public class DockerService : IDockerService
     private readonly string _composeNetwork;
     private readonly string _composeFile;
     private readonly string _k6ScriptsDir;
+    private readonly string _pgcatConfigDir;
     private readonly ILogger<DockerService> _logger;
 
     // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
@@ -99,6 +115,20 @@ public class DockerService : IDockerService
     private bool _pgcatEnabled = true;
     private bool _cacheEnabled = true;
 
+    // Mirrors pgcat.toml's shipped defaults, collapsed to one shared value across all 3 pools
+    // (the file itself differentiates links_db at 20 vs 10 for the other two - see
+    // SetPgcatPoolSettingsAsync's own comment for why that's fine to lose once this control is used).
+    private PgcatPoolSettings _pgcatPoolSettings = new("transaction", true, 10);
+
+    // Mirrors RabbitMqConsumer's own hardcoded-turned-configurable default.
+    private int _rabbitMqPrefetch = 10;
+
+    // Mirrors the shipped default in docker-compose.yml's ConnectionStrings__Mongo.
+    private string _mongoReadPreference = "primary";
+
+    // Mirrors Npgsql's own default (and the shipped ${NPGSQL_MAX_POOL_SIZE:-100} fallback).
+    private int _npgsqlPoolSize = 100;
+
     public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
     {
         _logger = logger;
@@ -106,6 +136,7 @@ public class DockerService : IDockerService
         _composeNetwork = configuration["Docker:ComposeNetwork"] ?? $"{_composeProject}_default";
         _composeFile = configuration["Docker:ComposeFile"] ?? "/workspace/docker-compose.yml";
         _k6ScriptsDir = configuration["K6:ScriptsDir"] ?? Path.Combine(AppContext.BaseDirectory, "k6-scripts");
+        _pgcatConfigDir = configuration["Pgcat:ConfigDir"] ?? "/pgcat-config";
 
         var endpoint = configuration["Docker:Endpoint"]
             ?? (OperatingSystem.IsWindows() ? "npipe://./pipe/docker_engine" : "unix:///var/run/docker.sock");
@@ -735,6 +766,151 @@ public class DockerService : IDockerService
         return new PostgresConnectionStats(byDatabase, byDatabase.Values.Sum());
     }
 
+    // recovery_min_apply_delay is a PGC_SIGHUP GUC on a standby - ALTER SYSTEM SET + pg_reload_conf()
+    // applies it live, no restart. pg_settings.setting for a GUC_UNIT_MS parameter is always the raw
+    // millisecond integer with no suffix, unlike SHOW's human-formatted output ("5s", "1min", ...) -
+    // reading that column instead of parsing SHOW's text is what keeps GetReplicationLagAsync simple.
+    public async Task<ReplicationLag?> GetReplicationLagAsync(string serviceId, CancellationToken ct)
+    {
+        if (!PostgresReplicas.Contains(serviceId))
+        {
+            return null;
+        }
+
+        var container = await FindAsync(serviceId, ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var output = await ExecAsync(container.ID, ["psql", "-U", "postgres", "-tAc", "SELECT setting FROM pg_settings WHERE name = 'recovery_min_apply_delay'"], ct);
+        return new ReplicationLag(int.TryParse(output.Trim(), out var ms) ? ms : 0);
+    }
+
+    public async Task<ReplicationLag?> SetReplicationLagAsync(string serviceId, int delayMs, CancellationToken ct)
+    {
+        if (!PostgresReplicas.Contains(serviceId))
+        {
+            return null;
+        }
+
+        var container = await FindAsync(serviceId, ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        // Two separate exec calls, not one "ALTER SYSTEM SET ...; SELECT pg_reload_conf();" - psql
+        // sends a multi-statement -c string as one simple-query message, which Postgres runs inside
+        // an implicit transaction block, and ALTER SYSTEM refuses to run inside one (confirmed live:
+        // "ERROR: ALTER SYSTEM cannot run inside a transaction block" when combined).
+        await ExecAsync(container.ID, ["psql", "-U", "postgres", "-c", $"ALTER SYSTEM SET recovery_min_apply_delay = '{delayMs}ms'"], ct);
+        await ExecAsync(container.ID, ["psql", "-U", "postgres", "-c", "SELECT pg_reload_conf()"], ct);
+        _logger.LogWarning("Set {ServiceId} replication lag (recovery_min_apply_delay) to {DelayMs}ms", serviceId, delayMs);
+        return new ReplicationLag(delayMs);
+    }
+
+    // SENTINEL MASTER returns a flat alternating key/value list (confirmed against a real Sentinel
+    // before parsing anything) - reads it off redis-sentinel-1 as a representative instance, since a
+    // successful SetSentinelConfigAsync keeps all three in sync anyway.
+    public async Task<SentinelConfig?> GetSentinelConfigAsync(CancellationToken ct)
+    {
+        var container = await FindAsync("redis-sentinel-1", ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var output = await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "MASTER", "mymaster"], ct);
+        var lines = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var fields = new Dictionary<string, string>();
+        for (var i = 0; i + 1 < lines.Length; i += 2)
+        {
+            fields[lines[i]] = lines[i + 1];
+        }
+
+        int Get(string key) => fields.TryGetValue(key, out var v) && int.TryParse(v, out var n) ? n : 0;
+        return new SentinelConfig(Get("down-after-milliseconds"), Get("quorum"), Get("failover-timeout"));
+    }
+
+    public async Task<SentinelConfig> SetSentinelConfigAsync(SentinelConfig config, CancellationToken ct)
+    {
+        foreach (var serviceId in SentinelContainers)
+        {
+            var container = await FindAsync(serviceId, ct);
+            if (container is null)
+            {
+                continue;
+            }
+
+            // Three separate SENTINEL SET calls, not one with multiple option/value pairs - kept to
+            // exactly the shape already confirmed live against a real Sentinel, one option at a time.
+            await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", "down-after-milliseconds", config.DownAfterMs.ToString()], ct);
+            await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", "quorum", config.Quorum.ToString()], ct);
+            await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", "failover-timeout", config.FailoverTimeoutMs.ToString()], ct);
+        }
+
+        _logger.LogWarning(
+            "Set Sentinel config on {Containers}: down-after-milliseconds={DownAfterMs}, quorum={Quorum}, failover-timeout={FailoverTimeoutMs}",
+            string.Join(", ", SentinelContainers), config.DownAfterMs, config.Quorum, config.FailoverTimeoutMs);
+
+        return config;
+    }
+
+    public int GetRabbitMqPrefetch() => _rabbitMqPrefetch;
+
+    public async Task<int> SetRabbitMqPrefetchAsync(int prefetchCount, CancellationToken ct)
+    {
+        var env = new Dictionary<string, string> { ["RABBITMQ_PREFETCH"] = prefetchCount.ToString() };
+
+        _logger.LogWarning("Switching RabbitMq__PrefetchCount for {Services} to {PrefetchCount}", string.Join(", ", RabbitMqConsumingServices), prefetchCount);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. RabbitMqConsumingServices], env, ct);
+        if (exitCode != 0)
+        {
+            _logger.LogWarning("Setting RabbitMQ prefetch failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+
+        _rabbitMqPrefetch = prefetchCount;
+        return prefetchCount;
+    }
+
+    public string GetMongoReadPreference() => _mongoReadPreference;
+
+    public async Task<string> SetMongoReadPreferenceAsync(string preference, CancellationToken ct)
+    {
+        var env = new Dictionary<string, string> { ["MONGO_READ_PREFERENCE"] = preference };
+
+        _logger.LogWarning("Switching traffic-service's Mongo readPreference to {Preference}", preference);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "traffic-service"], env, ct);
+        if (exitCode != 0)
+        {
+            _logger.LogWarning("Setting Mongo read preference failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+
+        _mongoReadPreference = preference;
+        return preference;
+    }
+
+    public int GetNpgsqlPoolSize() => _npgsqlPoolSize;
+
+    public async Task<int> SetNpgsqlPoolSizeAsync(int poolSize, CancellationToken ct)
+    {
+        var env = new Dictionary<string, string> { ["NPGSQL_MAX_POOL_SIZE"] = poolSize.ToString() };
+
+        _logger.LogWarning("Switching Npgsql Maximum Pool Size for {Services} to {PoolSize}", string.Join(", ", DbTouchingServices), poolSize);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. DbTouchingServices], env, ct);
+        if (exitCode != 0)
+        {
+            _logger.LogWarning("Setting Npgsql pool size failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+
+        _npgsqlPoolSize = poolSize;
+        return poolSize;
+    }
+
     public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled);
 
     public InfraStatus SetNginxBypass(bool bypassed)
@@ -787,6 +963,81 @@ public class DockerService : IDockerService
 
         _cacheEnabled = enabled;
         return GetInfraStatus();
+    }
+
+    public PgcatPoolSettings GetPgcatPoolSettings() => _pgcatPoolSettings;
+
+    // Rewrites pgcat.toml wholesale rather than patching the existing file's text - deterministic
+    // and reversible regardless of what the file currently looks like, same reasoning as
+    // sentinel.conf being generated fresh at container start rather than edited in place. Written to
+    // a *separate* writable bind mount of the same host directory (control-api's own workspace mount
+    // is read-only on purpose - see RunComposeAsync's --no-deps comment for the other toggle that
+    // learned this the hard way); pgcat itself still mounts the file read-only, but Docker bind
+    // mounts are live views of the same host file, so pgcat's own `autoreload = 15000` picks this up
+    // within ~15s with no docker compose call at all - no recreate, no --no-deps cascade risk.
+    // Collapses the original file's differentiated per-pool sizes (10/20/10) into one shared value -
+    // acceptable for an experimental control whose whole point is "what happens if I shrink every
+    // pool", not preserving the original tuning.
+    public async Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct)
+    {
+        var path = Path.Combine(_pgcatConfigDir, "pgcat.toml");
+        await File.WriteAllTextAsync(path, RenderPgcatToml(settings), ct);
+
+        _logger.LogWarning(
+            "Rewrote pgcat.toml: pool_mode={PoolMode}, read_write_splitting={ReadWriteSplitting}, pool_size={PoolSize} - pgcat autoreload picks this up within ~15s",
+            settings.PoolMode, settings.ReadWriteSplitting, settings.PoolSize);
+
+        _pgcatPoolSettings = settings;
+        return settings;
+    }
+
+    private static readonly IReadOnlyList<string> PgcatDatabases = ["users_db", "links_db", "clicks_db"];
+
+    private static string RenderPgcatToml(PgcatPoolSettings settings)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# Rewritten live by control-api's pgcat pool-settings control (see DockerService.SetPgcatPoolSettingsAsync).");
+        sb.AppendLine("# One primary + 2 streaming replicas (postgres-replica1/2), same trio for all three databases.");
+        sb.AppendLine();
+        sb.AppendLine("[general]");
+        sb.AppendLine("host = \"0.0.0.0\"");
+        sb.AppendLine("port = 6432");
+        sb.AppendLine("enable_prometheus_exporter = false");
+        sb.AppendLine("connect_timeout = 5000");
+        sb.AppendLine("idle_timeout = 30000");
+        sb.AppendLine("healthcheck_timeout = 1000");
+        sb.AppendLine("healthcheck_delay = 30000");
+        sb.AppendLine("shutdown_timeout = 5000");
+        sb.AppendLine("ban_time = 20");
+        sb.AppendLine("log_client_connections = false");
+        sb.AppendLine("log_client_disconnections = false");
+        sb.AppendLine("autoreload = 15000");
+        sb.AppendLine("worker_threads = 4");
+        sb.AppendLine("admin_username = \"admin_user\"");
+        sb.AppendLine("admin_password = \"admin_pass\"");
+
+        foreach (var database in PgcatDatabases)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"[pools.{database}]");
+            sb.AppendLine($"pool_mode = \"{settings.PoolMode}\"");
+            sb.AppendLine("default_role = \"primary\"");
+            sb.AppendLine("query_parser_enabled = true");
+            sb.AppendLine($"query_parser_read_write_splitting = {(settings.ReadWriteSplitting ? "true" : "false")}");
+            sb.AppendLine("primary_reads_enabled = true");
+            sb.AppendLine();
+            sb.AppendLine($"[pools.{database}.users.0]");
+            sb.AppendLine("username = \"postgres\"");
+            sb.AppendLine("password = \"postgres\"");
+            sb.AppendLine($"pool_size = {settings.PoolSize}");
+            sb.AppendLine("statement_timeout = 0");
+            sb.AppendLine();
+            sb.AppendLine($"[pools.{database}.shards.0]");
+            sb.AppendLine("servers = [[\"postgres\", 5432, \"primary\"], [\"postgres-replica1\", 5432, \"replica\"], [\"postgres-replica2\", 5432, \"replica\"]]");
+            sb.AppendLine($"database = \"{database}\"");
+        }
+
+        return sb.ToString();
     }
 
     public IReadOnlyList<EndpointDefinition> ListKnownEndpoints() => EndpointRegistry;
