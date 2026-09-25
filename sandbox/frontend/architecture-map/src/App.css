@@ -396,6 +396,13 @@ button:disabled {
   cursor: pointer;
 }
 
+.node-panel-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
 .node-panel-quick-link {
   display: inline-block;
   font-size: 12px;
@@ -406,11 +413,188 @@ button:disabled {
   background: var(--accent-bg);
   border-radius: 999px;
   padding: 3px 10px;
-  margin-bottom: 10px;
+  margin: 0;
 }
 
 .node-panel-quick-link:hover {
   filter: brightness(1.1);
+}
+
+.node-panel-access-btn {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Access info modal - dashboard URLs / creds / connection strings for a node, kept out of the
+   panel's own body so it doesn't clutter every node card (see accessInfo.ts). */
+
+.access-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+
+.access-modal {
+  width: 100%;
+  max-width: 480px;
+  max-height: 80vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.access-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.access-modal-header h3 {
+  font-size: 16px;
+  margin: 0;
+  color: var(--text-h);
+}
+
+.access-modal-header button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.access-modal-note {
+  font-size: 12px;
+  margin: 0 0 10px;
+}
+
+.access-modal-entries {
+  margin: 0;
+}
+
+.access-modal-row {
+  margin-bottom: 10px;
+}
+
+.access-modal-row dt {
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+
+.access-modal-row dd {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.access-modal-row code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  font-size: 13px;
+}
+
+.access-modal-copy-btn {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.access-modal-copy-btn:hover {
+  filter: brightness(1.1);
+}
+
+.node-panel-pin-btn {
+  display: block;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+.node-panel-pin-btn:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.node-panel-pin-btn-active {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+/* Pinned node metrics (fixed top-right overlay, independent of the sidebar/selection). One grid
+   across every row (see PinnedMetrics) - each of the 5 cells per row lands in the same grid column
+   as every other row's, so the CPU/RAM/TCP numbers line up at a shared width no matter how long a
+   node's own name is, instead of each row sizing itself independently. */
+
+.pinned-metrics {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto) auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: var(--code-bg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  font-size: 12px;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+  max-width: min(440px, calc(100vw - 24px));
+}
+
+.pinned-metrics-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pinned-metrics-value {
+  text-align: right;
+  color: var(--text);
+}
+
+.pinned-metrics button {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pinned-metrics button:hover {
+  color: var(--text-h);
 }
 
 .node-panel-charts {

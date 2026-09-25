@@ -194,6 +194,7 @@ export interface ResourceSample {
   cpuPercent: number
   memoryUsageBytes: number
   memoryLimitBytes: number
+  tcpConnections: number
   timestamp: string
 }
 

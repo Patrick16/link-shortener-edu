@@ -622,8 +622,28 @@ public class DockerService : IDockerService
         var systemDelta = (double)(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage);
         var onlineCpus = stats.CPUStats.OnlineCPUs > 0 ? stats.CPUStats.OnlineCPUs : (uint)stats.CPUStats.CPUUsage.PercpuUsage.Count;
         var cpuPercent = systemDelta > 0 && cpuDelta > 0 ? cpuDelta / systemDelta * onlineCpus * 100.0 : 0.0;
+        var tcpConnections = await GetTcpConnectionCountAsync(container.ID, ct);
 
-        return new ResourceSample(serviceId, cpuPercent, (long)stats.MemoryStats.Usage, (long)stats.MemoryStats.Limit, DateTimeOffset.UtcNow);
+        return new ResourceSample(serviceId, cpuPercent, (long)stats.MemoryStats.Usage, (long)stats.MemoryStats.Limit, tcpConnections, DateTimeOffset.UtcNow);
+    }
+
+    // Reads the container's own /proc/net/tcp[6] rather than shelling out to ss/netstat - those
+    // aren't installed in every image here (alpine, debian-slim, pgcat), but procfs always is on
+    // Linux. Each non-header line is one socket in any TCP state (LISTEN included), and grep -c
+    // counts them without needing to parse the fixed-width columns - the header line has no ':' so
+    // it's excluded for free, and grep's own "no match" exit code still leaves "0" on stdout.
+    private async Task<int> GetTcpConnectionCountAsync(string containerId, CancellationToken ct)
+    {
+        try
+        {
+            var output = await ExecAsync(containerId, ["sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c :"], ct);
+            return int.TryParse(output.Trim(), out var count) ? count : 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to read TCP connection count for container {ContainerId}", containerId);
+            return 0;
+        }
     }
 
     public IReadOnlyList<string> ListScalableServices() => ScalableServices;

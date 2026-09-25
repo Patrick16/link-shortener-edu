@@ -6,8 +6,10 @@ import { useTrafficRun } from './hooks/useTrafficRun'
 import { useTrafficConfig } from './hooks/useTrafficConfig'
 import { useResizableWidth } from './hooks/useResizableWidth'
 import { useInfraTopology } from './hooks/useInfraTopology'
+import { usePinnedMetrics } from './hooks/usePinnedMetrics'
 import { Diagram } from './components/Diagram'
 import { NodePanel } from './components/NodePanel'
+import { PinnedMetrics } from './components/PinnedMetrics'
 import { ConnectionDetail } from './components/ConnectionDetail'
 import { K6ConfigPanel } from './components/K6ConfigPanel'
 import { TrafficResultPanel } from './components/TrafficResultPanel'
@@ -36,6 +38,7 @@ function App() {
   const roles = useInfraTopology()
   const trafficRun = useTrafficRun()
   const trafficConfig = useTrafficConfig()
+  const pins = usePinnedMetrics()
   const [selection, setSelection] = useState<Selection>(null)
   const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1, true)
 
@@ -48,6 +51,13 @@ function App() {
 
   return (
     <div className="app-shell">
+      <PinnedMetrics
+        pinnedIds={pins.pinnedIds}
+        metaById={metaById}
+        knownServiceIds={knownServiceIds}
+        resourceHistory={resourceHistory}
+        onUnpin={pins.togglePin}
+      />
       <header className="app-header">
         <div className="app-header-title">
           <h1>Architecture Map</h1>
@@ -79,6 +89,8 @@ function App() {
                   instances={selectedInstances}
                   resourceHistory={resourceHistory[selectedServiceId] ?? []}
                   onClose={() => setSelection(null)}
+                  pinned={pins.isPinned(selectedComponent.id)}
+                  onTogglePin={() => pins.togglePin(selectedComponent.id)}
                 />
               )}
               {selectedComponent && selectedComponent.id !== 'k6' && !selectedServiceId && (

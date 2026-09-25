@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { AccessInfoModal } from './AccessInfoModal'
 import { ComponentCard } from './ComponentCard'
 import { ServiceControls } from './ServiceControls'
 import { ScaleControl } from './ScaleControl'
@@ -14,6 +15,7 @@ import { Sparkline } from './Sparkline'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import { statusColor } from '../utils/statusColor'
 import { getQuickLink } from '../utils/quickLink'
+import { getAccessInfo } from '../utils/accessInfo'
 import type { ArchComponent } from '../types/architecture'
 import type { InfraStatus, ManagedContainer, PgcatConnectionStats, PostgresConnectionStats, ResourceSample } from '../types/controlApi'
 
@@ -25,9 +27,13 @@ interface Props {
   instances: ManagedContainer[]
   resourceHistory: ResourceSample[]
   onClose: () => void
+  // Both omitted for a node with no controllable container (see the !serviceId branch in App) -
+  // there's no live CPU/RAM/TCP reading to pin in that case.
+  pinned?: boolean
+  onTogglePin?: () => void
 }
 
-export function NodePanel({ component, serviceId, instances, resourceHistory, onClose }: Props) {
+export function NodePanel({ component, serviceId, instances, resourceHistory, onClose, pinned, onTogglePin }: Props) {
   const [scalable, setScalable] = useState<string[]>([])
   const [infraStatus, setInfraStatus] = useState<InfraStatus | null>(null)
   const [infraBusy, setInfraBusy] = useState(false)
@@ -38,6 +44,8 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
   const memMax = Math.max(64, ...memValuesMb) * 1.3
   const primary = instances[0]
   const quickLink = getQuickLink(component)
+  const accessInfo = getAccessInfo(component)
+  const [showAccessInfo, setShowAccessInfo] = useState(false)
   const showsInfraToggle = serviceId === 'nginx' || serviceId === 'pgcat' || serviceId === 'redis-master'
   const showsPgcatConnections = serviceId === 'pgcat'
   const showsPostgresConnections = component.type === 'database'
@@ -93,10 +101,32 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
         </button>
       </div>
 
-      {quickLink && (
-        <a className="node-panel-quick-link" href={quickLink.url} target="_blank" rel="noreferrer">
-          {quickLink.label} ↗
-        </a>
+      {(quickLink || accessInfo) && (
+        <div className="node-panel-link-row">
+          {quickLink && (
+            <a className="node-panel-quick-link" href={quickLink.url} target="_blank" rel="noreferrer">
+              {quickLink.label} ↗
+            </a>
+          )}
+          {accessInfo && (
+            <button className="node-panel-quick-link node-panel-access-btn" onClick={() => setShowAccessInfo(true)}>
+              🔑 Access info
+            </button>
+          )}
+        </div>
+      )}
+
+      {showAccessInfo && accessInfo && (
+        <AccessInfoModal title={component.name} info={accessInfo} onClose={() => setShowAccessInfo(false)} />
+      )}
+
+      {serviceId && onTogglePin && (
+        <button
+          className={pinned ? 'node-panel-pin-btn node-panel-pin-btn-active' : 'node-panel-pin-btn'}
+          onClick={onTogglePin}
+        >
+          {pinned ? '📌 Unpin metrics' : '📌 Pin metrics'}
+        </button>
       )}
 
       {primary ? (

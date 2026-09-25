@@ -6,7 +6,7 @@ namespace ControlApi.Tests;
 public class ResourceStatsStoreTests
 {
     private static ResourceSample Sample(string serviceId, int secondsAgo) =>
-        new(serviceId, CpuPercent: 12.5, MemoryUsageBytes: 1024, MemoryLimitBytes: 4096,
+        new(serviceId, CpuPercent: 12.5, MemoryUsageBytes: 1024, MemoryLimitBytes: 4096, TcpConnections: 3,
             Timestamp: DateTimeOffset.UtcNow.AddSeconds(-secondsAgo));
 
     [Fact]
