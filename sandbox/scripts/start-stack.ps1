@@ -1,16 +1,17 @@
 ﻿<#
 .SYNOPSIS
     Starts the full Link Shortener stack: the docker-compose backend (Postgres, Redis, RabbitMQ,
-    and all 5 .NET services) plus the frontend dev server.
+    and all 5 .NET services) plus both frontend dev servers (the product app and the sandbox
+    architecture-map).
 
 .PARAMETER Build
     Rebuild the backend Docker images before starting (use after changing backend/.NET code).
 
 .PARAMETER SkipFrontend
-    Only start the backend (docker compose); don't launch the frontend dev server.
+    Only start the backend (docker compose); don't launch either frontend dev server.
 
 .PARAMETER NoBrowser
-    Don't automatically open a browser tab once the frontend dev server is up.
+    Don't automatically open a browser tab once the frontend dev servers are up.
 
 .EXAMPLE
     .\scripts\start-stack.ps1
@@ -32,6 +33,7 @@ $ErrorActionPreference = 'Stop'
 $sandboxRoot = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $sandboxRoot
 $frontendDir = Join-Path $repoRoot 'src\frontend\app'
+$architectureMapDir = Join-Path $sandboxRoot 'frontend\architecture-map'
 
 function Write-Step {
     param([string]$Message)
@@ -152,44 +154,60 @@ if ($SkipFrontend) {
     exit 0
 }
 
-# --- Frontend: npm run dev in its own window -------------------------------------------
+# --- Frontends: npm run dev, each in its own window --------------------------------------
 
-Write-Step 'Preparing the frontend'
+Write-Step 'Preparing the frontends'
 
-$envLocal = Join-Path $frontendDir '.env.local'
-$envExample = Join-Path $frontendDir '.env.example'
-if (-not (Test-Path $envLocal)) {
-    Copy-Item $envExample $envLocal
-    Write-Host "  Created src\frontend\app\.env.local from .env.example"
-}
+function Initialize-Frontend {
+    param(
+        [string]$Dir,
+        [string]$Label
+    )
 
-if (-not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
-    Write-Step 'Installing frontend dependencies (npm install)'
-    Push-Location $frontendDir
-    try {
-        npm install
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error 'npm install failed - see output above.'
+    $envLocal = Join-Path $Dir '.env.local'
+    $envExample = Join-Path $Dir '.env.example'
+    if ((Test-Path $envExample) -and -not (Test-Path $envLocal)) {
+        Copy-Item $envExample $envLocal
+        Write-Host "  Created $Label\.env.local from .env.example"
+    }
+
+    if (-not (Test-Path (Join-Path $Dir 'node_modules'))) {
+        Write-Step "Installing $Label dependencies (npm install)"
+        Push-Location $Dir
+        try {
+            npm install
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "npm install failed for $Label - see output above."
+            }
+        } finally {
+            Pop-Location
         }
-    } finally {
-        Pop-Location
     }
 }
 
-Write-Step 'Starting the frontend dev server in a new window'
+Initialize-Frontend -Dir $frontendDir -Label 'src\frontend\app'
+Initialize-Frontend -Dir $architectureMapDir -Label 'sandbox\frontend\architecture-map'
+
+Write-Step 'Starting the frontend dev servers, each in a new window'
 Start-Process powershell -ArgumentList @(
     '-NoExit',
     '-Command',
     "Set-Location '$frontendDir'; npm run dev"
 )
+Start-Process powershell -ArgumentList @(
+    '-NoExit',
+    '-Command',
+    "Set-Location '$architectureMapDir'; npm run dev"
+)
 
 if (-not $NoBrowser) {
     Start-Sleep -Seconds 3
-    Start-Process 'http://localhost:5173'
+    Start-Process 'http://localhost:5174'
 }
 
 Write-Host "`nFull stack is up:" -ForegroundColor Cyan
-Write-Host '  Frontend:         http://localhost:5173'
+Write-Host '  Frontend (product):    http://localhost:5173'
+Write-Host '  Frontend (sandbox map): http://localhost:5174'
 Write-Host '  AuthApi:          http://localhost:8081/scalar/v1'
 Write-Host '  LinkApi:          http://localhost:8082/scalar/v1'
 Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'
@@ -198,4 +216,4 @@ Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis-ma
 Write-Host '  Mongo Express:    http://localhost:8085'
 Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
 Write-Host "`nStop the backend with: .\stop-stack.ps1"
-Write-Host "Stop the frontend by closing its window (or Ctrl+C in it)."
+Write-Host "Stop the frontends by closing their windows (or Ctrl+C in each)."
