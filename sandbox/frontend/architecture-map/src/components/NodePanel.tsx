@@ -14,7 +14,7 @@ import { SentinelConfigControl } from './SentinelConfigControl'
 import { Sparkline } from './Sparkline'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import { statusColor } from '../utils/statusColor'
-import { getQuickLink } from '../utils/quickLink'
+import { getQuickLinks } from '../utils/quickLink'
 import { getAccessInfo } from '../utils/accessInfo'
 import type { ArchComponent } from '../types/architecture'
 import type { InfraStatus, ManagedContainer, PgcatConnectionStats, PostgresConnectionStats, ResourceSample } from '../types/controlApi'
@@ -43,7 +43,7 @@ export function NodePanel({ component, serviceId, instances, resourceHistoryByCo
   const [infraError, setInfraError] = useState<string | null>(null)
   const primary = instances[0]
   const hasCharts = instances.some((instance) => (resourceHistoryByContainer[instance.containerId]?.length ?? 0) > 0)
-  const quickLink = getQuickLink(component)
+  const quickLinks = getQuickLinks(component)
   const accessInfo = getAccessInfo(component)
   const [showAccessInfo, setShowAccessInfo] = useState(false)
   const showsInfraToggle = serviceId === 'nginx' || serviceId === 'pgcat' || serviceId === 'redis-master'
@@ -101,13 +101,13 @@ export function NodePanel({ component, serviceId, instances, resourceHistoryByCo
         </button>
       </div>
 
-      {(quickLink || accessInfo) && (
+      {(quickLinks.length > 0 || accessInfo) && (
         <div className="node-panel-link-row">
-          {quickLink && (
-            <a className="node-panel-quick-link" href={quickLink.url} target="_blank" rel="noreferrer">
-              {quickLink.label} ↗
+          {quickLinks.map((link) => (
+            <a key={link.url} className="node-panel-quick-link" href={link.url} target="_blank" rel="noreferrer">
+              {link.label} ↗
             </a>
-          )}
+          ))}
           {accessInfo && (
             <button className="node-panel-quick-link node-panel-access-btn" onClick={() => setShowAccessInfo(true)}>
               🔑 Access info

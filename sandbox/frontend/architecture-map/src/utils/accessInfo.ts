@@ -81,7 +81,8 @@ export function getAccessInfo(component: ArchComponent): AccessInfo | null {
     case 'pgcat':
       return {
         entries: [
-          { label: 'Note', value: 'No dashboard UI - pgcat is a connection pooler, connect with any Postgres client' },
+          { label: 'Note', value: 'No dashboard UI of its own - pgcat is a connection pooler, connect with any Postgres client' },
+          { label: 'pgweb', value: 'http://localhost:8084 (connects to the primary directly, bypassing pgcat - there is nothing pooler-specific to browse)' },
           { label: 'psql (e.g. links_db)', value: 'psql -h localhost -p 6432 -U postgres -d links_db' },
           { label: 'Password', value: 'postgres' },
           { label: 'Connection string', value: 'postgresql://postgres:postgres@localhost:6432/links_db' },
@@ -95,6 +96,13 @@ export function getAccessInfo(component: ArchComponent): AccessInfo | null {
       return {
         entries: [
           { label: 'Note', value: 'Same primary Postgres instance as the other two databases, port 5432' },
+          {
+            label: 'pgweb',
+            value:
+              dbName === 'links_db'
+                ? 'http://localhost:8084 - opens on links_db by default'
+                : `http://localhost:8084 - opens on links_db by default, switch to ${dbName} from its connection screen`,
+          },
           { label: 'psql', value: `psql -h localhost -p 5432 -U postgres -d ${dbName}` },
           { label: 'Password', value: 'postgres' },
           { label: 'Connection string', value: `postgresql://postgres:postgres@localhost:5432/${dbName}` },
@@ -108,9 +116,25 @@ export function getAccessInfo(component: ArchComponent): AccessInfo | null {
       return {
         entries: [
           { label: 'Note', value: 'Read-only hot standby - streams the whole cluster (all 3 databases), same login as the primary' },
+          { label: 'pgweb', value: `http://localhost:8084 (shared pgweb instance - points at the primary on 5432, not this replica; connect manually to postgresql://postgres:postgres@localhost:${hostPort}/links_db from its connection screen to browse this replica specifically)` },
           { label: 'psql', value: `psql -h localhost -p ${hostPort} -U postgres` },
           { label: 'Password', value: 'postgres' },
           { label: 'Connection string', value: `postgresql://postgres:postgres@localhost:${hostPort}/links_db` },
+        ],
+      }
+    }
+
+    case 'link-api':
+    case 'redirect-api': {
+      const hostPort = component.id === 'link-api' ? 8086 : 8087
+      return {
+        entries: [
+          { label: 'SQLite fallback viewer', value: `http://localhost:${hostPort}` },
+          { label: 'Login', value: 'No login - open the URL, browses the FailedMessages table directly' },
+          {
+            label: 'Note',
+            value: 'Only ever populated while RabbitMQ is unreachable (see SqliteMessageFallbackStore) - empty in normal operation',
+          },
         ],
       }
     }

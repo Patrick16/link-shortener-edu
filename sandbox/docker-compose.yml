@@ -369,6 +369,41 @@ services:
     # (RedisInsight itself isn't Sentinel-aware; it's a dev GUI, not the app, so pointing it at the
     # current master directly is fine — re-add if a failover actually promotes a different node).
 
+  pgweb:
+    image: sosedoff/pgweb:latest
+    ports:
+      - "8084:8081"
+    environment:
+      # Connects straight to the primary (not pgcat) and opens on links_db by default - switch
+      # databases (users_db/clicks_db) from pgweb's own connection screen if needed.
+      PGWEB_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/links_db?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Browses the sqlite fallback stores that link-api/redirect-api write to when RabbitMq is
+  # unreachable (see SqliteMessageFallbackStore) - one viewer per service since each keeps its own
+  # file, not a shared database.
+  link-api-fallback-viewer:
+    image: coleifer/sqlite-web:latest
+    command: ["sqlite_web", "-H", "0.0.0.0", "-x", "/data/rabbitmq-fallback.db"]
+    ports:
+      - "8086:8080"
+    volumes:
+      - link-api-data:/data
+    depends_on:
+      - link-api
+
+  redirect-api-fallback-viewer:
+    image: coleifer/sqlite-web:latest
+    command: ["sqlite_web", "-H", "0.0.0.0", "-x", "/data/rabbitmq-fallback.db"]
+    ports:
+      - "8087:8080"
+    volumes:
+      - redirect-api-data:/data
+    depends_on:
+      - redirect-api
+
   aspire-dashboard:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
     ports:
@@ -424,12 +459,18 @@ services:
       # any failover automatically. No code change needed for this vs. a plain host:port string.
       ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      # Points the fallback store's sqlite file at the volume below (instead of appsettings.json's
+      # default, which lands inside the container's ephemeral filesystem) so link-api-fallback-viewer
+      # can read the same file.
+      ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
       Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
       # Defaults to true - control-api's cache toggle recreates link-api/redirect-api with this set
       # to false so the app skips Redis entirely (see EntityCacheService), a clean "no caching"
       # demo rather than every request eating a failed-connection timeout against a stopped redis.
       Cache__Enabled: "${CACHE_ENABLED:-true}"
+    volumes:
+      - link-api-data:/data
     depends_on:
       pgcat:
         condition: service_healthy
@@ -459,8 +500,12 @@ services:
       ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      # See link-api's identical override - same reasoning, read by redirect-api-fallback-viewer.
+      ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
       Cache__Enabled: "${CACHE_ENABLED:-true}"
+    volumes:
+      - redirect-api-data:/data
     depends_on:
       pgcat:
         condition: service_healthy
@@ -599,3 +644,5 @@ volumes:
   redis-sentinel-3-data:
   redisinsight-data:
   control-api-data:
+  link-api-data:
+  redirect-api-data:

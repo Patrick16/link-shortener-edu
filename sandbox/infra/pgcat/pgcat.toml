@@ -28,7 +28,7 @@ primary_reads_enabled = true
 [pools.users_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 20
+pool_size = 10
 statement_timeout = 0
 
 [pools.users_db.shards.0]
@@ -45,7 +45,7 @@ primary_reads_enabled = true
 [pools.links_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 20
+pool_size = 10
 statement_timeout = 0
 
 [pools.links_db.shards.0]
@@ -62,7 +62,7 @@ primary_reads_enabled = true
 [pools.clicks_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 20
+pool_size = 10
 statement_timeout = 0
 
 [pools.clicks_db.shards.0]
