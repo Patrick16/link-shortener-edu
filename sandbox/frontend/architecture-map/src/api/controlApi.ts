@@ -5,6 +5,7 @@ import type {
   DataSourceDefinition,
   EndpointDefinition,
   InfraStatus,
+  InfraTopology,
   ManagedContainer,
   PgcatConnectionStats,
   PgcatPoolSettings,
@@ -96,6 +97,9 @@ export const controlApi = {
 
   getPgcatConnections: () => request<PgcatConnectionStats>('/api/containers/pgcat/connections'),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
+
+  getRedisTopology: () => request<InfraTopology>('/api/containers/redis/topology'),
+  getMongoTopology: () => request<InfraTopology>('/api/containers/mongo/topology'),
 
   getPgcatPoolSettings: () => request<PgcatPoolSettings>('/api/infra/pgcat-pool'),
   setPgcatPoolSettings: (settings: PgcatPoolSettings) => request<PgcatPoolSettings>('/api/infra/pgcat-pool', 'POST', settings),

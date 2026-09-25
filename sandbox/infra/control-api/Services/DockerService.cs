@@ -49,6 +49,14 @@ public class DockerService : IDockerService
     // two - so every config change loops over all three to keep them in sync.
     private static readonly IReadOnlyList<string> SentinelContainers = ["redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3"];
 
+    // The three Redis data-plane containers whose actual replication role (see GetRedisTopologyAsync)
+    // can change on its own via Sentinel failover, independent of anything this app does.
+    private static readonly IReadOnlyList<string> RedisDataNodes = ["redis-master", "redis-replica1", "redis-replica2"];
+
+    // The three-node Mongo replica set whose primary (see GetMongoTopologyAsync) is elected among
+    // themselves, same "can change with no app involvement" story as Redis Sentinel above.
+    private static readonly IReadOnlyList<string> MongoNodes = ["mongo1", "mongo2", "mongo3"];
+
     // The two RabbitMQ consumers - workers that each run a LinkCreatedConsumer and/or
     // ClickTrackedConsumer, all sharing RabbitMqConsumer's own _prefetchCount field.
     private static readonly IReadOnlyList<string> RabbitMqConsumingServices = ["shortener-service", "traffic-service"];
@@ -764,6 +772,97 @@ public class DockerService : IDockerService
         }
 
         return new PostgresConnectionStats(byDatabase, byDatabase.Values.Sum());
+    }
+
+    // Redis Sentinel can fail over on its own (see infra/redis/sentinel.conf) - "redis-master" is
+    // only a hostname/label in architecture.json, not a guarantee that container is still the one
+    // actually serving writes. ROLE is asked of each of the three data nodes directly, not read off
+    // Sentinel's own view (see GetSentinelConfigAsync above) - it's the ground truth of what each
+    // Redis process itself currently believes it is, and needs no IP-to-container mapping the way
+    // reading Sentinel's reported master IP would.
+    public async Task<InfraTopology> GetRedisTopologyAsync(CancellationToken ct)
+    {
+        var roles = new List<NodeRole>();
+        foreach (var serviceId in RedisDataNodes)
+        {
+            var container = await FindAsync(serviceId, ct);
+            if (container is null)
+            {
+                roles.Add(new NodeRole(serviceId, "unreachable"));
+                continue;
+            }
+
+            try
+            {
+                var output = await ExecAsync(container.ID, ["redis-cli", "-p", "6379", "ROLE"], ct);
+                var role = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                roles.Add(new NodeRole(serviceId, role switch { "master" => "master", "slave" => "replica", _ => "unreachable" }));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read Redis ROLE from {ServiceId}", serviceId);
+                roles.Add(new NodeRole(serviceId, "unreachable"));
+            }
+        }
+
+        return new InfraTopology(roles);
+    }
+
+    // MongoDB elects its own primary among the replica set members with no external tool involved -
+    // the same "the graph's static node labels can lie" problem as Redis Sentinel above. rs.status()
+    // has to run against a member that's actually reachable, so this tries mongo1/2/3 in turn and
+    // uses whichever first responds; its view covers every member (reachable or not) in one call, so
+    // only one successful exec is needed per poll instead of one per node.
+    public async Task<InfraTopology> GetMongoTopologyAsync(CancellationToken ct)
+    {
+        foreach (var serviceId in MongoNodes)
+        {
+            var container = await FindAsync(serviceId, ct);
+            if (container is null)
+            {
+                continue;
+            }
+
+            try
+            {
+                var output = await ExecAsync(container.ID,
+                    ["mongosh", "--quiet", "--eval", "JSON.stringify(rs.status().members.map(m => ({ name: m.name, state: m.stateStr })))"], ct);
+
+                // mongosh can print a version/connection banner before the eval result even with
+                // --quiet - slicing from the first '[' skips over that instead of assuming the whole
+                // output is clean JSON.
+                var start = output.IndexOf('[');
+                if (start < 0)
+                {
+                    continue;
+                }
+
+                using var doc = JsonDocument.Parse(output[start..]);
+                var roles = new List<NodeRole>();
+                foreach (var member in doc.RootElement.EnumerateArray())
+                {
+                    var name = member.GetProperty("name").GetString() ?? "";
+                    var memberServiceId = name.Split(':')[0];
+                    var state = member.GetProperty("state").GetString() ?? "";
+                    roles.Add(new NodeRole(memberServiceId, state switch
+                    {
+                        "PRIMARY" => "primary",
+                        "SECONDARY" => "secondary",
+                        _ => "unreachable",
+                    }));
+                }
+
+                return new InfraTopology(roles);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read Mongo replica set status from {ServiceId}", serviceId);
+            }
+        }
+
+        // Every member unreachable (or none responded) - report all three as unreachable rather than
+        // an empty list, so the UI still has something to render.
+        return new InfraTopology(MongoNodes.Select(id => new NodeRole(id, "unreachable")).ToList());
     }
 
     // recovery_min_apply_delay is a PGC_SIGHUP GUC on a standby - ALTER SYSTEM SET + pg_reload_conf()

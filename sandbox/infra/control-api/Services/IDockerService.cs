@@ -63,6 +63,13 @@ public interface IDockerService
     Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(CancellationToken ct);
     Task<PostgresConnectionStats?> GetPostgresConnectionsAsync(CancellationToken ct);
 
+    // Which physical container is actually master/primary right now, read directly off each
+    // cluster's own data-plane nodes rather than assumed from architecture.json's static labels -
+    // both Redis Sentinel and MongoDB's replica set can re-elect a leader with zero involvement from
+    // this app, and the graph needs to reflect that instead of silently going stale. See NodeRole.
+    Task<InfraTopology> GetRedisTopologyAsync(CancellationToken ct);
+    Task<InfraTopology> GetMongoTopologyAsync(CancellationToken ct);
+
     // pgcat.toml pool_mode/read-write-splitting/pool_size - rewrites the file directly and relies on
     // pgcat's own autoreload, no docker compose recreate involved. See PgcatPoolSettings.
     PgcatPoolSettings GetPgcatPoolSettings();

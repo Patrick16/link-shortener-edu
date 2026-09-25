@@ -19,4 +19,23 @@ describe('isTrafficFlowEdge', () => {
   it('returns false for unrelated node names', () => {
     expect(isTrafficFlowEdge('foo', 'bar')).toBe(false)
   })
+
+  it('follows a live Redis failover - flags the promoted replica instead of the demoted master', () => {
+    const roles = { 'redis-master': 'unreachable', 'redis-replica1': 'master', 'redis-replica2': 'replica' }
+
+    expect(isTrafficFlowEdge('redirect-api', 'redis-replica1', roles)).toBe(true)
+    expect(isTrafficFlowEdge('redirect-api', 'redis-master', roles)).toBe(false)
+  })
+
+  it('follows a live Mongo primary election the same way', () => {
+    const roles = { mongo1: 'unreachable', mongo2: 'primary', mongo3: 'secondary' }
+
+    expect(isTrafficFlowEdge('traffic-service', 'mongo2', roles)).toBe(true)
+    expect(isTrafficFlowEdge('traffic-service', 'mongo1', roles)).toBe(false)
+  })
+
+  it('falls back to the default leader id when no role data is available yet', () => {
+    expect(isTrafficFlowEdge('redirect-api', 'redis-master', {})).toBe(true)
+    expect(isTrafficFlowEdge('traffic-service', 'mongo1', {})).toBe(true)
+  })
 })

@@ -11,6 +11,7 @@ import type { ManagedContainer } from '../types/controlApi'
 interface Props {
   data: ArchitectureData
   containers: Record<string, ManagedContainer[]>
+  roles: Record<string, string>
   trafficActive: boolean
   selectedConnectionIndex: number | null
   onSelectComponent: (componentId: string) => void
@@ -23,7 +24,7 @@ const nodeTypes = { service: ServiceNode }
 // filter here (a "1. Minimal stack" / "2. Click tracking" switcher hiding parts of the graph), but
 // it turned out to add more confusion (what's hidden right now?) than it removed, so the graph now
 // just always draws the whole real topology.
-export function Diagram({ data, containers, trafficActive, selectedConnectionIndex, onSelectComponent, onSelectConnection }: Props) {
+export function Diagram({ data, containers, roles, trafficActive, selectedConnectionIndex, onSelectComponent, onSelectConnection }: Props) {
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
 
   // Positions come from dagre, not hand-authored coordinates in architecture.json - see
@@ -50,17 +51,18 @@ export function Diagram({ data, containers, trafficActive, selectedConnectionInd
             icon: component.icon,
             state: instances[0]?.state,
             instanceCount: instances.length,
+            role: roles[component.id],
           } satisfies ServiceNodeData,
         }
       }),
-    [data.components, containers, knownServiceIds, layout],
+    [data.components, containers, knownServiceIds, layout, roles],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(computedNodes)
 
-  // Re-applies live data (status dot, replica badge) onto whatever's currently rendered without
-  // clobbering a position the user dragged - only positions carry over from the previous state,
-  // everything else always comes from the fresh computation.
+  // Re-applies live data (status dot, replica badge, live role badge) onto whatever's currently
+  // rendered without clobbering a position the user dragged - only positions carry over from the
+  // previous state, everything else always comes from the fresh computation.
   useEffect(() => {
     setNodes((current) => {
       const positionById = new Map(current.map((n) => [n.id, n.position]))
@@ -71,7 +73,7 @@ export function Diagram({ data, containers, trafficActive, selectedConnectionInd
   const edges: Edge[] = useMemo(
     () =>
       data.connections.map((connection, index) => {
-        const isFlowing = trafficActive && isTrafficFlowEdge(connection.from, connection.to)
+        const isFlowing = trafficActive && isTrafficFlowEdge(connection.from, connection.to, roles)
         const isSelected = selectedConnectionIndex === index
         const isHighlighted = isFlowing || isSelected
         return {
@@ -109,7 +111,7 @@ export function Diagram({ data, containers, trafficActive, selectedConnectionInd
           labelBgBorderRadius: 4,
         }
       }),
-    [data.connections, trafficActive, selectedConnectionIndex],
+    [data.connections, trafficActive, selectedConnectionIndex, roles],
   )
 
   return (

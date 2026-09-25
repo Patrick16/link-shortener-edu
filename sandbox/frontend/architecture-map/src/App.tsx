@@ -5,6 +5,7 @@ import { useLiveStack } from './hooks/useLiveStack'
 import { useTrafficRun } from './hooks/useTrafficRun'
 import { useTrafficConfig } from './hooks/useTrafficConfig'
 import { useResizableWidth } from './hooks/useResizableWidth'
+import { useInfraTopology } from './hooks/useInfraTopology'
 import { Diagram } from './components/Diagram'
 import { NodePanel } from './components/NodePanel'
 import { ConnectionDetail } from './components/ConnectionDetail'
@@ -27,6 +28,7 @@ type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index
 // run instead - the same "click the node" pattern every other control here already uses.
 function App() {
   const { containers, resourceHistory, connected, loading, error } = useLiveStack()
+  const roles = useInfraTopology()
   const trafficRun = useTrafficRun()
   const trafficConfig = useTrafficConfig()
   const [selection, setSelection] = useState<Selection>(null)
@@ -102,6 +104,7 @@ function App() {
           <Diagram
             data={data}
             containers={containers}
+            roles={roles}
             trafficActive={trafficRun.running}
             selectedConnectionIndex={selection?.kind === 'connection' ? selection.index : null}
             onSelectComponent={(id) => setSelection({ kind: 'component', id })}

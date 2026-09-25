@@ -218,6 +218,19 @@ export interface PostgresConnectionStats {
   total: number
 }
 
+// Which physical container is actually playing which role right now - Redis Sentinel and MongoDB's
+// replica set can both re-elect a leader with zero involvement from this app, so architecture.json's
+// static node ids/labels can't be trusted for this the way they can for everything else. role is
+// "master"/"replica"/"unreachable" for Redis, "primary"/"secondary"/"unreachable" for Mongo.
+export interface NodeRole {
+  serviceId: string
+  role: string
+}
+
+export interface InfraTopology {
+  roles: NodeRole[]
+}
+
 export interface ReplicaCount {
   serviceId: string
   count: number
