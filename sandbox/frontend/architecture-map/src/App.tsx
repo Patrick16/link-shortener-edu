@@ -26,13 +26,18 @@ type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index
 // useful at a time. There's no permanently-visible config sidebar any more: k6 has no live
 // status/controls of its own (see K6ConfigPanel), so selecting it is how you configure the next
 // run instead - the same "click the node" pattern every other control here already uses.
+//
+// Collapsed by default on a fresh visit (the graph itself is the point on first load, not a panel
+// with nothing selected yet) - but selecting anything on the graph force-expands it via
+// sidebar.expand(), so the very next click after landing on an empty graph still shows that node's
+// detail immediately instead of silently updating an unopened panel.
 function App() {
   const { containers, resourceHistory, connected, loading, error } = useLiveStack()
   const roles = useInfraTopology()
   const trafficRun = useTrafficRun()
   const trafficConfig = useTrafficConfig()
   const [selection, setSelection] = useState<Selection>(null)
-  const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1)
+  const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1, true)
 
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
 
@@ -107,8 +112,14 @@ function App() {
             roles={roles}
             trafficActive={trafficRun.running}
             selectedConnectionIndex={selection?.kind === 'connection' ? selection.index : null}
-            onSelectComponent={(id) => setSelection({ kind: 'component', id })}
-            onSelectConnection={(index) => setSelection({ kind: 'connection', index })}
+            onSelectComponent={(id) => {
+              setSelection({ kind: 'component', id })
+              sidebar.expand()
+            }}
+            onSelectConnection={(index) => {
+              setSelection({ kind: 'connection', index })
+              sidebar.expand()
+            }}
           />
         </main>
       </div>

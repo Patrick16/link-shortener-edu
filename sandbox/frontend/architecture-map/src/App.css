@@ -1444,6 +1444,35 @@ button:disabled {
   min-width: 0;
 }
 
+.run-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.run-history-header .traffic-panel-subheading {
+  margin: 0;
+}
+
+.run-history-clear {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.run-history-clear:hover:not(:disabled) {
+  border-color: #ef4444;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
 .run-history-empty {
   font-size: 13px;
   color: var(--text);

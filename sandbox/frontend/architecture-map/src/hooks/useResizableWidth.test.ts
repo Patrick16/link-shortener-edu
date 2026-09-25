@@ -117,6 +117,40 @@ describe('useResizableWidth', () => {
     expect(result.current.width).toBe(350)
   })
 
+  it('starts collapsed when defaultCollapsed is true and nothing is stored yet', () => {
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1, true))
+
+    expect(result.current.collapsed).toBe(true)
+    expect(result.current.width).toBe(0)
+  })
+
+  it('a persisted choice overrides defaultCollapsed', () => {
+    localStorage.setItem('sidebar-width-collapsed', '0')
+
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1, true))
+
+    expect(result.current.collapsed).toBe(false)
+  })
+
+  it('expand() opens a collapsed sidebar and persists it', () => {
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1, true))
+    expect(result.current.collapsed).toBe(true)
+
+    act(() => result.current.expand())
+
+    expect(result.current.collapsed).toBe(false)
+    expect(localStorage.getItem('sidebar-width-collapsed')).toBe('0')
+  })
+
+  it('expand() is a no-op when already expanded', () => {
+    const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1))
+
+    act(() => result.current.expand())
+
+    expect(result.current.collapsed).toBe(false)
+    expect(localStorage.getItem('sidebar-width-collapsed')).toBeNull()
+  })
+
   it('persists the collapsed flag to localStorage', () => {
     const { result } = renderHook(() => useResizableWidth('sidebar-width', 300, 200, 500, 1))
 

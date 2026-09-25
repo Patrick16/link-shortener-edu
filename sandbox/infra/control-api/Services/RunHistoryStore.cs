@@ -89,5 +89,21 @@ public class RunHistoryStore : IRunHistoryStore
         }
     }
 
+    public async Task ClearAsync(CancellationToken ct)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            foreach (var file in Directory.GetFiles(_dir, "*.json"))
+            {
+                File.Delete(file);
+            }
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     private string PathFor(string id) => Path.Combine(_dir, $"{id}.json");
 }

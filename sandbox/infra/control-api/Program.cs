@@ -467,4 +467,10 @@ app.MapGet("/api/runs/{id}", async (string id, IRunHistoryStore store, Cancellat
     return snapshot is null ? Results.NotFound() : Results.Ok(snapshot);
 });
 
+app.MapDelete("/api/runs", async (IRunHistoryStore store, CancellationToken ct) =>
+{
+    await store.ClearAsync(ct);
+    return Results.Ok();
+});
+
 app.Run();

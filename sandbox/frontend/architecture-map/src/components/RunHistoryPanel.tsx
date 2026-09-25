@@ -20,6 +20,7 @@ export function RunHistoryPanel({ lastSavedRunId }: Props) {
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [selected, setSelected] = useState<RunSnapshot | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
+  const [clearing, setClearing] = useState(false)
 
   function refresh() {
     controlApi.listRuns().then(setRuns).catch(() => {})
@@ -38,6 +39,16 @@ export function RunHistoryPanel({ lastSavedRunId }: Props) {
       setSelected(null)
     } finally {
       setLoadingId(null)
+    }
+  }
+
+  async function clearHistory() {
+    setClearing(true)
+    try {
+      await controlApi.clearRuns()
+      setRuns([])
+    } finally {
+      setClearing(false)
     }
   }
 
@@ -100,7 +111,14 @@ export function RunHistoryPanel({ lastSavedRunId }: Props) {
 
   return (
     <div className="run-history-panel">
-      <h3 className="traffic-panel-subheading">Past runs</h3>
+      <div className="run-history-header">
+        <h3 className="traffic-panel-subheading">Past runs</h3>
+        {runs.length > 0 && (
+          <button className="run-history-clear" onClick={clearHistory} disabled={clearing}>
+            {clearing ? 'Clearing...' : 'Clear history'}
+          </button>
+        )}
+      </div>
       {runs.length === 0 && <p className="run-history-empty">No runs yet - completed runs will show up here.</p>}
       <ul className="run-history-list">
         {runs.map((run) => (

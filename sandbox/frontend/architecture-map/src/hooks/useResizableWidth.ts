@@ -10,11 +10,20 @@ function readStored(key: string, fallback: number): number {
   }
 }
 
-function readStoredBool(key: string): boolean {
+function readStoredBool(key: string, fallback: boolean): boolean {
   try {
-    return localStorage.getItem(key) === '1'
+    const raw = localStorage.getItem(key)
+    return raw === null ? fallback : raw === '1'
   } catch {
-    return false
+    return fallback
+  }
+}
+
+function persistCollapsed(storageKey: string, next: boolean) {
+  try {
+    localStorage.setItem(`${storageKey}-collapsed`, next ? '1' : '0')
+  } catch {
+    // Best-effort only - a private window or blocked storage just means it resets next time.
   }
 }
 
@@ -22,14 +31,23 @@ function readStoredBool(key: string): boolean {
 // per-viewer convenience, not state that needs to be shared or read back by anything else) so it
 // survives a reload. `direction` flips which way the handle's drag delta should grow the panel -
 // +1 for a left sidebar (handle sits on its right edge), -1 for a right sidebar (handle on its left).
+// `defaultCollapsed` only applies the very first time this ever runs on a given browser - once the
+// user has expanded or collapsed it, that choice is what persists on later visits.
 //
 // `collapsed` is separate from width itself rather than just setting width to 0 - the last dragged
 // width is remembered underneath so expanding again restores it exactly, instead of snapping back
 // to defaultWidth. `width` already reports 0 while collapsed so callers don't need to branch on
 // both values just to size the element.
-export function useResizableWidth(storageKey: string, defaultWidth: number, min: number, max: number, direction: 1 | -1) {
+export function useResizableWidth(
+  storageKey: string,
+  defaultWidth: number,
+  min: number,
+  max: number,
+  direction: 1 | -1,
+  defaultCollapsed = false,
+) {
   const [width, setWidth] = useState(() => readStored(storageKey, defaultWidth))
-  const [collapsed, setCollapsed] = useState(() => readStoredBool(`${storageKey}-collapsed`))
+  const [collapsed, setCollapsed] = useState(() => readStoredBool(`${storageKey}-collapsed`, defaultCollapsed))
 
   function onPointerDown(e: React.PointerEvent) {
     if (collapsed) return
@@ -62,14 +80,21 @@ export function useResizableWidth(storageKey: string, defaultWidth: number, min:
   function toggleCollapsed() {
     setCollapsed((prev) => {
       const next = !prev
-      try {
-        localStorage.setItem(`${storageKey}-collapsed`, next ? '1' : '0')
-      } catch {
-        // Best-effort only - a private window or blocked storage just means it resets next time.
-      }
+      persistCollapsed(storageKey, next)
       return next
     })
   }
 
-  return { width: collapsed ? 0 : width, collapsed, toggleCollapsed, onPointerDown }
+  // Unlike toggleCollapsed, a no-op if already expanded - lets a caller unconditionally "make sure
+  // this is visible" (e.g. selecting a node while the sidebar happens to be collapsed) without
+  // needing to check `collapsed` itself first or risk re-collapsing an already-open sidebar.
+  function expand() {
+    setCollapsed((prev) => {
+      if (!prev) return prev
+      persistCollapsed(storageKey, false)
+      return false
+    })
+  }
+
+  return { width: collapsed ? 0 : width, collapsed, toggleCollapsed, expand, onPointerDown }
 }
