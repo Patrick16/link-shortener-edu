@@ -49,8 +49,10 @@ public class StatusPollerService(
         // Compares State (running/exited/paused/...) only, not the human-readable Status text -
         // Docker's Status string embeds an elapsed-time clock ("Up 3 seconds" -> "Up 4 seconds")
         // that ticks on every poll, which would otherwise push on every single cycle forever.
-        var previousByService = previous.ToDictionary(c => c.ServiceId);
-        return current.Any(c => !previousByService.TryGetValue(c.ServiceId, out var prior)
+        // Keyed by ContainerId, not ServiceId - a scaled service has multiple containers sharing
+        // one ServiceId, which would collide as duplicate dictionary keys.
+        var previousByContainer = previous.ToDictionary(c => c.ContainerId);
+        return current.Any(c => !previousByContainer.TryGetValue(c.ContainerId, out var prior)
             || prior.State != c.State);
     }
 }

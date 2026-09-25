@@ -25,7 +25,10 @@ interface Props {
   component: ArchComponent
   serviceId: string | null
   instances: ManagedContainer[]
-  resourceHistory: ResourceSample[]
+  // Keyed by containerId, not serviceId - a scaled service's replicas each have their own history
+  // (see useLiveStack), so every instance below gets its own chart instead of all of them sharing
+  // one arbitrary instance's numbers.
+  resourceHistoryByContainer: Record<string, ResourceSample[]>
   onClose: () => void
   // Both omitted for a node with no controllable container (see the !serviceId branch in App) -
   // there's no live CPU/RAM/TCP reading to pin in that case.
@@ -33,16 +36,13 @@ interface Props {
   onTogglePin?: () => void
 }
 
-export function NodePanel({ component, serviceId, instances, resourceHistory, onClose, pinned, onTogglePin }: Props) {
+export function NodePanel({ component, serviceId, instances, resourceHistoryByContainer, onClose, pinned, onTogglePin }: Props) {
   const [scalable, setScalable] = useState<string[]>([])
   const [infraStatus, setInfraStatus] = useState<InfraStatus | null>(null)
   const [infraBusy, setInfraBusy] = useState(false)
   const [infraError, setInfraError] = useState<string | null>(null)
-  const cpuValues = resourceHistory.map((s) => s.cpuPercent)
-  const memValuesMb = resourceHistory.map((s) => s.memoryUsageBytes / (1024 * 1024))
-  const cpuMax = Math.max(5, ...cpuValues) * 1.4
-  const memMax = Math.max(64, ...memValuesMb) * 1.3
   const primary = instances[0]
+  const hasCharts = instances.some((instance) => (resourceHistoryByContainer[instance.containerId]?.length ?? 0) > 0)
   const quickLink = getQuickLink(component)
   const accessInfo = getAccessInfo(component)
   const [showAccessInfo, setShowAccessInfo] = useState(false)
@@ -217,12 +217,26 @@ export function NodePanel({ component, serviceId, instances, resourceHistory, on
             </div>
           )}
 
-          {resourceHistory.length > 0 && (
-            <div className="node-panel-charts">
-              <Sparkline label="CPU" values={cpuValues} max={cpuMax} formatValue={(v) => `${v.toFixed(1)}%`} />
-              <Sparkline label="Memory" values={memValuesMb} max={memMax} formatValue={(v) => `${v.toFixed(0)} MB`} />
-            </div>
-          )}
+          {hasCharts &&
+            instances.map((instance) => {
+              const history = resourceHistoryByContainer[instance.containerId] ?? []
+              if (history.length === 0) {
+                return null
+              }
+
+              const cpuValues = history.map((s) => s.cpuPercent)
+              const memValuesMb = history.map((s) => s.memoryUsageBytes / (1024 * 1024))
+              const cpuMax = Math.max(5, ...cpuValues) * 1.4
+              const memMax = Math.max(64, ...memValuesMb) * 1.3
+              const instanceLabel = instances.length > 1 ? ` #${instance.containerNumber}` : ''
+
+              return (
+                <div className="node-panel-charts" key={instance.containerId}>
+                  <Sparkline label={`CPU${instanceLabel}`} values={cpuValues} max={cpuMax} formatValue={(v) => `${v.toFixed(1)}%`} />
+                  <Sparkline label={`Memory${instanceLabel}`} values={memValuesMb} max={memMax} formatValue={(v) => `${v.toFixed(0)} MB`} />
+                </div>
+              )
+            })}
         </>
       ) : (
         <p className="component-card-note">Not a controllable container (not part of the docker-compose stack).</p>

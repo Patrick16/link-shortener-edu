@@ -1,12 +1,13 @@
 import { useEffect, useMemo } from 'react'
-import { ReactFlow, Background, Controls, MarkerType, useNodesState, type Node, type Edge } from '@xyflow/react'
+import { ReactFlow, Background, Controls, Panel, MarkerType, useNodesState, type Node, type Edge } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { ServiceNode, type ServiceNodeData } from './ServiceNode'
+import { PinnedMetrics } from './PinnedMetrics'
 import { resolveServiceId } from '../utils/resolveServiceId'
 import { isTrafficFlowEdge } from '../utils/trafficFlow'
 import { computeLayout } from '../utils/layoutGraph'
-import type { ArchitectureData } from '../types/architecture'
-import type { ManagedContainer } from '../types/controlApi'
+import type { ArchComponent, ArchitectureData } from '../types/architecture'
+import type { ManagedContainer, ResourceSample } from '../types/controlApi'
 
 interface Props {
   data: ArchitectureData
@@ -16,6 +17,10 @@ interface Props {
   selectedConnectionIndex: number | null
   onSelectComponent: (componentId: string) => void
   onSelectConnection: (index: number) => void
+  metaById: Map<string, ArchComponent>
+  pinnedIds: string[]
+  resourceHistoryByContainer: Record<string, ResourceSample[]>
+  onUnpinMetric: (componentId: string) => void
 }
 
 const nodeTypes = { service: ServiceNode }
@@ -24,7 +29,19 @@ const nodeTypes = { service: ServiceNode }
 // filter here (a "1. Minimal stack" / "2. Click tracking" switcher hiding parts of the graph), but
 // it turned out to add more confusion (what's hidden right now?) than it removed, so the graph now
 // just always draws the whole real topology.
-export function Diagram({ data, containers, roles, trafficActive, selectedConnectionIndex, onSelectComponent, onSelectConnection }: Props) {
+export function Diagram({
+  data,
+  containers,
+  roles,
+  trafficActive,
+  selectedConnectionIndex,
+  onSelectComponent,
+  onSelectConnection,
+  metaById,
+  pinnedIds,
+  resourceHistoryByContainer,
+  onUnpinMetric,
+}: Props) {
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
 
   // Positions come from dagre, not hand-authored coordinates in architecture.json - see
@@ -130,6 +147,20 @@ export function Diagram({ data, containers, roles, trafficActive, selectedConnec
       >
         <Background />
         <Controls />
+        {/* A React Flow Panel, not position: fixed on the page - it's anchored to this graph pane
+            specifically (survives pan/zoom, scrolls with the pane on narrow layouts) rather than
+            floating over the header, where it used to collide with TrafficResultPanel's own
+            top-right "Show details" toggle. */}
+        <Panel position="top-right">
+          <PinnedMetrics
+            pinnedIds={pinnedIds}
+            metaById={metaById}
+            knownServiceIds={knownServiceIds}
+            containers={containers}
+            resourceHistoryByContainer={resourceHistoryByContainer}
+            onUnpin={onUnpinMetric}
+          />
+        </Panel>
       </ReactFlow>
     </div>
   )

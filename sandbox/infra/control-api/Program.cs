@@ -75,8 +75,8 @@ app.MapPost("/api/containers/{serviceId}/degrade", async (string serviceId, Chao
 app.MapPost("/api/containers/{serviceId}/heal", async (string serviceId, IDockerService docker, CancellationToken ct) =>
     Results.Ok(new { stopped = await docker.HealAsync(serviceId, ct) }));
 
-app.MapGet("/api/containers/{serviceId}/stats/history", (string serviceId, ResourceStatsStore store) =>
-    Results.Ok(store.GetHistory(serviceId)));
+app.MapGet("/api/containers/{containerId}/stats/history", (string containerId, ResourceStatsStore store) =>
+    Results.Ok(store.GetHistory(containerId)));
 
 app.MapGet("/api/containers/{serviceId}/replication-lag", async (string serviceId, IDockerService docker, CancellationToken ct) =>
 {

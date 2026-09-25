@@ -5,16 +5,16 @@ namespace ControlApi.Tests;
 
 public class ResourceStatsStoreTests
 {
-    private static ResourceSample Sample(string serviceId, int secondsAgo) =>
-        new(serviceId, CpuPercent: 12.5, MemoryUsageBytes: 1024, MemoryLimitBytes: 4096, TcpConnections: 3,
-            Timestamp: DateTimeOffset.UtcNow.AddSeconds(-secondsAgo));
+    private static ResourceSample Sample(string containerId, int secondsAgo) =>
+        new(ServiceId: "svc", ContainerId: containerId, ContainerNumber: 1, CpuPercent: 12.5, MemoryUsageBytes: 1024,
+            MemoryLimitBytes: 4096, TcpConnections: 3, Timestamp: DateTimeOffset.UtcNow.AddSeconds(-secondsAgo));
 
     [Fact]
-    public void GetHistory_UnknownService_ReturnsEmpty()
+    public void GetHistory_UnknownContainer_ReturnsEmpty()
     {
         var sut = new ResourceStatsStore();
 
-        var history = sut.GetHistory("unknown-service");
+        var history = sut.GetHistory("unknown-container");
 
         Assert.Empty(history);
     }
@@ -31,17 +31,17 @@ public class ResourceStatsStoreTests
     }
 
     [Fact]
-    public void GetHistory_KeepsServicesSeparate()
+    public void GetHistory_KeepsContainersSeparate()
     {
         var sut = new ResourceStatsStore();
-        var linkSample = Sample("link-api", 0);
-        var redirectSample = Sample("redirect-api", 0);
+        var linkSample = Sample("link-api-1", 0);
+        var redirectSample = Sample("redirect-api-1", 0);
 
         sut.Add(linkSample);
         sut.Add(redirectSample);
 
-        Assert.Equal([linkSample], sut.GetHistory("link-api"));
-        Assert.Equal([redirectSample], sut.GetHistory("redirect-api"));
+        Assert.Equal([linkSample], sut.GetHistory("link-api-1"));
+        Assert.Equal([redirectSample], sut.GetHistory("redirect-api-1"));
     }
 
     [Fact]

@@ -9,7 +9,6 @@ import { useInfraTopology } from './hooks/useInfraTopology'
 import { usePinnedMetrics } from './hooks/usePinnedMetrics'
 import { Diagram } from './components/Diagram'
 import { NodePanel } from './components/NodePanel'
-import { PinnedMetrics } from './components/PinnedMetrics'
 import { ConnectionDetail } from './components/ConnectionDetail'
 import { K6ConfigPanel } from './components/K6ConfigPanel'
 import { TrafficResultPanel } from './components/TrafficResultPanel'
@@ -51,13 +50,6 @@ function App() {
 
   return (
     <div className="app-shell">
-      <PinnedMetrics
-        pinnedIds={pins.pinnedIds}
-        metaById={metaById}
-        knownServiceIds={knownServiceIds}
-        resourceHistory={resourceHistory}
-        onUnpin={pins.togglePin}
-      />
       <header className="app-header">
         <div className="app-header-title">
           <h1>Architecture Map</h1>
@@ -87,14 +79,20 @@ function App() {
                   component={selectedComponent}
                   serviceId={selectedServiceId}
                   instances={selectedInstances}
-                  resourceHistory={resourceHistory[selectedServiceId] ?? []}
+                  resourceHistoryByContainer={resourceHistory}
                   onClose={() => setSelection(null)}
                   pinned={pins.isPinned(selectedComponent.id)}
                   onTogglePin={() => pins.togglePin(selectedComponent.id)}
                 />
               )}
               {selectedComponent && selectedComponent.id !== 'k6' && !selectedServiceId && (
-                <NodePanel component={selectedComponent} serviceId={null} instances={[]} resourceHistory={[]} onClose={() => setSelection(null)} />
+                <NodePanel
+                  component={selectedComponent}
+                  serviceId={null}
+                  instances={[]}
+                  resourceHistoryByContainer={{}}
+                  onClose={() => setSelection(null)}
+                />
               )}
               {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}
               {!selectedComponent && !selectedConnection && <RunHistoryPanel lastSavedRunId={trafficRun.lastSavedRunId} />}
@@ -132,6 +130,10 @@ function App() {
               setSelection({ kind: 'connection', index })
               sidebar.expand()
             }}
+            metaById={metaById}
+            pinnedIds={pins.pinnedIds}
+            resourceHistoryByContainer={resourceHistory}
+            onUnpinMetric={pins.togglePin}
           />
         </main>
       </div>

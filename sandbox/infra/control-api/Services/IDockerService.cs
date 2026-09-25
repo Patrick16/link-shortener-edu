@@ -27,8 +27,11 @@ public interface IDockerService
     // resolve against ListKnownEndpoints (already rejected by Program.cs before this is called).
     Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct);
 
-    // Current CPU/memory snapshot for one service, or null if it isn't running.
-    Task<ResourceSample?> GetResourceSampleAsync(string serviceId, CancellationToken ct);
+    // Current CPU/memory/TCP snapshot for one specific container - takes the ManagedContainer
+    // itself (already has its ContainerId) rather than a serviceId, so a caller sampling every
+    // replica of a scaled service gets each container's own reading instead of every call
+    // re-resolving "the" container for that service and landing on the same one each time.
+    Task<ResourceSample?> GetResourceSampleAsync(ManagedContainer container, CancellationToken ct);
 
     // Names of services this instance will scale (an explicit allowlist, not "anything in
     // the compose file" - only ones nginx actually fronts have a reason to run >1 replica).

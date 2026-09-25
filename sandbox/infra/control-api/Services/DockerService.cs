@@ -595,10 +595,9 @@ public class DockerService : IDockerService
         return fullOutput.ToString();
     }
 
-    public async Task<ResourceSample?> GetResourceSampleAsync(string serviceId, CancellationToken ct)
+    public async Task<ResourceSample?> GetResourceSampleAsync(ManagedContainer container, CancellationToken ct)
     {
-        var container = await FindAsync(serviceId, ct);
-        if (container is null || container.State != "running")
+        if (container.State != "running")
         {
             return null;
         }
@@ -608,7 +607,7 @@ public class DockerService : IDockerService
         // same as what `docker stats --no-stream` does under the hood.
         ContainerStatsResponse? stats = null;
         await _client.Containers.GetContainerStatsAsync(
-            container.ID,
+            container.ContainerId,
             new ContainerStatsParameters { Stream = false },
             new Progress<ContainerStatsResponse>(s => stats = s),
             ct);
@@ -622,9 +621,17 @@ public class DockerService : IDockerService
         var systemDelta = (double)(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage);
         var onlineCpus = stats.CPUStats.OnlineCPUs > 0 ? stats.CPUStats.OnlineCPUs : (uint)stats.CPUStats.CPUUsage.PercpuUsage.Count;
         var cpuPercent = systemDelta > 0 && cpuDelta > 0 ? cpuDelta / systemDelta * onlineCpus * 100.0 : 0.0;
-        var tcpConnections = await GetTcpConnectionCountAsync(container.ID, ct);
+        var tcpConnections = await GetTcpConnectionCountAsync(container.ContainerId, ct);
 
-        return new ResourceSample(serviceId, cpuPercent, (long)stats.MemoryStats.Usage, (long)stats.MemoryStats.Limit, tcpConnections, DateTimeOffset.UtcNow);
+        return new ResourceSample(
+            container.ServiceId,
+            container.ContainerId,
+            container.ContainerNumber,
+            cpuPercent,
+            (long)stats.MemoryStats.Usage,
+            (long)stats.MemoryStats.Limit,
+            tcpConnections,
+            DateTimeOffset.UtcNow);
     }
 
     // Reads the container's own /proc/net/tcp[6] rather than shelling out to ss/netstat - those

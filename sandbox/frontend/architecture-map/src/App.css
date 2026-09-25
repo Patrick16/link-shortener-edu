@@ -545,13 +545,15 @@ button:disabled {
   background: var(--accent-bg);
 }
 
-/* Pinned node metrics - a block in the header's own flex row (see App), not a position: fixed
-   overlay, so it can never cover TrafficResultPanel's "Show details" toggle sitting in that same
-   top-right corner; the header's flex-wrap pushes it below on narrow viewports instead of
-   overlapping anything. One grid across every row (see PinnedMetrics) - each of the 5 cells per row
-   lands in the same grid column as every other row's, so the CPU/RAM/TCP numbers line up at a
-   shared width no matter how long a node's own name is, instead of each row sizing itself
-   independently. */
+/* Pinned node metrics - rendered as a React Flow <Panel position="top-right"> inside the graph
+   itself (see Diagram), not position: fixed on the page. That anchors it to the graph pane
+   specifically: it survives pan/zoom, and it can never cover TrafficResultPanel's own "Show
+   details" toggle in the header's top-right corner the way an earlier page-fixed version did. A
+   long pinned list (many rows for one scaled service) scrolls within its own max-height instead of
+   spilling out past the graph pane's top edge. One grid across every row (see PinnedMetrics) - each
+   of the 5 cells per row lands in the same grid column as every other row's, so the CPU/RAM/TCP
+   numbers line up at a shared width no matter how long a node's own name is, instead of each row
+   sizing itself independently. */
 
 .pinned-metrics {
   display: grid;
@@ -559,16 +561,18 @@ button:disabled {
   align-items: center;
   column-gap: 10px;
   row-gap: 3px;
-  flex-shrink: 0;
-  align-self: flex-start;
+  align-content: start;
+  max-height: 40vh;
+  overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px 10px;
   background: var(--code-bg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
   font-size: 12px;
   color: var(--text-h);
   font-variant-numeric: tabular-nums;
-  max-width: min(440px, calc(100vw - 24px));
+  max-width: 320px;
 }
 
 .pinned-metrics-name {

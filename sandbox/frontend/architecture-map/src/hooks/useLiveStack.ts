@@ -9,6 +9,8 @@ export interface LiveStackState {
   // One entry per serviceId, holding every replica (usually just one) - sorted by
   // containerNumber so a scaled service's instance list renders in a stable order.
   containers: Record<string, ManagedContainer[]>
+  // One entry per containerId (not serviceId) - a scaled service's replicas each get their own
+  // history instead of sharing/overwriting one array, so per-instance charts are possible.
   resourceHistory: Record<string, ResourceSample[]>
   connected: boolean
   loading: boolean
@@ -63,8 +65,8 @@ export function useLiveStack(): LiveStackState {
       setResourceHistory((prev) => {
         const next = { ...prev }
         for (const sample of samples) {
-          const existing = next[sample.serviceId] ?? []
-          next[sample.serviceId] = [...existing, sample].slice(-RESOURCE_HISTORY_LIMIT)
+          const existing = next[sample.containerId] ?? []
+          next[sample.containerId] = [...existing, sample].slice(-RESOURCE_HISTORY_LIMIT)
         }
         return next
       })

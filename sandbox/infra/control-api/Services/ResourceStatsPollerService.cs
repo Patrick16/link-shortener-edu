@@ -27,8 +27,13 @@ public class ResourceStatsPollerService(
                 // on Windows) that doing this sequentially for ~10 containers made a full round
                 // take 20+ seconds - defeating a 2s poll interval entirely. In parallel, a cycle
                 // takes about as long as the single slowest call instead of the sum of all of them.
+                //
+                // One call per actual running container, each keyed by its own ContainerId - a
+                // scaled service (N containers sharing one ServiceId) yields N distinct samples,
+                // one per replica, instead of every call re-resolving "the" container for that
+                // service and landing on the same one N times.
                 var running = containers.Where(c => c.State == "running").ToList();
-                var results = await Task.WhenAll(running.Select(c => docker.GetResourceSampleAsync(c.ServiceId, stoppingToken)));
+                var results = await Task.WhenAll(running.Select(c => docker.GetResourceSampleAsync(c, stoppingToken)));
                 var samples = results.Where(s => s is not null).Select(s => s!).ToList();
 
                 foreach (var sample in samples)

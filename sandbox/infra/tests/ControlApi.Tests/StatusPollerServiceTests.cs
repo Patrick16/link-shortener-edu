@@ -6,7 +6,7 @@ namespace ControlApi.Tests;
 public class StatusPollerServiceTests
 {
     private static ManagedContainer Container(string serviceId, string state, string status = "Up 3 seconds", int number = 1) =>
-        new(serviceId, ContainerId: $"{serviceId}-container", State: state, Status: status, ContainerNumber: number);
+        new(serviceId, ContainerId: $"{serviceId}-container-{number}", State: state, Status: status, ContainerNumber: number);
 
     [Fact]
     public void HasChanged_BothEmpty_ReturnsFalse()
@@ -59,5 +59,27 @@ public class StatusPollerServiceTests
         var current = new[] { Container("link-api", "running"), Container("redirect-api", "running") };
 
         Assert.False(StatusPollerService.HasChanged(previous, current));
+    }
+
+    [Fact]
+    public void HasChanged_ScaledService_SharedServiceIdDoesNotThrow()
+    {
+        // Replicas of a scaled service all share the same ServiceId, distinguished only by
+        // ContainerId/ContainerNumber - keying the comparison by ServiceId would throw on the
+        // duplicate keys here instead of detecting the state transition on replica #2.
+        var previous = new[]
+        {
+            Container("redirect-api", "running", number: 1),
+            Container("redirect-api", "created", number: 2),
+            Container("redirect-api", "created", number: 3),
+        };
+        var current = new[]
+        {
+            Container("redirect-api", "running", number: 1),
+            Container("redirect-api", "running", number: 2),
+            Container("redirect-api", "created", number: 3),
+        };
+
+        Assert.True(StatusPollerService.HasChanged(previous, current));
     }
 }
