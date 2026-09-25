@@ -1733,6 +1733,50 @@ button:disabled {
   color: var(--text);
 }
 
+.run-history-selection-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  border-radius: 6px;
+}
+
+.run-history-selection-count {
+  font-size: 12px;
+  color: var(--text-h);
+  margin-right: auto;
+}
+
+.run-history-selection-toolbar button {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.run-history-selection-toolbar button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+
+.run-history-selection-toolbar button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.run-history-selection-delete:hover:not(:disabled) {
+  border-color: #ef4444 !important;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
 .run-history-list {
   list-style: none;
   padding: 0;
@@ -1742,7 +1786,20 @@ button:disabled {
   gap: 6px;
 }
 
+.run-history-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-history-checkbox {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
 .run-history-item {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -1782,6 +1839,10 @@ button:disabled {
 }
 
 .run-history-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
 }
 
@@ -1796,6 +1857,20 @@ button:disabled {
 
 .run-history-detail-header button:hover {
   color: var(--text-h);
+}
+
+.run-history-reuse {
+  flex-shrink: 0;
+  border: 1px solid var(--accent-border) !important;
+  background: var(--accent-bg) !important;
+  color: var(--accent) !important;
+  border-radius: 999px;
+  padding: 3px 10px !important;
+  font-weight: 600;
+}
+
+.run-history-reuse:hover {
+  filter: brightness(1.1);
 }
 
 .run-history-detail-title {
@@ -1838,4 +1913,117 @@ button:disabled {
 .run-history-steps {
   list-style: decimal;
   padding-left: 18px;
+}
+
+/* Compare-runs modal - same overlay/card pattern as the access-info modal, just wider and with a
+   scrollable table instead of a definition list (see CompareRunsModal). */
+
+.compare-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+
+.compare-modal {
+  width: 100%;
+  max-width: 900px;
+  max-height: 85vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.compare-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.compare-modal-header h3 {
+  font-size: 16px;
+  margin: 0;
+  color: var(--text-h);
+}
+
+.compare-modal-header button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.compare-modal-note {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.compare-modal-scroll {
+  overflow-x: auto;
+}
+
+.compare-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.compare-table th,
+.compare-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.compare-table th {
+  vertical-align: bottom;
+}
+
+.compare-col-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.compare-col-timestamp {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.compare-row-label {
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.compare-section-row td {
+  padding-top: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-h);
+  border-bottom: 1px solid var(--border);
+}
+
+.compare-row-diff {
+  background: var(--accent-bg);
+}
+
+.compare-row-diff .compare-row-label {
+  color: var(--accent);
+  font-weight: 600;
 }

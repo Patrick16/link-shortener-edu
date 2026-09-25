@@ -123,5 +123,6 @@ export const controlApi = {
 
   listRuns: () => request<RunSummary[]>('/api/runs'),
   getRun: (id: string) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}`),
+  deleteRun: (id: string) => send(`/api/runs/${encodeURIComponent(id)}`, 'DELETE'),
   clearRuns: () => send('/api/runs', 'DELETE'),
 }

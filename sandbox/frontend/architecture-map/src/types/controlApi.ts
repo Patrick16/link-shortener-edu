@@ -287,8 +287,16 @@ export interface NpgsqlPoolSize {
   poolSize: number
 }
 
+// One postgres replica's artificial WAL-replay delay at run time - see ReplicationLagEntry on the
+// backend.
+export interface ReplicationLagEntry {
+  serviceId: string
+  delayMs: number
+}
+
 // Full detail for one past run - everything needed to answer "what configuration produced this
-// result", not just the report on its own.
+// result", not just the report on its own. The experimental-controls fields are optional/nullable
+// since runs saved before they existed won't have them.
 export interface RunSnapshot {
   id: string
   timestamp: string
@@ -298,6 +306,12 @@ export interface RunSnapshot {
   pgcatConnections: PgcatConnectionStats | null
   postgresConnections: PostgresConnectionStats | null
   report: TrafficReport
+  pgcatPool?: PgcatPoolSettings | null
+  sentinel?: SentinelConfig | null
+  replicationLags?: ReplicationLagEntry[] | null
+  rabbitMqPrefetchCount?: number | null
+  mongoReadPreference?: MongoReadPreference | null
+  npgsqlPoolSize?: number | null
 }
 
 // Lightweight row for the history list - see RunSummary on the backend for why it's separate from

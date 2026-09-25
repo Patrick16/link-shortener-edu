@@ -14,7 +14,9 @@ import { K6ConfigPanel } from './components/K6ConfigPanel'
 import { TrafficResultPanel } from './components/TrafficResultPanel'
 import { RunHistoryPanel } from './components/RunHistoryPanel'
 import { resolveServiceId } from './utils/resolveServiceId'
+import { applySystemConfig, runRequestToScenario } from './utils/reuseRunConfig'
 import type { ArchitectureData } from './types/architecture'
+import type { RunSnapshot } from './types/controlApi'
 
 const data = architectureData as unknown as ArchitectureData
 const metaById = new Map(data.components.map((c) => [c.id, c]))
@@ -47,6 +49,21 @@ function App() {
   const selectedConnection = selection?.kind === 'connection' ? data.connections[selection.index] : undefined
   const selectedServiceId = selectedComponent ? resolveServiceId(selectedComponent, knownServiceIds) : null
   const selectedInstances = selectedServiceId ? (containers[selectedServiceId] ?? []) : []
+
+  // Loads a past run's test sequence/ramp back into the config form and re-applies every
+  // experimental infra control it was captured under, then jumps to the k6 panel so the loaded
+  // config (and the run to kick it off again) is immediately visible - same "click the node"
+  // pattern every other control on this graph already uses.
+  function reuseRun(snapshot: RunSnapshot) {
+    trafficConfig.loadScenario(runRequestToScenario(snapshot.request))
+    applySystemConfig(snapshot).then(({ failed }) => {
+      if (failed.length > 0) {
+        console.warn('Some system settings could not be reapplied from this run:', failed.join(', '))
+      }
+    })
+    setSelection({ kind: 'component', id: 'k6' })
+    sidebar.expand()
+  }
 
   return (
     <div className="app-shell">
@@ -95,7 +112,7 @@ function App() {
                 />
               )}
               {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}
-              {!selectedComponent && !selectedConnection && <RunHistoryPanel lastSavedRunId={trafficRun.lastSavedRunId} />}
+              {!selectedComponent && !selectedConnection && <RunHistoryPanel lastSavedRunId={trafficRun.lastSavedRunId} onReuseRun={reuseRun} />}
             </>
           )}
         </aside>

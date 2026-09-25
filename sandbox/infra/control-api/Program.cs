@@ -226,6 +226,35 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
                         .Select(g => new ReplicaCount(g.Key, g.Count(c => c.State == "running")))
                         .ToList();
 
+                    // Best-effort, same reasoning as the snapshot as a whole - none of these should
+                    // hide the report if a given control's live read fails for some reason.
+                    var replicationLags = new List<ReplicationLagEntry>();
+                    foreach (var replicaId in new[] { "postgres-replica1", "postgres-replica2" })
+                    {
+                        try
+                        {
+                            var lag = await docker.GetReplicationLagAsync(replicaId, CancellationToken.None);
+                            if (lag is not null)
+                            {
+                                replicationLags.Add(new ReplicationLagEntry(replicaId, lag.DelayMs));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "Failed to read replication lag for {ServiceId} while saving run snapshot", replicaId);
+                        }
+                    }
+
+                    SentinelConfig? sentinel = null;
+                    try
+                    {
+                        sentinel = await docker.GetSentinelConfigAsync(CancellationToken.None);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Failed to read Sentinel config while saving run snapshot");
+                    }
+
                     var snapshot = new RunSnapshot(
                         $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid().ToString("N")[..6]}",
                         DateTimeOffset.UtcNow,
@@ -234,7 +263,13 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
                         replicas,
                         await docker.GetPgcatConnectionsAsync(CancellationToken.None),
                         await docker.GetPostgresConnectionsAsync(CancellationToken.None),
-                        report);
+                        report,
+                        docker.GetPgcatPoolSettings(),
+                        sentinel,
+                        replicationLags,
+                        docker.GetRabbitMqPrefetch(),
+                        docker.GetMongoReadPreference(),
+                        docker.GetNpgsqlPoolSize());
 
                     await runHistory.SaveAsync(snapshot, CancellationToken.None);
                     await hub.Clients.All.SendAsync("runSaved", new { snapshot.Id });
@@ -472,5 +507,8 @@ app.MapDelete("/api/runs", async (IRunHistoryStore store, CancellationToken ct) 
     await store.ClearAsync(ct);
     return Results.Ok();
 });
+
+app.MapDelete("/api/runs/{id}", async (string id, IRunHistoryStore store, CancellationToken ct) =>
+    await store.DeleteAsync(id, ct) ? Results.Ok() : Results.NotFound());
 
 app.Run();

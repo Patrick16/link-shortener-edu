@@ -89,6 +89,26 @@ public class RunHistoryStore : IRunHistoryStore
         }
     }
 
+    public async Task<bool> DeleteAsync(string id, CancellationToken ct)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var path = PathFor(id);
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            File.Delete(path);
+            return true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     public async Task ClearAsync(CancellationToken ct)
     {
         await _lock.WaitAsync(ct);
