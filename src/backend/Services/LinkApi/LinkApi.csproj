@@ -4,6 +4,10 @@
 		<TargetFramework>net10.0</TargetFramework>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
+		<!-- Workstation GC (the default) is tuned for desktop apps, not request throughput - Server
+		     GC uses per-core heaps and is what every ASP.NET Core throughput guide recommends. -->
+		<ServerGarbageCollection>true</ServerGarbageCollection>
+		<ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
 	</PropertyGroup>
 
 	<ItemGroup>

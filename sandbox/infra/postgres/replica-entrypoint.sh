@@ -22,4 +22,10 @@ if [ -z "$(ls -A "$PGDATA" 2>/dev/null)" ]; then
   done
 fi
 
-exec docker-entrypoint.sh postgres
+# PGDATA's own postgresql.conf came from pg_basebackup copying the primary's data directory - it
+# holds whatever max_connections was baked into that file (the image default), NOT whatever -c flag
+# the primary's own process was actually started with (CLI flags are process-only, never written to
+# disk). Postgres refuses to start hot standby if a replica's max_connections is lower than the
+# primary's currently-running value, so this needs its own explicit -c here, kept equal to the
+# primary's via the same POSTGRES_MAX_CONNECTIONS env var (see docker-compose.yml).
+exec docker-entrypoint.sh postgres -c max_connections="${POSTGRES_MAX_CONNECTIONS:-100}"

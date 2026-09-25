@@ -12,13 +12,17 @@ services:
       # service, not schemas-in-one-database; see infra/postgres/init-databases.sql for why).
     # wal_level=replica + max_wal_senders/max_replication_slots are what let postgres-replica1/2
     # stream from this instance at all (off by default); hot_standby is a no-op on a primary but
-    # harmless to set uniformly.
+    # harmless to set uniformly. max_connections is set explicitly (not left at the image default)
+    # because a standby's own max_connections must be >= the primary's or it refuses to start hot
+    # standby at all - postgres-replica1/2 read the *same* POSTGRES_MAX_CONNECTIONS value (see
+    # replica-entrypoint.sh) specifically so the two can never drift apart.
     command: >
       postgres
       -c wal_level=replica
       -c max_wal_senders=10
       -c max_replication_slots=10
       -c hot_standby=on
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
     ports:
       - "5432:5432"
     volumes:
@@ -41,6 +45,9 @@ services:
     environment:
       PGUSER: replicator
       PGPASSWORD: replicator_pass
+      # Same value the primary gets (see its own command: block) - a standby with a lower
+      # max_connections than its primary refuses to start hot standby at all.
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-100}
     ports:
       - "5433:5432" # exposed for local inspection - confirm it's actually a standby via `psql ... -c "SELECT pg_is_in_recovery()"`
     volumes:
@@ -62,6 +69,9 @@ services:
     environment:
       PGUSER: replicator
       PGPASSWORD: replicator_pass
+      # Same value the primary gets (see its own command: block) - a standby with a lower
+      # max_connections than its primary refuses to start hot standby at all.
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-100}
     ports:
       - "5434:5432"
     volumes:
