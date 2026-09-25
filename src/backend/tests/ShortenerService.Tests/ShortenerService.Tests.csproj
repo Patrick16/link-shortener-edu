@@ -11,6 +11,10 @@
 		<PackageReference Include="coverlet.collector" Version="6.0.4" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.12" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.12" />
+		<!-- ClickTrackedConsumerTests needs the real Sqlite provider, not InMemory: HandleAsync uses
+		     ExecuteUpdateAsync, which InMemory doesn't support at all. LinkCreatedConsumerTests in
+		     this same project still uses InMemory - both providers coexist fine side by side. -->
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
 		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
 		<PackageReference Include="Moq" Version="4.20.72" />

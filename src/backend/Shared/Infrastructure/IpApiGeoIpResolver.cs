@@ -48,6 +48,18 @@ public sealed class IpApiGeoIpResolver(HttpClient httpClient, ILogger<IpApiGeoIp
 
     private static bool IsPrivateOrLoopback(IPAddress ip)
     {
+        // Kestrel's RemoteIpAddress on a dual-stack socket (the .NET/Docker default) commonly hands
+        // back an IPv4-mapped IPv6 address like "::ffff:172.18.0.25" for what is really an IPv4
+        // client - AddressFamily is InterNetworkV6, not InterNetwork, so the byte-range check below
+        // was silently skipped and every docker-internal click was treated as a public address.
+        // Verified live: this sent a real ip-api.com call (3s timeout) for every single click,
+        // serializing TrafficService's consumer to roughly one message every 2-3 seconds regardless
+        // of prefetch/consumer count - unmapping first is what actually fixes that, not more workers.
+        if (ip.IsIPv4MappedToIPv6)
+        {
+            ip = ip.MapToIPv4();
+        }
+
         if (IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal)
         {
             return true;

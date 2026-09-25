@@ -27,8 +27,19 @@ public sealed class ClickTrackedConsumer(
     {
         await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var link = await context.Links.FirstOrDefaultAsync(x => x.Hash == @event.Hash, cancellationToken);
-        if (link is null)
+        // A single atomic "UPDATE ... SET ClickCount = ClickCount + 1" instead of a read-then-write
+        // through the change tracker - this used to be read-then-write specifically because Link is
+        // an immutable record with no public setter, but that shape raced for real once this
+        // consumer became scalable to multiple replicas (control-api can now run several): two
+        // replicas incrementing the same hot hash could both read the same starting value and one
+        // increment would be lost. Verified live - scaling this consumer 1->4 replicas under
+        // repeated-same-hash load made throughput go *down* (row-lock contention on the read-then-
+        // write pattern), not up. ExecuteUpdateAsync fixes both the race and the extra round trip.
+        var updated = await context.Links
+            .Where(x => x.Hash == @event.Hash)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.ClickCount, x => x.ClickCount + 1), cancellationToken);
+
+        if (updated == 0)
         {
             // LinkCreatedEvent for this hash may not have been consumed yet (ordering across
             // queues isn't guaranteed), or the hash is simply unknown. Either way there's no row
@@ -36,14 +47,6 @@ public sealed class ClickTrackedConsumer(
             _logger.LogWarning("No link found for hash {Hash}, click count not incremented", @event.Hash);
             return;
         }
-
-        // Link is an immutable record everywhere else in the codebase; going through the change
-        // tracker's property accessor (instead of ExecuteUpdateAsync's single atomic SQL UPDATE)
-        // keeps this consistent with it and with the InMemory provider the tests use. A single
-        // worker instance in this project's docker-compose, so the read-then-write race that
-        // costs is negligible in practice.
-        context.Entry(link).Property(x => x.ClickCount).CurrentValue = link.ClickCount + 1;
-        await context.SaveChangesAsync(cancellationToken);
 
         _logger.LogInformation("Incremented click count for hash {Hash}", @event.Hash);
     }

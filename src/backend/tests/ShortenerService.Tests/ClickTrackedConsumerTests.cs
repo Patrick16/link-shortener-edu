@@ -1,6 +1,7 @@
 using Common.Models;
 using Contracts.Events;
 using Infrastructure;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -8,11 +9,27 @@ using ShortenerService;
 
 namespace ShortenerService.Tests;
 
-public class ClickTrackedConsumerTests
+// SQLite in-memory, not EF Core's InMemory provider: HandleAsync uses ExecuteUpdateAsync (a single
+// atomic "UPDATE ... SET ClickCount = ClickCount + 1"), which InMemory doesn't support at all
+// (it only translates LINQ against SQL-backed providers). Each test opens its own private
+// ":memory:" connection - SQLite tears the database down once the last connection to it closes, so
+// the connection has to stay open for the test's whole lifetime, not just schema creation.
+public sealed class ClickTrackedConsumerTests : IDisposable
 {
-    private static IDbContextFactory<DatabaseContext> NewFactory(string dbName)
+    private readonly SqliteConnection _connection = new("DataSource=:memory:");
+
+    public ClickTrackedConsumerTests() => _connection.Open();
+
+    public void Dispose() => _connection.Dispose();
+
+    private IDbContextFactory<DatabaseContext> NewFactory()
     {
-        var options = new DbContextOptionsBuilder<DatabaseContext>().UseInMemoryDatabase(dbName).Options;
+        var options = new DbContextOptionsBuilder<DatabaseContext>().UseSqlite(_connection).Options;
+        using (var init = new DatabaseContext(options))
+        {
+            init.Database.EnsureCreated();
+        }
+
         var factory = new Mock<IDbContextFactory<DatabaseContext>>();
         factory.Setup(x => x.CreateDbContextAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => new DatabaseContext(options));
@@ -36,7 +53,7 @@ public class ClickTrackedConsumerTests
     [Fact]
     public async Task HandleAsync_KnownHash_IncrementsClickCount()
     {
-        var factory = NewFactory(Guid.NewGuid().ToString());
+        var factory = NewFactory();
         await using (var seed = await factory.CreateDbContextAsync())
         {
             seed.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null));
@@ -54,7 +71,7 @@ public class ClickTrackedConsumerTests
     [Fact]
     public async Task HandleAsync_MultipleEvents_AccumulatesCount()
     {
-        var factory = NewFactory(Guid.NewGuid().ToString());
+        var factory = NewFactory();
         await using (var seed = await factory.CreateDbContextAsync())
         {
             seed.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null));
@@ -74,7 +91,7 @@ public class ClickTrackedConsumerTests
     [Fact]
     public async Task HandleAsync_UnknownHash_DoesNotThrow()
     {
-        var factory = NewFactory(Guid.NewGuid().ToString());
+        var factory = NewFactory();
         var sut = NewSut(factory);
 
         var exception = await Record.ExceptionAsync(() => sut.HandleAsync(NewEvent("never-created"), CancellationToken.None));
@@ -85,7 +102,7 @@ public class ClickTrackedConsumerTests
     [Fact]
     public async Task HandleAsync_DifferentHashes_OnlyIncrementsTheMatchingLink()
     {
-        var factory = NewFactory(Guid.NewGuid().ToString());
+        var factory = NewFactory();
         await using (var seed = await factory.CreateDbContextAsync())
         {
             seed.Links.Add(new Link("hash0001", "https://a.example", "hash0001", DateTime.UtcNow, null));
