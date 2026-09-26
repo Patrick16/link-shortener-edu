@@ -713,8 +713,17 @@ public class DockerService : IDockerService
             return new ScaleResult(serviceId, replicas, false, $"'{serviceId}' is not a scalable service");
         }
 
+        // --no-recreate keeps existing replicas untouched, but any *new* replica this scale-up
+        // creates is a fresh `docker compose up`, which re-renders RabbitMq__PrefetchCount from
+        // ${RABBITMQ_PREFETCH:-10} in the compose file - without forwarding the value the
+        // rabbitmq-prefetch control last set, new replicas would silently fall back to 10 while
+        // the rest of the fleet is still running whatever was set (e.g. 1000).
+        var env = RabbitMqConsumingServices.Contains(serviceId)
+            ? new Dictionary<string, string> { ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString() }
+            : null;
+
         var (exitCode, output) = await RunComposeAsync(
-            ["up", "-d", "--scale", $"{serviceId}={replicas}", "--no-recreate", serviceId], null, ct);
+            ["up", "-d", "--scale", $"{serviceId}={replicas}", "--no-recreate", serviceId], env, ct);
 
         if (exitCode != 0)
         {
@@ -1060,8 +1069,21 @@ public class DockerService : IDockerService
     {
         var env = new Dictionary<string, string> { ["RABBITMQ_PREFETCH"] = prefetchCount.ToString() };
 
+        // `up --force-recreate` with no `--scale` tells compose the desired replica count for each
+        // service is whatever the compose file says (1) - it has no memory of a scale-up done in a
+        // previous `up` invocation. Without re-asserting each service's current replica count here,
+        // every consumer scaled up via ScaleAsync collapses back to a single instance the moment
+        // prefetch is changed.
+        var scaleArgs = new List<string>();
+        foreach (var serviceId in RabbitMqConsumingServices)
+        {
+            var replicas = await CountReplicasAsync(serviceId, ct);
+            scaleArgs.Add("--scale");
+            scaleArgs.Add($"{serviceId}={Math.Max(replicas, 1)}");
+        }
+
         _logger.LogWarning("Switching RabbitMq__PrefetchCount for {Services} to {PrefetchCount}", string.Join(", ", RabbitMqConsumingServices), prefetchCount);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. RabbitMqConsumingServices], env, ct);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. RabbitMqConsumingServices], env, ct);
         if (exitCode != 0)
         {
             _logger.LogWarning("Setting RabbitMQ prefetch failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -1436,6 +1458,24 @@ public class DockerService : IDockerService
         }, ct);
 
         return containers.FirstOrDefault();
+    }
+
+    private async Task<int> CountReplicasAsync(string serviceId, CancellationToken ct)
+    {
+        var containers = await _client.Containers.ListContainersAsync(new ContainersListParameters
+        {
+            All = true,
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                ["label"] = new Dictionary<string, bool>
+                {
+                    [$"com.docker.compose.project={_composeProject}"] = true,
+                    [$"com.docker.compose.service={serviceId}"] = true,
+                },
+            },
+        }, ct);
+
+        return containers.Count;
     }
 
     private static ManagedContainer? ToStatus(ContainerListResponse container)
