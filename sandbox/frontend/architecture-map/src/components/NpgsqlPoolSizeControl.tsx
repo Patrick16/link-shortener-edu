@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
+import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
 // The client-pool-size half of the picture the Connections panel below already shows the
 // server-pool-size half of ("clients: apps -> pgcat / servers: pgcat -> postgres"). Applied to
 // every DB-touching service's Npgsql connection string, distinct from pgcat's own pool_size (item
 // above) - shrinking this demonstrates Npgsql's own client-side pool-wait saturation, independent
 // of anything pgcat does. Recreates 5 containers, same allowlist as the pgcat enable/disable toggle.
-export function NpgsqlPoolSizeControl() {
+export function NpgsqlPoolSizeControl(_props: CapabilityControlProps) {
   const [current, setCurrent] = useState<number | null>(null)
   const [poolSize, setPoolSize] = useState(100)
   const [busy, setBusy] = useState(false)

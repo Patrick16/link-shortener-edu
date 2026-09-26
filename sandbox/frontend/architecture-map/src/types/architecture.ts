@@ -14,6 +14,7 @@ export interface ArchComponent {
   type: 'service' | 'worker' | 'infrastructure' | 'database' | 'frontend'
   icon: string
   description: string
+  capabilities?: string[]
   details: ComponentDetails
 }
 

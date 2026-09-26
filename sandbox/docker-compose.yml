@@ -609,6 +609,7 @@ services:
       Docker__Endpoint: "unix:///var/run/docker.sock"
       Docker__ComposeProject: "sandbox"
       Docker__ComposeFile: "/workspace/docker-compose.yml"
+      Architecture__File: "/workspace/frontend/architecture-map/src/data/architecture.json"
       Pgcat__ConfigDir: "/pgcat-config"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Cors__AllowedOrigins__1: "http://localhost:5174"

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
+import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
-export function FlushCacheControl() {
+export function FlushCacheControl(_props: CapabilityControlProps) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)

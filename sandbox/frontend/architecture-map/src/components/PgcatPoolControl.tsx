@@ -3,6 +3,7 @@ import { controlApi, ControlApiError } from '../api/controlApi'
 import { EnumToggleControl } from './EnumToggleControl'
 import { InfraToggleControl } from './InfraToggleControl'
 import type { PgcatPoolMode, PgcatPoolSettings } from '../types/controlApi'
+import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
 const POOL_MODE_OPTIONS: { value: PgcatPoolMode; label: string }[] = [
   { value: 'transaction', label: 'Transaction' },
@@ -11,7 +12,7 @@ const POOL_MODE_OPTIONS: { value: PgcatPoolMode; label: string }[] = [
 
 // Applies to all 3 pools (users_db/links_db/clicks_db) at once - see PgcatPoolSettings. Rewrites
 // pgcat.toml directly; pgcat's own autoreload picks the change up within ~15s, no recreate.
-export function PgcatPoolControl() {
+export function PgcatPoolControl(_props: CapabilityControlProps) {
   const [settings, setSettings] = useState<PgcatPoolSettings | null>(null)
   const [draft, setDraft] = useState<PgcatPoolSettings | null>(null)
   const [busy, setBusy] = useState(false)

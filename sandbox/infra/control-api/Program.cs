@@ -1,6 +1,7 @@
 using ControlApi.Hubs;
 using ControlApi.Models;
 using ControlApi.Services;
+using ControlApi.Services.Capabilities;
 using Microsoft.AspNetCore.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -27,6 +28,27 @@ var app = builder.Build();
 app.UseCors();
 
 app.MapHub<StatusHub>("/hub/status");
+
+// Component-specific infra endpoints (pgcat pool, Sentinel config, etc.) are registered per
+// capability class rather than mapped unconditionally here - see CapabilityFactory for how the set
+// actually mapped is driven by which capability strings architecture.json's nodes reference.
+var architectureFile = builder.Configuration["Architecture:File"] ?? "/workspace/frontend/architecture-map/src/data/architecture.json";
+try
+{
+    var capabilityFactory = new CapabilityFactory();
+    var capabilities = capabilityFactory.BuildFromArchitectureFile(
+        architectureFile,
+        app.Services.GetRequiredService<IDockerService>(),
+        app.Services.GetRequiredService<ILoggerFactory>());
+    foreach (var capability in capabilities)
+    {
+        capability.MapEndpoints(app);
+    }
+}
+catch (Exception ex)
+{
+    app.Logger.LogWarning(ex, "Failed to load capabilities from architecture file {Path} - component-specific infra endpoints will be unavailable", architectureFile);
+}
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 
@@ -78,30 +100,7 @@ app.MapPost("/api/containers/{serviceId}/heal", async (string serviceId, IDocker
 app.MapGet("/api/containers/{containerId}/stats/history", (string containerId, ResourceStatsStore store) =>
     Results.Ok(store.GetHistory(containerId)));
 
-app.MapGet("/api/containers/{serviceId}/replication-lag", async (string serviceId, IDockerService docker, CancellationToken ct) =>
-{
-    var result = await docker.GetReplicationLagAsync(serviceId, ct);
-    return result is null ? Results.NotFound() : Results.Ok(result);
-});
-
-app.MapPost("/api/containers/{serviceId}/replication-lag", async (string serviceId, ReplicationLag request, IDockerService docker, CancellationToken ct) =>
-{
-    if (request.DelayMs is < 0 or > 60_000)
-    {
-        return Results.BadRequest(new { error = "delayMs must be between 0 and 60000" });
-    }
-
-    var result = await docker.SetReplicationLagAsync(serviceId, request.DelayMs, ct);
-    return result is null ? Results.NotFound() : Results.Ok(result);
-});
-
 app.MapGet("/api/containers/scalable", (IDockerService docker) => Results.Ok(docker.ListScalableServices()));
-
-app.MapPost("/api/containers/redis/flush-cache", async (IDockerService docker, CancellationToken ct) =>
-{
-    var result = await docker.FlushRedisAsync(ct);
-    return result is null ? Results.NotFound() : Results.Ok(new { flushed = result });
-});
 
 app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleRequest request, IDockerService docker, CancellationToken ct) =>
 {
@@ -315,149 +314,6 @@ app.MapGet("/api/containers/mongo/topology", async (IDockerService docker, Cance
     Results.Ok(await docker.GetMongoTopologyAsync(ct)));
 
 app.MapGet("/api/infra/status", (IDockerService docker) => Results.Ok(docker.GetInfraStatus()));
-
-// "Enabled" is framed the same way for all three - true is the normal/default state, false is the
-// degraded one being demonstrated - even though nginx's own field name (NginxBypassed) is the
-// inverse of that, since bypassing is the interesting state worth naming directly there.
-app.MapPost("/api/infra/nginx", (InfraToggleRequest request, IDockerService docker) =>
-    Results.Ok(docker.SetNginxBypass(!request.Enabled)));
-
-app.MapPost("/api/infra/pgcat", async (InfraToggleRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
-{
-    try
-    {
-        return Results.Ok(await docker.SetPgcatEnabledAsync(request.Enabled, ct));
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Toggling pgcat to {Enabled} failed", request.Enabled);
-        return Results.Problem(ex.Message);
-    }
-});
-
-app.MapPost("/api/infra/cache", async (InfraToggleRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
-{
-    try
-    {
-        return Results.Ok(await docker.SetCacheEnabledAsync(request.Enabled, ct));
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Toggling cache to {Enabled} failed", request.Enabled);
-        return Results.Problem(ex.Message);
-    }
-});
-
-app.MapGet("/api/infra/pgcat-pool", (IDockerService docker) => Results.Ok(docker.GetPgcatPoolSettings()));
-
-app.MapPost("/api/infra/pgcat-pool", async (PgcatPoolSettings request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
-{
-    if (request.PoolMode is not ("transaction" or "session"))
-    {
-        return Results.BadRequest(new { error = "poolMode must be 'transaction' or 'session'" });
-    }
-
-    if (request.PoolSize is < 1 or > 200)
-    {
-        return Results.BadRequest(new { error = "poolSize must be between 1 and 200" });
-    }
-
-    try
-    {
-        return Results.Ok(await docker.SetPgcatPoolSettingsAsync(request, ct));
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Setting pgcat pool settings failed");
-        return Results.Problem(ex.Message);
-    }
-});
-
-app.MapGet("/api/infra/sentinel", async (IDockerService docker, CancellationToken ct) =>
-{
-    var result = await docker.GetSentinelConfigAsync(ct);
-    return result is null ? Results.NotFound() : Results.Ok(result);
-});
-
-app.MapPost("/api/infra/sentinel", async (SentinelConfig request, IDockerService docker, CancellationToken ct) =>
-{
-    if (request.DownAfterMs is < 100 or > 60_000)
-    {
-        return Results.BadRequest(new { error = "downAfterMs must be between 100 and 60000" });
-    }
-
-    if (request.Quorum is < 1 or > 3)
-    {
-        return Results.BadRequest(new { error = "quorum must be between 1 and 3" });
-    }
-
-    if (request.FailoverTimeoutMs is < 1000 or > 300_000)
-    {
-        return Results.BadRequest(new { error = "failoverTimeoutMs must be between 1000 and 300000" });
-    }
-
-    return Results.Ok(await docker.SetSentinelConfigAsync(request, ct));
-});
-
-app.MapGet("/api/infra/rabbitmq-prefetch", (IDockerService docker) => Results.Ok(new { prefetchCount = docker.GetRabbitMqPrefetch() }));
-
-app.MapPost("/api/infra/rabbitmq-prefetch", async (RabbitMqPrefetchRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
-{
-    if (request.PrefetchCount is < 1 or > 1000)
-    {
-        return Results.BadRequest(new { error = "prefetchCount must be between 1 and 1000" });
-    }
-
-    try
-    {
-        return Results.Ok(new { prefetchCount = await docker.SetRabbitMqPrefetchAsync(request.PrefetchCount, ct) });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Setting RabbitMQ prefetch failed");
-        return Results.Problem(ex.Message);
-    }
-});
-
-app.MapGet("/api/infra/mongo-read-preference", (IDockerService docker) => Results.Ok(new { preference = docker.GetMongoReadPreference() }));
-
-app.MapPost("/api/infra/mongo-read-preference", async (MongoReadPreferenceRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
-{
-    if (request.Preference is not ("primary" or "secondaryPreferred"))
-    {
-        return Results.BadRequest(new { error = "preference must be 'primary' or 'secondaryPreferred'" });
-    }
-
-    try
-    {
-        return Results.Ok(new { preference = await docker.SetMongoReadPreferenceAsync(request.Preference, ct) });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Setting Mongo read preference failed");
-        return Results.Problem(ex.Message);
-    }
-});
-
-app.MapGet("/api/infra/npgsql-pool-size", (IDockerService docker) => Results.Ok(new { poolSize = docker.GetNpgsqlPoolSize() }));
-
-app.MapPost("/api/infra/npgsql-pool-size", async (NpgsqlPoolSizeRequest request, IDockerService docker, ILogger<Program> logger, CancellationToken ct) =>
-{
-    if (request.PoolSize is < 1 or > 500)
-    {
-        return Results.BadRequest(new { error = "poolSize must be between 1 and 500" });
-    }
-
-    try
-    {
-        return Results.Ok(new { poolSize = await docker.SetNpgsqlPoolSizeAsync(request.PoolSize, ct) });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Setting Npgsql pool size failed");
-        return Results.Problem(ex.Message);
-    }
-});
 
 app.MapGet("/api/scenarios", async (IScenarioStore store, CancellationToken ct) => Results.Ok(await store.ListAsync(ct)));
 

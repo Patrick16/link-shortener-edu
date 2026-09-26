@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
+import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
 // Recreates shortener-service and traffic-service - prefetch is read once at consumer startup, not
 // a live setting (see RabbitMqConsumer's own _prefetchCount field).
-export function RabbitMqPrefetchControl() {
+export function RabbitMqPrefetchControl(_props: CapabilityControlProps) {
   const [current, setCurrent] = useState<number | null>(null)
   const [prefetchCount, setPrefetchCount] = useState(10)
   const [busy, setBusy] = useState(false)

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import type { SentinelConfig } from '../types/controlApi'
+import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
 // Applies to all 3 redis-sentinel-N containers at once (each tracks its own local config
 // independently - see SetSentinelConfigAsync on the backend), shown identically regardless of which
 // of the 3 sentinel nodes was clicked.
-export function SentinelConfigControl() {
+export function SentinelConfigControl(_props: CapabilityControlProps) {
   const [current, setCurrent] = useState<SentinelConfig | null>(null)
   const [draft, setDraft] = useState<SentinelConfig | null>(null)
   const [busy, setBusy] = useState(false)

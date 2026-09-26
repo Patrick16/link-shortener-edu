@@ -24,6 +24,7 @@
       "type": "infrastructure",
       "icon": "🧭",
       "description": "External entry point for LinkApi and RedirectApi - the only reason either can have more than one replica",
+      "capabilities": ["nginx-toggle"],
       "details": {
         "purpose": "Reverse proxy in front of link-api/redirect-api; re-resolves their service name against Docker's embedded DNS on a short TTL so it picks up replicas added/removed via Scale without a config reload",
         "technologies": [
@@ -86,6 +87,7 @@
       "type": "service",
       "icon": "🌐",
       "description": "Creates short links (hash generated here), reads them back through a cache",
+      "capabilities": ["scalable"],
       "details": {
         "purpose": "POST /links generates the hash, optionally attaches userId from a Bearer token (no [Authorize] — anonymous still works), and publishes it; GET /links/{hash} is a cached read against links_db; GET /links (paginated) lists a user's own links",
         "technologies": [
@@ -108,6 +110,7 @@
       "type": "service",
       "icon": "↪️",
       "description": "Resolves a short link, issues a 302, bumps the click counter, and records the click",
+      "capabilities": ["scalable"],
       "details": {
         "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; increments a Redis click counter (hot path, doesn't wait on Postgres) and publishes ClickTrackedEvent right before redirecting",
         "technologies": [
@@ -129,6 +132,7 @@
       "type": "infrastructure",
       "icon": "🐰",
       "description": "Durable queue between the two APIs and their workers",
+      "capabilities": ["rabbitmq-prefetch"],
       "details": {
         "purpose": "Decouples each API's synchronous response from the actual Postgres/Mongo writes it triggers",
         "technologies": [
@@ -151,6 +155,7 @@
       "type": "worker",
       "icon": "⚙️",
       "description": "Consumes LinkCreatedEvent (persists the link) and ClickTrackedEvent (bumps its click count)",
+      "capabilities": ["scalable"],
       "details": {
         "purpose": "Owns links_db (the only writer, and the only one that migrates it); both consumers are redelivery-safe - LinkCreated skips if the hash is already stored, ClickTracked just re-increments (an approximate display counter, not the audit trail - that's TrafficService's Clicks table)",
         "technologies": [
@@ -171,6 +176,7 @@
       "type": "worker",
       "icon": "📊",
       "description": "Consumes ClickTrackedEvent, persists the click record and its enriched metadata",
+      "capabilities": ["scalable"],
       "details": {
         "purpose": "Owns clicks_db (the only writer, and the only one that migrates it) - Postgres Clicks is the exactly-once audit trail (skips if the event's Id is already stored); also parses the User-Agent and resolves geo-IP, then upserts a ClickMeta document into MongoDB, independently idempotent from the Postgres write",
         "technologies": [
@@ -192,6 +198,7 @@
       "type": "infrastructure",
       "icon": "🐈",
       "description": "Connection pooler in front of Postgres - every service talks to pgcat, never to postgres directly",
+      "capabilities": ["pgcat-toggle", "pgcat-pool", "npgsql-pool-size", "pgcat-connections"],
       "details": {
         "purpose": "One pool per physical database (users_db/links_db/clicks_db), each backed by the same 3 physical servers (primary + 2 replicas); query_parser_read_write_splitting auto-routes plain SELECTs across all 3 and everything else (writes, DDL, transactions) to the primary only - no app-side read/write split needed",
         "technologies": [
@@ -210,6 +217,7 @@
       "type": "infrastructure",
       "icon": "🗄️",
       "description": "Cache of hash → link, plus the atomic per-link click counter - the actual data-plane target once Sentinel discovery has picked it out",
+      "capabilities": ["cache-toggle", "flush-cache"],
       "details": {
         "purpose": "Cache-aside for links (read-through on miss, shared key format between LinkApi and RedirectApi) and an INCR-based click counter; link-api/redirect-api never dial this hostname directly - their Sentinel-aware connection string talks to redis-sentinel-1/2/3 first, which report back whichever node is currently master",
         "technologies": [
@@ -260,6 +268,7 @@
       "type": "infrastructure",
       "icon": "👁️",
       "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
+      "capabilities": ["sentinel-config"],
       "details": {
         "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
         "technologies": [
@@ -277,6 +286,7 @@
       "type": "infrastructure",
       "icon": "👁️",
       "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
+      "capabilities": ["sentinel-config"],
       "details": {
         "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
         "technologies": [
@@ -294,6 +304,7 @@
       "type": "infrastructure",
       "icon": "👁️",
       "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
+      "capabilities": ["sentinel-config"],
       "details": {
         "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
         "technologies": [
@@ -311,6 +322,7 @@
       "type": "infrastructure",
       "icon": "🍃",
       "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
+      "capabilities": ["mongo-read-preference"],
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [
@@ -330,6 +342,7 @@
       "type": "infrastructure",
       "icon": "🍃",
       "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
+      "capabilities": ["mongo-read-preference"],
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [
@@ -349,6 +362,7 @@
       "type": "infrastructure",
       "icon": "🍃",
       "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
+      "capabilities": ["mongo-read-preference"],
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [
@@ -368,6 +382,7 @@
       "type": "database",
       "icon": "🐘",
       "description": "Own physical database, not just a schema — real isolation from links_db/clicks_db",
+      "capabilities": ["postgres-connections"],
       "details": {
         "purpose": "Users(id, name, email, passwordHash, sault) + RefreshTokens(id, userId, tokenHash, expiresAt, revokedAt?)",
         "technologies": [
@@ -386,6 +401,7 @@
       "type": "database",
       "icon": "🐘",
       "description": "Own physical database — target design shards this one (scenario 4)",
+      "capabilities": ["postgres-connections"],
       "details": {
         "purpose": "Links(hash PK, originalLink, shortenLink, createdAt, userId?, clickCount)",
         "technologies": [
@@ -404,6 +420,7 @@
       "type": "database",
       "icon": "🐘",
       "description": "Own physical database",
+      "capabilities": ["postgres-connections"],
       "details": {
         "purpose": "Clicks(id, clickedAt, inboundLink, outboundLink, hash)",
         "technologies": [
@@ -422,6 +439,7 @@
       "type": "infrastructure",
       "icon": "🐘",
       "description": "Streaming (physical) replica of the whole cluster - bootstraps via pg_basebackup, then runs as an ordinary hot standby",
+      "capabilities": ["replication-lag"],
       "details": {
         "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica2, and the primary",
         "technologies": [
@@ -441,6 +459,7 @@
       "type": "infrastructure",
       "icon": "🐘",
       "description": "Streaming (physical) replica of the whole cluster - bootstraps via pg_basebackup, then runs as an ordinary hot standby",
+      "capabilities": ["replication-lag"],
       "details": {
         "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica1, and the primary",
         "technologies": [
