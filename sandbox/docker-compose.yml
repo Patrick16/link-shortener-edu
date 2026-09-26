@@ -408,11 +408,23 @@ services:
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
     ports:
       - "18888:18888" # dashboard UI
-      - "18889:18889" # OTLP gRPC endpoint — services send logs/metrics/traces here
+      - "18889:18889" # OTLP gRPC endpoint — otel-collector forwards logs/metrics/traces here
     environment:
       # Dev-only: disables the dashboard's own login and OTLP API-key check. Never do this outside
       # a local learning setup.
       DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
+
+  # Every service's OTEL_EXPORTER_OTLP_ENDPOINT points here now, not straight at aspire-dashboard.
+  # Fans the same stream out two ways: unchanged to aspire-dashboard for manual trace/log/metric
+  # drill-down, and traces only (re-encoded as OTLP/JSON) to control-api's own ingestion endpoint
+  # for automated per-run bottleneck aggregation - see otel-collector-config.yaml.
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    volumes:
+      - ./infra/otel-collector/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      aspire-dashboard:
+        condition: service_started
 
   auth-api:
     build:
@@ -433,11 +445,16 @@ services:
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
       Jwt__SigningKey: *jwt-signing-key
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
+      # runs (as short as 1s) even last, which left the bottleneck advisor systematically
+      # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
+      # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
+      OTEL_BSP_SCHEDULE_DELAY: "1000"
     depends_on:
       pgcat:
         condition: service_healthy
-      aspire-dashboard:
+      otel-collector:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
@@ -464,7 +481,12 @@ services:
       # can read the same file.
       ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
       Jwt__SigningKey: *jwt-signing-key
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
+      # runs (as short as 1s) even last, which left the bottleneck advisor systematically
+      # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
+      # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
+      OTEL_BSP_SCHEDULE_DELAY: "1000"
       # Defaults to true - control-api's cache toggle recreates link-api/redirect-api with this set
       # to false so the app skips Redis entirely (see EntityCacheService), a clean "no caching"
       # demo rather than every request eating a failed-connection timeout against a stopped redis.
@@ -482,7 +504,7 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      aspire-dashboard:
+      otel-collector:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
@@ -502,7 +524,12 @@ services:
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       # See link-api's identical override - same reasoning, read by redirect-api-fallback-viewer.
       ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
+      # runs (as short as 1s) even last, which left the bottleneck advisor systematically
+      # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
+      # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
+      OTEL_BSP_SCHEDULE_DELAY: "1000"
       Cache__Enabled: "${CACHE_ENABLED:-true}"
     volumes:
       - redirect-api-data:/data
@@ -517,7 +544,7 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      aspire-dashboard:
+      otel-collector:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
@@ -551,13 +578,18 @@ services:
       # Consumer QoS (unacked deliveries in flight) - read once at consumer startup, so changing it
       # needs a recreate, not a live toggle. See RabbitMqConsumer's own _prefetchCount field.
       RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
+      # runs (as short as 1s) even last, which left the bottleneck advisor systematically
+      # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
+      # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
+      OTEL_BSP_SCHEDULE_DELAY: "1000"
     depends_on:
       pgcat:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      aspire-dashboard:
+      otel-collector:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
@@ -583,7 +615,12 @@ services:
       # just takes whatever connection string it's given.
       ConnectionStrings__Mongo: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/clicks_meta_db?replicaSet=rs0&readPreference=${MONGO_READ_PREFERENCE:-primary}"
       RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://aspire-dashboard:18889"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
+      # runs (as short as 1s) even last, which left the bottleneck advisor systematically
+      # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
+      # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
+      OTEL_BSP_SCHEDULE_DELAY: "1000"
     depends_on:
       pgcat:
         condition: service_healthy
@@ -591,7 +628,7 @@ services:
         condition: service_healthy
       mongo-init:
         condition: service_completed_successfully
-      aspire-dashboard:
+      otel-collector:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]

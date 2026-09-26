@@ -1693,6 +1693,128 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.bottleneck-panel {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.bottleneck-panel h3 {
+  font-size: 14px;
+  margin: 0 0 8px;
+  color: var(--text-h);
+}
+
+.bottleneck-checklist ol {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bottleneck-checklist-title {
+  font-weight: 600;
+  color: var(--text-h);
+  font-size: 13px;
+}
+
+.bottleneck-checklist-explanation {
+  color: var(--text);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.bottleneck-checklist-finding {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.bottleneck-hops {
+  margin-top: 16px;
+}
+
+.bottleneck-hops-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.bottleneck-hops-table th {
+  text-align: left;
+  color: var(--text);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.bottleneck-hops-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+}
+
+.bottleneck-verdict {
+  margin-top: 16px;
+}
+
+.bottleneck-verdict summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.bottleneck-verdict-clean {
+  margin-top: 8px;
+  color: #22c55e;
+  font-size: 13px;
+}
+
+.bottleneck-suspect-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.bottleneck-suspect {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.bottleneck-suspect-primary {
+  border-color: #ef4444;
+}
+
+.bottleneck-suspect-node {
+  font-weight: 600;
+  color: var(--text-h);
+  font-size: 13px;
+}
+
+.bottleneck-suspect-type {
+  font-weight: 400;
+  color: var(--text);
+}
+
+.bottleneck-suspect-evidence {
+  font-size: 12px;
+  color: var(--text);
+  margin-top: 4px;
+}
+
+.bottleneck-suspect-recommendation {
+  font-size: 12px;
+  color: var(--accent);
+  margin-top: 4px;
+}
+
 /* Run history (right sidebar) */
 
 .run-history-panel {

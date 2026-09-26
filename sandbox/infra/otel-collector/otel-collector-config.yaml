@@ -1,0 +1,48 @@
+# Every service's OTEL_EXPORTER_OTLP_ENDPOINT now points here instead of straight at
+# aspire-dashboard (see docker-compose.yml). This collector fans the same stream out two ways:
+# unchanged to aspire-dashboard (traces/metrics/logs, for manual drill-down - nothing about that
+# experience changes), and traces only, re-encoded as OTLP/JSON, to control-api's own ingestion
+# endpoint (for the automated per-run bottleneck aggregation - see BottleneckAdvisor). control-api
+# never has to speak gRPC/protobuf: the collector already ships a JSON encoding mode for exactly
+# this kind of "hand it to a plain HTTP+JSON receiver" case.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+
+exporters:
+  otlp/aspire:
+    endpoint: aspire-dashboard:18889
+    tls:
+      insecure: true
+  otlphttp/controlapi:
+    # traces_endpoint (not endpoint) - the plain `endpoint` field always has the exporter append
+    # its own "/v1/traces" suffix, which would land on the wrong path here.
+    traces_endpoint: http://control-api:8080/api/traces/ingest
+    encoding: json
+    # This exporter gzips its body by default - confirmed live (control-api's JSON reader choked on
+    # the gzip magic byte 0x1F). control-api is a plain JSON POST endpoint with no request
+    # decompression middleware, and there's no reason to add one for a same-network, low-volume
+    # hop - simpler to just not compress here.
+    compression: none
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/aspire, otlphttp/controlapi]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/aspire]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/aspire]

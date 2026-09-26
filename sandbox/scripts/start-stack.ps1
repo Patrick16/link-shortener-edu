@@ -108,6 +108,17 @@ if (-not $SkipFrontend -and -not (Test-CommandExists 'npm')) {
 
 Push-Location $sandboxRoot
 try {
+    # pgcat.toml is live-mutable at runtime (control-api's pgcat pool-settings control rewrites it
+    # directly - see NodePanel's pgcat panel), so it's gitignored and only the baseline is tracked,
+    # same .example/local-copy pattern as the frontends' .env.local below. Must happen before
+    # `docker compose up`, since pgcat's bind mount needs the file to already exist.
+    $pgcatConfig = Join-Path $sandboxRoot 'infra\pgcat\pgcat.toml'
+    $pgcatConfigExample = Join-Path $sandboxRoot 'infra\pgcat\pgcat.toml.example'
+    if ((Test-Path $pgcatConfigExample) -and -not (Test-Path $pgcatConfig)) {
+        Copy-Item $pgcatConfigExample $pgcatConfig
+        Write-Host '  Created infra\pgcat\pgcat.toml from pgcat.toml.example'
+    }
+
     if ($Build) {
         Write-Step 'Building backend images (docker compose build)'
         docker compose build

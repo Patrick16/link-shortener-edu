@@ -3,7 +3,7 @@ import { AxisChart } from './AxisChart'
 import { TrafficReportView } from './TrafficReportView'
 import type { TrafficRunState } from '../hooks/useTrafficRun'
 
-interface Props extends Pick<TrafficRunState, 'running' | 'progress' | 'progressHistory' | 'report' | 'error'> {
+interface Props extends Pick<TrafficRunState, 'running' | 'progress' | 'progressHistory' | 'report' | 'error' | 'verdict' | 'traceHops'> {
   fallbackTotalSeconds: number
 }
 
@@ -24,7 +24,7 @@ function readCollapsed(): boolean {
 // A full report (stat tiles + latency + checks + per-endpoint status + raw output) can get tall
 // enough to push the graph and sidebars below the fold if the header were left to grow freely, so
 // its content sits in a height-capped, scrollable box and can be collapsed to a single line.
-export function TrafficResultPanel({ running, progress, progressHistory, report, error, fallbackTotalSeconds }: Props) {
+export function TrafficResultPanel({ running, progress, progressHistory, report, error, verdict, traceHops, fallbackTotalSeconds }: Props) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
 
   function toggleCollapsed() {
@@ -102,7 +102,7 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
             </div>
           )}
 
-          {!running && report && <TrafficReportView report={report} />}
+          {!running && report && <TrafficReportView report={report} verdict={verdict} traceHops={traceHops} />}
         </div>
       )}
     </div>

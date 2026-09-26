@@ -145,7 +145,7 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
           </div>
         )}
 
-        <TrafficReportView report={selected.report} />
+        <TrafficReportView report={selected.report} verdict={selected.verdict} traceHops={selected.traceHops} />
       </div>
     )
   }

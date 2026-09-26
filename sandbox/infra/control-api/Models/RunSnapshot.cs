@@ -25,7 +25,10 @@ public record RunSnapshot(
     IReadOnlyList<ReplicationLagEntry>? ReplicationLags = null,
     int? RabbitMqPrefetchCount = null,
     string? MongoReadPreference = null,
-    int? NpgsqlPoolSize = null);
+    int? NpgsqlPoolSize = null,
+    IReadOnlyList<NodeResourceMax>? ResourceMaxima = null,
+    IReadOnlyList<TraceHopStats>? TraceHops = null,
+    BottleneckVerdict? Verdict = null);
 
 // Lightweight row for the history list - avoids deserializing every run's full report (including
 // its potentially large RawOutput) just to render a list of past runs.

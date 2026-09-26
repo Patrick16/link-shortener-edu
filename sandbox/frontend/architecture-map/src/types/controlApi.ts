@@ -294,6 +294,49 @@ export interface ReplicationLagEntry {
   delayMs: number
 }
 
+// Peak CPU/memory one node's container(s) reached during a run - see NodeResourceMax on the
+// backend (captured live while the run was in flight, not read back from the 60s ring buffer).
+export interface NodeResourceMax {
+  serviceId: string
+  maxCpuPercent: number
+  maxMemoryUsageBytes: number
+  maxMemoryPercent: number
+}
+
+// Aggregated span durations for one (service, span name) hop within a run - see TraceHopStats on
+// the backend. Sourced from real OpenTelemetry traces via otel-collector -> control-api, not from
+// k6's own client-side latency.
+export interface TraceHopStats {
+  serviceId: string
+  spanName: string
+  count: number
+  avgMs: number
+  p95Ms: number
+  maxMs: number
+}
+
+export interface BottleneckSuspect {
+  serviceId: string
+  nodeType: string
+  severity: number
+  evidence: string
+  recommendation: string
+}
+
+export interface ChecklistStep {
+  title: string
+  explanation: string
+  finding: string | null
+}
+
+// Rule-based verdict for one run - see BottleneckAdvisor on the backend. suspects is ranked worst
+// first; checklist mirrors the same underlying data as a guided "how would I have found this
+// myself" walkthrough, so the two views can never disagree.
+export interface BottleneckVerdict {
+  suspects: BottleneckSuspect[]
+  checklist: ChecklistStep[]
+}
+
 // Full detail for one past run - everything needed to answer "what configuration produced this
 // result", not just the report on its own. The experimental-controls fields are optional/nullable
 // since runs saved before they existed won't have them.
@@ -312,6 +355,9 @@ export interface RunSnapshot {
   rabbitMqPrefetchCount?: number | null
   mongoReadPreference?: MongoReadPreference | null
   npgsqlPoolSize?: number | null
+  resourceMaxima?: NodeResourceMax[] | null
+  traceHops?: TraceHopStats[] | null
+  verdict?: BottleneckVerdict | null
 }
 
 // Lightweight row for the history list - see RunSummary on the backend for why it's separate from

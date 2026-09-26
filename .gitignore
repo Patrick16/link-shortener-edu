@@ -493,6 +493,13 @@ CLAUDE.md
 .ai-*
 *.claude-*
 
+# Live-mutable runtime config - control-api's pgcat pool-settings control (see NodePanel's pgcat
+# panel) rewrites this file directly on disk while the stack is running, so it drifts from the
+# committed baseline the moment anyone uses that control. Tracked baseline lives at
+# pgcat.toml.example instead; sandbox/scripts/start-stack.ps1 copies it to pgcat.toml on first run
+# if missing, same pattern as the frontends' .env.local/.env.example.
+sandbox/infra/pgcat/pgcat.toml
+
 # Temporary files from Claude Code sessions
 .scratchpad/
 *.tmp.claude

@@ -10,6 +10,8 @@ builder.Services.AddSingleton<IDockerService, DockerService>();
 builder.Services.AddSingleton<IScenarioStore, ScenarioStore>();
 builder.Services.AddSingleton<IRunHistoryStore, RunHistoryStore>();
 builder.Services.AddSingleton<ResourceStatsStore>();
+builder.Services.AddSingleton<TraceStore>();
+builder.Services.AddSingleton<RunResourceMaxTracker>();
 builder.Services.AddSignalR();
 builder.Services.AddHostedService<StatusPollerService>();
 builder.Services.AddHostedService<ResourceStatsPollerService>();
@@ -51,6 +53,30 @@ catch (Exception ex)
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+
+// otel-collector's own target for the traces pipeline (see otel-collector-config.yaml) - a plain
+// OTLP/JSON POST, not gRPC. Deserializes the body manually (instead of a typed minimal-API
+// parameter) so a shape this app's trimmed-down OtlpExportTraceServiceRequest doesn't expect
+// can never turn into an automatic 400 from the framework's own model binding, which would bypass
+// the try/catch entirely and make otel-collector retry-storm this endpoint. Always 202s: losing a
+// batch of spans only degrades the bottleneck advisor, it never breaks a run.
+app.MapPost("/api/traces/ingest", async (HttpRequest httpRequest, TraceStore traceStore) =>
+{
+    try
+    {
+        var request = await httpRequest.ReadFromJsonAsync<OtlpExportTraceServiceRequest>();
+        if (request is not null)
+        {
+            traceStore.Ingest(request);
+        }
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Failed to ingest a trace batch - dropping it");
+    }
+
+    return Results.Accepted();
+});
 
 app.MapGet("/api/containers", async (IDockerService docker, CancellationToken ct) =>
     Results.Ok(await docker.ListContainersAsync(ct)));
@@ -113,7 +139,13 @@ app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleR
     return result.Success ? Results.Ok(result) : Results.BadRequest(result);
 });
 
-app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRunHistoryStore runHistory, IHubContext<StatusHub> hub, ILogger<Program> logger) =>
+// Guards against two overlapping /api/traffic runs. Nothing enforced this before
+// RunResourceMaxTracker existed either, but that tracker is a singleton assuming one run at a time
+// (see its own comment) - a second concurrent run would silently corrupt both runs' resource maxima
+// (e.g. run 2's BeginRun() clearing state run 1 is still accumulating into). 0 = idle, 1 = running.
+var trafficRunActive = 0;
+
+app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRunHistoryStore runHistory, IHubContext<StatusHub> hub, ILogger<Program> logger, TraceStore traceStore, RunResourceMaxTracker resourceMaxTracker) =>
 {
     if (request.Steps.Count == 0)
     {
@@ -198,6 +230,13 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
         }
     }
 
+    // Only acquired once every validation check above has already passed - a rejected request
+    // never claims the slot, so it can't block a real run from starting right after.
+    if (Interlocked.CompareExchange(ref trafficRunActive, 1, 0) != 0)
+    {
+        return Results.Conflict(new { error = "a traffic run is already in progress" });
+    }
+
     // Runs in the background and reports over SignalR (trafficProgress while it runs,
     // trafficCompleted with the final TrafficReport) instead of blocking the HTTP request for the
     // full duration - lets the UI show a live progress bar instead of a frozen spinner.
@@ -205,10 +244,22 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
     {
         try
         {
+            // Window used to correlate trace spans and resource-usage peaks with this exact run -
+            // captured around the k6 call itself, not the whole HTTP request handler, so it doesn't
+            // pick up anything from validation or a previous run's tail.
+            var runStart = DateTimeOffset.UtcNow;
+            resourceMaxTracker.BeginRun();
+
             var report = await docker.RunTrafficAsync(
                 request,
                 progress => hub.Clients.All.SendAsync("trafficProgress", progress),
                 CancellationToken.None);
+
+            var runEnd = DateTimeOffset.UtcNow;
+            // Always ends tracking, even if the run failed/returned null - otherwise a failed run
+            // would leave the tracker stuck "on" and silently accumulate maxima into whatever the
+            // next run turns out to be.
+            var resourceMaxima = resourceMaxTracker.EndRun();
 
             if (report is not null)
             {
@@ -254,13 +305,24 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
                         logger.LogWarning(ex, "Failed to read Sentinel config while saving run snapshot");
                     }
 
+                    // Even with OTEL_BSP_SCHEDULE_DELAY shortened to 1s (see docker-compose.yml),
+                    // spans from the tail of the run are still exported on a timer, not the instant
+                    // they finish - querying the trace window immediately would systematically miss
+                    // recent spans. A short fixed wait is simpler and more honest than pretending to
+                    // poll for "enough" spans (there's no way to know the expected count in advance).
+                    await Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None);
+
+                    var pgcatConnections = await docker.GetPgcatConnectionsAsync(CancellationToken.None);
+                    var traceHops = traceStore.GetHopStatsBetween(runStart, runEnd);
+                    var verdict = BottleneckAdvisor.Analyze(report, resourceMaxima, traceHops, pgcatConnections);
+
                     var snapshot = new RunSnapshot(
                         $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid().ToString("N")[..6]}",
                         DateTimeOffset.UtcNow,
                         request,
                         docker.GetInfraStatus(),
                         replicas,
-                        await docker.GetPgcatConnectionsAsync(CancellationToken.None),
+                        pgcatConnections,
                         await docker.GetPostgresConnectionsAsync(CancellationToken.None),
                         report,
                         docker.GetPgcatPoolSettings(),
@@ -268,7 +330,10 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
                         replicationLags,
                         docker.GetRabbitMqPrefetch(),
                         docker.GetMongoReadPreference(),
-                        docker.GetNpgsqlPoolSize());
+                        docker.GetNpgsqlPoolSize(),
+                        resourceMaxima,
+                        traceHops,
+                        verdict);
 
                     await runHistory.SaveAsync(snapshot, CancellationToken.None);
                     await hub.Clients.All.SendAsync("runSaved", new { snapshot.Id });
@@ -283,6 +348,10 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
         {
             logger.LogError(ex, "Traffic run for {Scenario} failed", request.Scenario);
             await hub.Clients.All.SendAsync("trafficFailed", new { request.Scenario, error = ex.Message });
+        }
+        finally
+        {
+            Volatile.Write(ref trafficRunActive, 0);
         }
     });
 

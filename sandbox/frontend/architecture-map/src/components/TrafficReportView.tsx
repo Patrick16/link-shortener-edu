@@ -1,4 +1,5 @@
-import type { TrafficReport } from '../types/controlApi'
+import { BottleneckPanel } from './BottleneckPanel'
+import type { BottleneckVerdict, TraceHopStats, TrafficReport } from '../types/controlApi'
 
 const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: string }> = [
   { key: 'avg', label: 'avg' },
@@ -10,12 +11,17 @@ const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: s
 
 interface Props {
   report: TrafficReport
+  // Both optional/nullable - a live run's "trafficCompleted" event only carries the bare report
+  // (the verdict is computed slightly later, once the run snapshot is saved), and a run saved
+  // before this feature existed has neither at all.
+  verdict?: BottleneckVerdict | null
+  traceHops?: TraceHopStats[] | null
 }
 
 // Pure presentation over one TrafficReport - shared by the "just finished" view (TrafficResultPanel)
 // and the "looking at a past run" view (RunHistoryPanel), so the two don't drift into rendering the
 // same numbers differently.
-export function TrafficReportView({ report }: Props) {
+export function TrafficReportView({ report, verdict, traceHops }: Props) {
   const maxLatency = report.httpReqDuration ? Math.max(...LATENCY_ROWS.map((r) => report.httpReqDuration![r.key])) : 0
 
   return (
@@ -114,6 +120,8 @@ export function TrafficReportView({ report }: Props) {
         <summary>Raw k6 output</summary>
         <pre>{report.rawOutput}</pre>
       </details>
+
+      <BottleneckPanel verdict={verdict} traceHops={traceHops} />
     </div>
   )
 }

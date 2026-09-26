@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as signalR from '@microsoft/signalr'
 import { controlApi, ControlApiError } from '../api/controlApi'
-import type { TrafficProgress, TrafficReport, TrafficRequest } from '../types/controlApi'
+import type { BottleneckVerdict, TraceHopStats, TrafficProgress, TrafficReport, TrafficRequest } from '../types/controlApi'
 
 export interface TrafficRunState {
   running: boolean
@@ -14,6 +14,13 @@ export interface TrafficRunState {
   // simple change signal RunHistoryPanel watches to refetch its list, instead of a second SignalR
   // connection just for that one event.
   lastSavedRunId: string | null
+  // Populated a moment after `report` itself - "trafficCompleted" only carries the bare k6 report,
+  // the bottleneck verdict is computed as part of saving the run snapshot (needs the resource-max
+  // tracker + trace store), so this hook fetches the full snapshot once "runSaved" fires and lifts
+  // just these two fields back out, rather than making every consumer of `report` also know about
+  // snapshot-fetch timing.
+  verdict: BottleneckVerdict | null
+  traceHops: TraceHopStats[] | null
 }
 
 // Own SignalR connection (separate from useLiveStack's) - keeps this hook fully self-contained
@@ -27,6 +34,8 @@ export function useTrafficRun(): TrafficRunState {
   const [report, setReport] = useState<TrafficReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [lastSavedRunId, setLastSavedRunId] = useState<string | null>(null)
+  const [verdict, setVerdict] = useState<BottleneckVerdict | null>(null)
+  const [traceHops, setTraceHops] = useState<TraceHopStats[] | null>(null)
   const connectionRef = useRef<signalR.HubConnection | null>(null)
 
   useEffect(() => {
@@ -63,6 +72,16 @@ export function useTrafficRun(): TrafficRunState {
     connection.on('runSaved', (e: { id: string }) => {
       if (cancelled) return
       setLastSavedRunId(e.id)
+      // Best-effort - a failed fetch here just means the just-finished run's verdict stays empty
+      // until the user opens it from history later; it never hides the report already on screen.
+      controlApi
+        .getRun(e.id)
+        .then((snapshot) => {
+          if (cancelled) return
+          setVerdict(snapshot.verdict ?? null)
+          setTraceHops(snapshot.traceHops ?? null)
+        })
+        .catch(() => {})
     })
 
     connection.start().catch((err) => !cancelled && setError(String(err)))
@@ -79,6 +98,8 @@ export function useTrafficRun(): TrafficRunState {
     setReport(null)
     setProgress(null)
     setProgressHistory([])
+    setVerdict(null)
+    setTraceHops(null)
     setRunning(true)
     try {
       await controlApi.startTraffic(request)
@@ -88,5 +109,5 @@ export function useTrafficRun(): TrafficRunState {
     }
   }
 
-  return { running, progress, progressHistory, report, error, start, lastSavedRunId }
+  return { running, progress, progressHistory, report, error, start, lastSavedRunId, verdict, traceHops }
 }

@@ -9,6 +9,7 @@ namespace ControlApi.Services;
 public class ResourceStatsPollerService(
     IDockerService docker,
     ResourceStatsStore store,
+    RunResourceMaxTracker resourceMaxTracker,
     IHubContext<StatusHub> hub,
     ILogger<ResourceStatsPollerService> logger) : BackgroundService
 {
@@ -41,6 +42,8 @@ public class ResourceStatsPollerService(
                 {
                     store.Add(sample);
                 }
+
+                resourceMaxTracker.Observe(samples);
 
                 if (samples.Count > 0)
                 {

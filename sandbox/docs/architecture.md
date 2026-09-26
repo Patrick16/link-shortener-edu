@@ -74,7 +74,10 @@ Short version of what's real today:
   time (`RabbitMqPublisher`/`RabbitMqConsumer`), not loaded from `infra/rabbitmq/definitions.json` —
   that file is a placeholder for a possible future static-provisioning approach, unused right now
 - Whole stack: `docker compose up -d` (backend, run from `sandbox/`) + `src/frontend/app` dev
-  server — see `sandbox/scripts/start-stack.ps1` for a one-command version of both
+  server — see `sandbox/scripts/start-stack.ps1` for a one-command version of both (it also copies
+  `infra/pgcat/pgcat.toml.example` to `pgcat.toml` on first run; pgcat's config is gitignored since
+  the pgcat pool-settings control rewrites it live, so copy it yourself first if running
+  `docker compose up` directly on a fresh clone)
 - **Observability:** every .NET service ships logs/metrics/traces (OpenTelemetry SDK, OTLP) to a
   standalone `aspire-dashboard` container — the dashboard half of .NET Aspire, not the full AppHost
   orchestrator (docker-compose still orchestrates everything). RabbitMQ publish/consume spans are
