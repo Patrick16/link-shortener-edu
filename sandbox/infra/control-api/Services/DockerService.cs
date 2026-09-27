@@ -1069,18 +1069,7 @@ public class DockerService : IDockerService
     {
         var env = new Dictionary<string, string> { ["RABBITMQ_PREFETCH"] = prefetchCount.ToString() };
 
-        // `up --force-recreate` with no `--scale` tells compose the desired replica count for each
-        // service is whatever the compose file says (1) - it has no memory of a scale-up done in a
-        // previous `up` invocation. Without re-asserting each service's current replica count here,
-        // every consumer scaled up via ScaleAsync collapses back to a single instance the moment
-        // prefetch is changed.
-        var scaleArgs = new List<string>();
-        foreach (var serviceId in RabbitMqConsumingServices)
-        {
-            var replicas = await CountReplicasAsync(serviceId, ct);
-            scaleArgs.Add("--scale");
-            scaleArgs.Add($"{serviceId}={Math.Max(replicas, 1)}");
-        }
+        var scaleArgs = await BuildPreserveScaleArgsAsync(RabbitMqConsumingServices, ct);
 
         _logger.LogWarning("Switching RabbitMq__PrefetchCount for {Services} to {PrefetchCount}", string.Join(", ", RabbitMqConsumingServices), prefetchCount);
         var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. RabbitMqConsumingServices], env, ct);
@@ -1117,9 +1106,10 @@ public class DockerService : IDockerService
     public async Task<int> SetNpgsqlPoolSizeAsync(int poolSize, CancellationToken ct)
     {
         var env = new Dictionary<string, string> { ["NPGSQL_MAX_POOL_SIZE"] = poolSize.ToString() };
+        var scaleArgs = await BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 
         _logger.LogWarning("Switching Npgsql Maximum Pool Size for {Services} to {PoolSize}", string.Join(", ", DbTouchingServices), poolSize);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. DbTouchingServices], env, ct);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
         if (exitCode != 0)
         {
             _logger.LogWarning("Setting Npgsql pool size failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -1155,9 +1145,10 @@ public class DockerService : IDockerService
             ["DB_HOST"] = enabled ? "pgcat" : "postgres",
             ["DB_PORT"] = enabled ? "6432" : "5432",
         };
+        var scaleArgs = await BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 
         _logger.LogWarning("Switching DB routing for {Services} to {Host} (pgcat enabled: {Enabled})", string.Join(", ", DbTouchingServices), env["DB_HOST"], enabled);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. DbTouchingServices], env, ct);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
         if (exitCode != 0)
         {
             _logger.LogWarning("Toggling pgcat failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -1171,9 +1162,10 @@ public class DockerService : IDockerService
     public async Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct)
     {
         var env = new Dictionary<string, string> { ["CACHE_ENABLED"] = enabled ? "true" : "false" };
+        var scaleArgs = await BuildPreserveScaleArgsAsync(CacheUsingServices, ct);
 
         _logger.LogWarning("Switching Cache__Enabled for {Services} to {Enabled}", string.Join(", ", CacheUsingServices), enabled);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. CacheUsingServices], env, ct);
+        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CacheUsingServices], env, ct);
         if (exitCode != 0)
         {
             _logger.LogWarning("Toggling cache failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -1476,6 +1468,24 @@ public class DockerService : IDockerService
         }, ct);
 
         return containers.Count;
+    }
+
+    // `up --force-recreate` with no `--scale` tells compose the desired replica count for each
+    // service is whatever the compose file says (1) - it has no memory of a scale-up done in a
+    // previous `up` invocation. Every env-toggle method that force-recreates a service also in
+    // ScalableServices needs to re-assert its current replica count here, or a scale-up done via
+    // ScaleAsync collapses back to a single instance the moment that toggle flips.
+    private async Task<List<string>> BuildPreserveScaleArgsAsync(IReadOnlyList<string> services, CancellationToken ct)
+    {
+        var scaleArgs = new List<string>();
+        foreach (var serviceId in services)
+        {
+            var replicas = await CountReplicasAsync(serviceId, ct);
+            scaleArgs.Add("--scale");
+            scaleArgs.Add($"{serviceId}={Math.Max(replicas, 1)}");
+        }
+
+        return scaleArgs;
     }
 
     private static ManagedContainer? ToStatus(ContainerListResponse container)
