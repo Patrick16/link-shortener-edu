@@ -16,6 +16,7 @@ builder.Services.AddSignalR();
 builder.Services.AddHostedService<StatusPollerService>();
 builder.Services.AddHostedService<ResourceStatsPollerService>();
 builder.Services.AddHostedService<TopologyPollerService>();
+builder.Services.AddHostedService<SentinelSelfHealPollerService>();
 
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
     ?? ["http://localhost:5173", "http://localhost:5174"];

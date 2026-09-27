@@ -89,6 +89,12 @@ public interface IDockerService
     Task<SentinelConfig?> GetSentinelConfigAsync(CancellationToken ct);
     Task<SentinelConfig> SetSentinelConfigAsync(SentinelConfig config, CancellationToken ct);
 
+    // Re-derives the real Redis master directly (ROLE asked of each of the three data containers)
+    // and corrects any Sentinel found monitoring a different address - Sentinel's own remembered
+    // address can go silently stale after a redis-master recreate it never observed as a failure.
+    // See DockerService's own comment on this method for the incident that motivated it.
+    Task SelfHealSentinelAsync(CancellationToken ct);
+
     // Consumer QoS - read once at RabbitMqConsumer startup, so this recreates shortener-service and
     // traffic-service (same env-var + --force-recreate --no-deps shape as the pgcat/cache toggles).
     int GetRabbitMqPrefetch();
