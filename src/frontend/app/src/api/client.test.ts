@@ -91,6 +91,53 @@ describe('apiFetch', () => {
     })
   })
 
+  it('unwraps a JSON-quoted-string error body (a bare Conflict("...")/Unauthorized("...") result)', async () => {
+    // [ApiController]'s default content negotiation serializes a plain-string ObjectResult as a
+    // JSON string, so the wire body is `"Invalid email or password."` (with the quotes) - rendering
+    // that verbatim would show the quote characters to the user.
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify('Invalid email or password.'), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(apiFetch('https://api.example.com', '/login')).rejects.toMatchObject({
+      status: 401,
+      message: 'Invalid email or password.',
+    })
+  })
+
+  it('extracts detail from an RFC 7807 ProblemDetails error body', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          type: 'https://tools.ietf.org/html/rfc7231#section-6.5.8',
+          title: 'Email already registered.',
+          status: 409,
+          detail: 'A user with this email already exists.',
+        }),
+        { status: 409, headers: { 'Content-Type': 'application/problem+json' } },
+      ),
+    )
+
+    await expect(apiFetch('https://api.example.com', '/register')).rejects.toMatchObject({
+      status: 409,
+      message: 'A user with this email already exists.',
+    })
+  })
+
+  it('falls back to title when a ProblemDetails body has no detail', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ title: 'Authentication failed.', status: 401 }), { status: 401 }),
+    )
+
+    await expect(apiFetch('https://api.example.com', '/login')).rejects.toMatchObject({
+      status: 401,
+      message: 'Authentication failed.',
+    })
+  })
+
   it('falls back to statusText when the error body is empty', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response('', { status: 500, statusText: 'Server Error' }))
 

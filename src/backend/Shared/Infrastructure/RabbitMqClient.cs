@@ -43,6 +43,21 @@ public sealed class RabbitMqClient(string connectionString) : IRabbitMqConnectio
                 return await existing!.ConfigureAwait(false);
             }
 
+            if (existing is { Status: TaskStatus.RanToCompletion })
+            {
+                // IsUsable already found this one dead (IsOpen is false) - dispose it before
+                // replacing it so the closed connection's resources aren't held onto forever. A
+                // broker-side close may have already torn it down, so a throw here is expected, not
+                // exceptional - it must not stop the reconnect below.
+                try
+                {
+                    await existing.Result.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+            }
+
             var connectTask = _factory.CreateConnectionAsync(cancellationToken);
             _connection = connectTask;
             return await connectTask.ConfigureAwait(false);
@@ -53,8 +68,28 @@ public sealed class RabbitMqClient(string connectionString) : IRabbitMqConnectio
         }
     }
 
-    private static bool IsUsable(Task<IConnection>? connection) =>
-        connection is not null && connection.Status is not (TaskStatus.Faulted or TaskStatus.Canceled);
+    internal static bool IsUsable(Task<IConnection>? connection)
+    {
+        if (connection is null || connection.Status is TaskStatus.Faulted or TaskStatus.Canceled)
+        {
+            return false;
+        }
+
+        // Still connecting - callers will just await it; nothing to check yet.
+        if (connection.Status != TaskStatus.RanToCompletion)
+        {
+            return true;
+        }
+
+        // Once a connection attempt succeeds, this task sits at RanToCompletion forever - even after
+        // RabbitMQ restarts, a chaos experiment kills the connection, or a network blip drops it.
+        // Without checking IsOpen here, every future caller (and the retry loops in
+        // RabbitMqConsumer/RabbitMqPublisher) would keep getting handed the same dead IConnection:
+        // CreateChannelAsync on it throws, the caller logs, waits, and retries - but retrying just
+        // calls back in here and finds the same "usable" (RanToCompletion) task again, so the retry
+        // can never actually succeed even once the broker comes back up.
+        return connection.Result.IsOpen;
+    }
 
     public async ValueTask DisposeAsync()
     {

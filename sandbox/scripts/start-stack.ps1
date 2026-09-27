@@ -67,6 +67,32 @@ function Wait-ForHealthReady {
     return $false
 }
 
+function Test-PortInUse {
+    param([int]$Port)
+    return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+}
+
+function Wait-ForDevServer {
+    param(
+        [string]$Url,
+        [int]$TimeoutSeconds = 20
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
+            if ($response.StatusCode -eq 200) {
+                return $true
+            }
+        } catch {
+            # Not up yet (Vite still cold-starting), or the window failed to launch at all - keep
+            # polling either way until the timeout.
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
 function Wait-ForHealthyContainer {
     param(
         [string]$ServiceName,
@@ -200,25 +226,69 @@ Initialize-Frontend -Dir $frontendDir -Label 'src\frontend\app'
 Initialize-Frontend -Dir $architectureMapDir -Label 'sandbox\frontend\architecture-map'
 
 Write-Step 'Starting the frontend dev servers, each in a new window'
+
+# The product app's dev server has no fixed port (Vite auto-increments past a busy 5173), but
+# architecture-map's vite.config.ts pins port 5174 with strictPort - so it's the one that actually
+# fails outright if anything (a leftover window from a previous run, or the product app itself
+# auto-incrementing onto it) is already listening there. Checked before spawning either window,
+# not after, so a doomed-to-fail launch is skipped instead of opening a window that immediately
+# crashes with no indication in this script's own output.
+if (Test-PortInUse -Port 5173) {
+    Write-Warning "  Port 5173 is already in use - a previous 'npm run dev' window for the product app may still be running. Its dev server will auto-pick the next free port instead of failing outright, but that can land it on 5174 and collide with architecture-map below."
+}
+
+$architectureMapPortFree = -not (Test-PortInUse -Port 5174)
+if (-not $architectureMapPortFree) {
+    Write-Warning "  Port 5174 is already in use - architecture-map's dev server pins this exact port (strictPort) and will fail to start if it's taken, most likely by a previous 'npm run dev' window that was never closed. Close it and re-run this script; skipping the architecture-map window for now."
+}
+
 Start-Process powershell -ArgumentList @(
     '-NoExit',
     '-Command',
     "Set-Location '$frontendDir'; npm run dev"
 )
-Start-Process powershell -ArgumentList @(
-    '-NoExit',
-    '-Command',
-    "Set-Location '$architectureMapDir'; npm run dev"
-)
+
+if ($architectureMapPortFree) {
+    Start-Process powershell -ArgumentList @(
+        '-NoExit',
+        '-Command',
+        "Set-Location '$architectureMapDir'; npm run dev"
+    )
+}
+
+Write-Step 'Waiting for the frontend dev servers to actually come up'
+$productUp = Wait-ForDevServer -Url 'http://localhost:5173'
+if ($productUp) {
+    Write-Host '  Frontend (product) is up' -ForegroundColor Green
+} else {
+    Write-Warning "  Frontend (product) didn't respond within the timeout - check its own window for errors."
+}
+
+$sandboxMapUp = $false
+if ($architectureMapPortFree) {
+    $sandboxMapUp = Wait-ForDevServer -Url 'http://localhost:5174'
+    if ($sandboxMapUp) {
+        Write-Host '  Frontend (sandbox map) is up' -ForegroundColor Green
+    } else {
+        Write-Warning "  Frontend (sandbox map) didn't respond within the timeout - check its own window for errors."
+    }
+}
 
 if (-not $NoBrowser) {
-    Start-Sleep -Seconds 3
-    Start-Process 'http://localhost:5174'
+    # Only open a tab for whichever dev server was actually confirmed up above - opening a tab
+    # against a dev server that never bound its port (or was skipped for a port conflict) just
+    # shows the browser's own connection-refused page, no more informative than the warnings above.
+    if ($productUp) {
+        Start-Process 'http://localhost:5173'
+    }
+    if ($sandboxMapUp) {
+        Start-Process 'http://localhost:5174'
+    }
 }
 
 Write-Host "`nFull stack is up:" -ForegroundColor Cyan
-Write-Host '  Frontend (product):    http://localhost:5173'
-Write-Host '  Frontend (sandbox map): http://localhost:5174'
+Write-Host "  Frontend (product):     http://localhost:5173$(if (-not $productUp) { '  (not confirmed up - see warning above)' })"
+Write-Host "  Frontend (sandbox map): http://localhost:5174$(if (-not $sandboxMapUp) { '  (not confirmed up - see warning above)' })"
 Write-Host '  AuthApi:          http://localhost:8081/scalar/v1'
 Write-Host '  LinkApi:          http://localhost:8082/scalar/v1'
 Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'

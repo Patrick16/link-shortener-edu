@@ -76,7 +76,14 @@ export function TrafficConfigPanel({ config, disabled, running, onRun }: Props) 
         <div className="iterations-config">
           <label>
             VUs
-            <input type="number" min={1} value={config.flatVus} onChange={(e) => config.setFlatVus(Math.max(1, Number(e.target.value)))} disabled={disabled} />
+            <input
+              type="number"
+              min={1}
+              max={200}
+              value={config.flatVus}
+              onChange={(e) => config.setFlatVus(Math.max(1, Math.min(200, Number(e.target.value))))}
+              disabled={disabled}
+            />
           </label>
           <label>
             Iterations

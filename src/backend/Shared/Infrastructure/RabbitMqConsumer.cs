@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -16,8 +17,27 @@ public sealed class RabbitMqConsumer(
     private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
+    // A permanently-failing message (bad JSON, a handler that always throws for this payload) must
+    // not be nacked-with-requeue forever: RabbitMQ redelivers it immediately, so that's a hot loop
+    // pinning the consumer's CPU and re-running the same failing DB round trip at full speed with the
+    // queue never draining. After this many attempts the message is dropped (nacked without requeue)
+    // instead - there's no dead-letter exchange configured on these queues, so "dropped" really does
+    // mean gone, which is an accepted tradeoff for this learning project over building out a DLQ and
+    // something to drain it.
+    private const int MaxDeliveryAttempts = 5;
+    private static readonly TimeSpan InitialHandlerRetryDelay = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan MaxHandlerRetryDelay = TimeSpan.FromSeconds(2);
+
     private readonly IRabbitMqConnection _connection = connection;
     private readonly ILogger<RabbitMqConsumer> _logger = logger;
+
+    // Keyed by the publisher-assigned MessageId (stable across redeliveries of the same logical
+    // message, unlike DeliveryTag which changes every redelivery). Entries are removed as soon as a
+    // message is acked or given up on, so this only ever holds messages currently mid-retry - it
+    // resets on process restart, which just means a message gets a fresh set of attempts after a
+    // restart rather than picking up its old count; acceptable here since the point is bounding a
+    // single consumer's hot loop, not a durable retry ledger.
+    private readonly ConcurrentDictionary<string, int> _deliveryAttempts = new();
 
     // How many unacked deliveries this consumer's channel can hold at once - the classic
     // competing-consumers throughput/fairness knob. Config-bound (not hardcoded) specifically so
@@ -42,27 +62,7 @@ public sealed class RabbitMqConsumer(
         await using (channel.ConfigureAwait(false))
         {
             var consumer = new AsyncEventingBasicConsumer(channel);
-            consumer.ReceivedAsync += async (_, ea) =>
-            {
-                using var activity = StartConsumerActivity(routingKey, ea);
-                try
-                {
-                    var json = Encoding.UTF8.GetString(ea.Body.Span);
-                    var message = JsonSerializer.Deserialize<TMessage>(json);
-                    if (message is not null)
-                    {
-                        await handler(message, cancellationToken);
-                    }
-
-                    await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, cancellationToken);
-                }
-                catch (Exception ex)
-                {
-                    activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-                    _logger.LogError(ex, "Handler failed for message on queue {QueueName}, nacking for requeue", queueName);
-                    await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true, cancellationToken);
-                }
-            };
+            consumer.ReceivedAsync += (_1, ea) => HandleDeliveryAsync(channel, queueName, routingKey, ea, handler, cancellationToken);
 
             await channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken);
 
@@ -70,6 +70,65 @@ public sealed class RabbitMqConsumer(
             var stopped = new TaskCompletionSource();
             await using var registration = cancellationToken.Register(() => stopped.TrySetResult());
             await stopped.Task.ConfigureAwait(false);
+        }
+    }
+
+    internal async Task HandleDeliveryAsync<TMessage>(
+        IChannel channel,
+        string queueName,
+        string routingKey,
+        BasicDeliverEventArgs ea,
+        Func<TMessage, CancellationToken, Task> handler,
+        CancellationToken cancellationToken)
+    {
+        using var activity = StartConsumerActivity(routingKey, ea);
+        var messageId = ea.BasicProperties.MessageId ?? ea.DeliveryTag.ToString();
+        try
+        {
+            var json = Encoding.UTF8.GetString(ea.Body.Span);
+            var message = JsonSerializer.Deserialize<TMessage>(json);
+            if (message is not null)
+            {
+                await handler(message, cancellationToken);
+            }
+
+            await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, cancellationToken);
+            _deliveryAttempts.TryRemove(messageId, out _);
+        }
+        catch (Exception ex)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            var attempts = _deliveryAttempts.AddOrUpdate(messageId, 1, (_, count) => count + 1);
+            if (attempts >= MaxDeliveryAttempts)
+            {
+                _deliveryAttempts.TryRemove(messageId, out _);
+                _logger.LogError(
+                    ex,
+                    "Handler failed for message {MessageId} on queue {QueueName} after {Attempts} attempts - dropping it instead of requeuing forever",
+                    messageId,
+                    queueName,
+                    attempts);
+                await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, cancellationToken);
+                return;
+            }
+
+            _logger.LogWarning(
+                ex,
+                "Handler failed for message {MessageId} on queue {QueueName} (attempt {Attempt}/{MaxAttempts}), nacking for requeue",
+                messageId,
+                queueName,
+                attempts,
+                MaxDeliveryAttempts);
+
+            // A brief, attempt-scaled delay before requeueing so a permanently-failing message spins
+            // at a few retries per second instead of pinning the CPU with immediate redelivery - short
+            // enough not to meaningfully slow down recovery from a genuinely transient failure (a
+            // momentary DB blip resolves well within MaxHandlerRetryDelay).
+            var delay = TimeSpan.FromMilliseconds(
+                Math.Min(InitialHandlerRetryDelay.TotalMilliseconds * attempts, MaxHandlerRetryDelay.TotalMilliseconds));
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+
+            await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true, cancellationToken);
         }
     }
 

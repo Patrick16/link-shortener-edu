@@ -95,6 +95,94 @@ public class AuthControllerTests
     }
 
     [Fact]
+    public async Task Register_ConcurrentDuplicateEmail_LoserGetsConflictInsteadOfUnhandledException()
+    {
+        // Simulates the race the check-then-act Register can't see on its own: two requests for the
+        // same email both pass the AnyAsync "is it taken" check before either has inserted, because
+        // they're using separate DbContext instances (as two real concurrent requests would). The
+        // first SaveChangesAsync wins; the second must hit the unique index and come back as a
+        // friendly 409, not an unhandled DbUpdateException.
+        var databaseName = Guid.NewGuid().ToString();
+        DatabaseContext NewSharedContext() => new(
+            new DbContextOptionsBuilder<DatabaseContext>().UseInMemoryDatabase(databaseName).Options);
+
+        await using var contextA = NewSharedContext();
+        await using var contextB = NewSharedContext();
+        var sutA = NewController(contextA, out var tokenGeneratorA, out var refreshTokenServiceA);
+        var sutB = NewController(contextB, out _, out var refreshTokenServiceB);
+        tokenGeneratorA.Setup(x => x.GenerateToken(It.IsAny<User>())).Returns(("jwt-token", DateTime.UtcNow.AddHours(1)));
+        refreshTokenServiceA.Setup(x => x.IssueAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(("raw-refresh-token", DateTime.UtcNow.AddDays(14)));
+
+        var request = new RegisterRequest { Name = "Alice", Email = "alice@example.com", Password = "Str0ngPassw0rd!" };
+
+        var winner = await sutA.Register(request, CancellationToken.None);
+        var loser = await sutB.Register(request, CancellationToken.None);
+
+        Assert.IsType<AuthResponse>(winner.Value);
+        var objectResult = Assert.IsType<ObjectResult>(loser.Result);
+        Assert.Equal(StatusCodes.Status409Conflict, objectResult.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(objectResult.Value);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.Status);
+        refreshTokenServiceB.Verify(x => x.IssueAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Equal(1, await contextA.Users.CountAsync());
+    }
+
+    [Fact]
+    public async Task Register_EmailDiffersOnlyByCase_IsTreatedAsDuplicate()
+    {
+        await using var context = NewContext();
+        context.Users.Add(new User(Guid.NewGuid(), "Existing", "alice@example.com", "hash", string.Empty));
+        await context.SaveChangesAsync();
+        var sut = NewController(context, out _, out _);
+
+        var result = await sut.Register(
+            new RegisterRequest { Name = "Alice", Email = "Alice@Example.com", Password = "Str0ngPassw0rd!" },
+            CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status409Conflict, objectResult.StatusCode);
+        Assert.Equal(1, await context.Users.CountAsync());
+    }
+
+    [Fact]
+    public async Task Register_StoresNormalizedLowercaseEmail()
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out var tokenGenerator, out var refreshTokenService);
+        tokenGenerator.Setup(x => x.GenerateToken(It.IsAny<User>())).Returns(("jwt-token", DateTime.UtcNow.AddHours(1)));
+        refreshTokenService.Setup(x => x.IssueAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(("raw-refresh-token", DateTime.UtcNow.AddDays(14)));
+
+        await sut.Register(
+            new RegisterRequest { Name = "Alice", Email = " Alice@Example.com ", Password = "Str0ngPassw0rd!" },
+            CancellationToken.None);
+
+        var stored = await context.Users.SingleAsync();
+        Assert.Equal("alice@example.com", stored.Email);
+    }
+
+    [Fact]
+    public async Task Login_EmailDiffersOnlyByCase_StillAuthenticates()
+    {
+        await using var context = NewContext();
+        var placeholder = new User(Guid.Empty, "Alice", "alice@example.com", string.Empty, string.Empty);
+        var passwordHash = PasswordHasher.HashPassword(placeholder, "Str0ngPassw0rd!");
+        context.Users.Add(new User(Guid.NewGuid(), "Alice", "alice@example.com", passwordHash, string.Empty));
+        await context.SaveChangesAsync();
+        var sut = NewController(context, out var tokenGenerator, out var refreshTokenService);
+        tokenGenerator.Setup(x => x.GenerateToken(It.IsAny<User>())).Returns(("jwt-token", DateTime.UtcNow.AddHours(1)));
+        refreshTokenService.Setup(x => x.IssueAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(("raw-refresh-token", DateTime.UtcNow.AddDays(14)));
+
+        var result = await sut.Login(
+            new LoginRequest { Email = "ALICE@EXAMPLE.COM", Password = "Str0ngPassw0rd!" },
+            CancellationToken.None);
+
+        Assert.IsType<AuthResponse>(result.Value);
+    }
+
+    [Fact]
     public async Task Login_ValidCredentials_ReturnsTokenAndSetsRefreshCookie()
     {
         await using var context = NewContext();

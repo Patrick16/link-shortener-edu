@@ -148,6 +148,24 @@ describe('useTrafficConfig', () => {
     expect(result.current.iterationsTarget).toBe(42)
   })
 
+  it('loadScenario falls back to defaults for a pre-migration scenario missing steps/mode/points/vus/iterations', () => {
+    // Regression: a scenario saved via the very first POST /api/scenarios shape (before steps/mode/
+    // vus/iterations existed) round-trips through ScenarioStore with no migration - those fields
+    // come back null/undefined from the backend despite what the CustomScenario type claims. This
+    // used to crash the whole panel (`saved.points.map(...)` throwing on a null `points`).
+    const { result } = renderHook(() => useTrafficConfig())
+    const preMigrationScenario = { name: 'old-one' } as CustomScenario
+
+    act(() => result.current.loadScenario(preMigrationScenario))
+
+    expect(result.current.sequence).toEqual([])
+    expect(result.current.stopMode).toBe('duration')
+    expect(result.current.points).toEqual(RAMP_PRESETS[0].points)
+    expect(result.current.totalDuration).toBe(RAMP_PRESETS[0].totalDurationSeconds)
+    expect(result.current.flatVus).toBe(10)
+    expect(result.current.iterationsTarget).toBe(100)
+  })
+
   it('resetScenario restores every field to its initial default', () => {
     const { result } = renderHook(() => useTrafficConfig())
     act(() => result.current.setSequence([{ endpointId: 'create-link', pauseAfterSeconds: 0 }]))

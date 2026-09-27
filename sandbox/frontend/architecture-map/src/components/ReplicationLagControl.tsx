@@ -1,14 +1,11 @@
 import { useEffect, useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
-
-interface Props {
-  serviceId: string
-}
+import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
 // Artificial WAL-replay delay on this one standby (recovery_min_apply_delay) - applied live via
 // ALTER SYSTEM SET + pg_reload_conf(), no restart. Independent per replica, unlike the pgcat pool
 // settings above which apply to all 3 pools at once.
-export function ReplicationLagControl({ serviceId }: Props) {
+export function ReplicationLagControl({ serviceId }: CapabilityControlProps) {
   const [current, setCurrent] = useState<number | null>(null)
   const [delayMs, setDelayMs] = useState(0)
   const [busy, setBusy] = useState(false)

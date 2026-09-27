@@ -2,7 +2,7 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class SentinelConfigCapability(IDockerService docker) : IComponentCapability
+public sealed class SentinelConfigCapability(IDockerService docker, ILogger<SentinelConfigCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
@@ -29,7 +29,15 @@ public sealed class SentinelConfigCapability(IDockerService docker) : IComponent
                 return Results.BadRequest(new { error = "failoverTimeoutMs must be between 1000 and 300000" });
             }
 
-            return Results.Ok(await docker.SetSentinelConfigAsync(request, ct));
+            try
+            {
+                return Results.Ok(await docker.SetSentinelConfigAsync(request, ct));
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Setting Sentinel config failed");
+                return Results.Problem(ex.Message);
+            }
         });
     }
 }

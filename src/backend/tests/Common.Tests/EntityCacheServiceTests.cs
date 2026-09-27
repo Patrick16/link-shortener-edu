@@ -151,6 +151,63 @@ public class EntityCacheServiceTests
     }
 
     [Fact]
+    public async Task GetOrFetch_ConcurrentMissesOnSameKey_FetchFromDbRunsOnlyOnce()
+    {
+        // Three callers miss the same key before the first fetch has resolved. Moq's ReturnsAsync
+        // completes GetCachedAsync synchronously, so each GetOrFetch call runs up through GetOrAdd
+        // on the calling thread before yielding - by the time the second and third calls reach
+        // GetOrAdd, the first caller's fetch is already registered as in-flight, so they must join
+        // it instead of calling fetchFromDb again.
+        var cache = new Mock<IDistributedCache>();
+        cache.Setup(x => x.GetAsync("test:abc", It.IsAny<CancellationToken>())).ReturnsAsync((byte[]?)null);
+        var sut = new TestEntityCacheService(cache.Object, ConfigWith());
+        var entity = new TestEntity("abc", "hello");
+        var fetchCount = 0;
+        var releaseFetch = new TaskCompletionSource<TestEntity?>();
+
+        Task<TestEntity?> fetchFromDb()
+        {
+            Interlocked.Increment(ref fetchCount);
+            return releaseFetch.Task;
+        }
+
+        var call1 = sut.GetOrFetch("abc", fetchFromDb, CancellationToken.None);
+        var call2 = sut.GetOrFetch("abc", fetchFromDb, CancellationToken.None);
+        var call3 = sut.GetOrFetch("abc", fetchFromDb, CancellationToken.None);
+        releaseFetch.SetResult(entity);
+        var results = await Task.WhenAll(call1, call2, call3);
+
+        Assert.Equal(1, fetchCount);
+        Assert.All(results, r => Assert.Same(entity, r));
+        cache.Verify(
+            x => x.SetAsync("test:abc", It.IsAny<byte[]>(), It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task GetOrFetch_SequentialMissesOnSameKey_EachCallFetchesIndependently()
+    {
+        // Sanity check for the coalescing above: once a fetch has fully completed and been removed
+        // from the in-flight table, a later miss on the same key must fetch again rather than reusing
+        // a stale completed Task forever.
+        var cache = new Mock<IDistributedCache>();
+        cache.Setup(x => x.GetAsync("test:abc", It.IsAny<CancellationToken>())).ReturnsAsync((byte[]?)null);
+        var sut = new TestEntityCacheService(cache.Object, ConfigWith());
+        var fetchCount = 0;
+
+        Task<TestEntity?> fetchFromDb()
+        {
+            Interlocked.Increment(ref fetchCount);
+            return Task.FromResult<TestEntity?>(new TestEntity("abc", $"fetch-{fetchCount}"));
+        }
+
+        await sut.GetOrFetch("abc", fetchFromDb, CancellationToken.None);
+        await sut.GetOrFetch("abc", fetchFromDb, CancellationToken.None);
+
+        Assert.Equal(2, fetchCount);
+    }
+
+    [Fact]
     public async Task GetOrFetch_DbMiss_ReturnsNullAndDoesNotPopulateCache()
     {
         var cache = new Mock<IDistributedCache>();

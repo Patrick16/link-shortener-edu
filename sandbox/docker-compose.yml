@@ -2,6 +2,13 @@
 # same key. A single anchor means the two can't accidentally drift onto different values.
 x-jwt-signing-key: &jwt-signing-key "dev-only-signing-key-do-not-use-in-production-1234567890"
 
+# Shared dev-only secret for LinkApi's InternalApiKey authentication scheme — control-api sends it
+# to get unscoped ("root") access to GET /Links for the traffic data-pool preload, since that call
+# needs a broad sample across every user's links, not one arbitrary user's own (which is all a
+# per-user JWT could ever grant). Never exposed to the frontend/end users - see
+# InternalApiKeyAuthenticationHandler.
+x-internal-api-key: &internal-api-key "dev-only-internal-api-key-do-not-use-in-production-1234567890"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -48,6 +55,10 @@ services:
       # Same value the primary gets (see its own command: block) - a standby with a lower
       # max_connections than its primary refuses to start hot standby at all.
       POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-100}
+      # Own, permanent replication slot (see replica-entrypoint.sh) - without one, the primary is
+      # free to recycle WAL this replica hasn't consumed yet the moment it falls behind, so a
+      # disconnected-long-enough replica can never resume streaming and needs a manual rebuild.
+      REPLICA_SLOT_NAME: replica1_slot
     ports:
       - "5433:5432" # exposed for local inspection - confirm it's actually a standby via `psql ... -c "SELECT pg_is_in_recovery()"`
     volumes:
@@ -57,8 +68,17 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # pg_isready alone only proves the process accepts connections, not that streaming replication
+    # is actually happening - a replica whose connection to the primary breaks (network blip, primary
+    # restart, or a permanently-behind replica per replica-entrypoint.sh's own known limitation) keeps
+    # answering pg_isready as healthy forever, so pgcat/downstream services never learn the replica
+    # they're routing reads to has gone stale. pg_is_in_recovery() alone isn't enough either - a
+    # standby stays "in recovery" even after its streaming connection dies, it just stops receiving
+    # new WAL. pg_stat_wal_receiver has a row only while the walreceiver process is actively connected
+    # to the primary, so combining both is what actually distinguishes "healthy standby" from "standby
+    # whose replication silently died".
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -tAc 'SELECT pg_is_in_recovery() AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver)' | grep -q '^t$'"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -72,6 +92,8 @@ services:
       # Same value the primary gets (see its own command: block) - a standby with a lower
       # max_connections than its primary refuses to start hot standby at all.
       POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-100}
+      # See postgres-replica1's REPLICA_SLOT_NAME comment - own slot, must be a different name.
+      REPLICA_SLOT_NAME: replica2_slot
     ports:
       - "5434:5432"
     volumes:
@@ -81,8 +103,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # See postgres-replica1's identical healthcheck for why pg_isready alone isn't enough here.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -tAc 'SELECT pg_is_in_recovery() AND EXISTS (SELECT 1 FROM pg_stat_wal_receiver)' | grep -q '^t$'"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -120,6 +143,11 @@ services:
       - "6379:6379"
     volumes:
       - ./infra/redis/master-entrypoint.sh:/master-entrypoint.sh:ro
+      # Just this one small marker file (master-entrypoint.sh's STATE_FILE) - not RDB/AOF data, this
+      # stack doesn't persist Redis's actual dataset across recreates. Needs to survive a container
+      # recreate specifically so a restart that can't reach any Sentinel can tell "I was last a
+      # confirmed replica" from "I've never been told anything" - see master-entrypoint.sh's header.
+      - redis-master-state:/state
     # Checks with Sentinel before deciding to start as a master - see master-entrypoint.sh for why a
     # bare `redis-server` here would produce a split brain on rejoin after a real failover.
     entrypoint: ["/bin/sh", "/master-entrypoint.sh"]
@@ -170,20 +198,27 @@ services:
     # resolver quirk in the Sentinel binary itself, not an actual DNS problem. Worked around by
     # resolving the IP ourselves with `getent` (known-working) and baking the literal IP into the
     # generated config, so Sentinel's own resolver is never involved at all.
-    # The config is regenerated from the template on EVERY start, not just the first: a literal IP
-    # baked in on one `docker compose up` goes stale the moment redis-master's container gets
-    # recreated, because Docker hands out container IPs from the network's pool in creation order,
-    # not by hostname - a later `up`/`down` cycle can easily reassign that same IP to a different
-    # container (verified live: a stale sentinel.conf here ended up pointing "mymaster" at what had
-    # become redis-replica1's IP, and StackExchange.Redis's Sentinel client rejected it once it saw
-    # `role:slave` in INFO, throwing "Failed connecting to configured primary" on every request). The
-    # sed is also anchored to the `sentinel monitor` line specifically (not a bare `s/redis-master/`)
-    # so it substitutes the IP into the directive without also mangling this comment's own prose.
-    # Regenerating on every start does discard any state Sentinel had rewritten into this file since
-    # container start (known-replicas, epoch, a mid-flight promotion) - acceptable here since that
-    # state is only useful across a Sentinel container's own restart, and Sentinel rediscovers it
-    # within a few cron cycles of reconnecting to whichever container "redis-master" resolves to.
-    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; exec redis-sentinel /etc/redis/sentinel.conf"]
+    # The config is only regenerated from the template if the existing one (in the named volume) has
+    # never been rewritten by Sentinel itself - detected via the "# Generated by CONFIG REWRITE"
+    # header Sentinel prepends every time it rewrites its own config (on every state change: a
+    # failover, a newly-discovered replica, ...). A literal IP baked in on one `docker compose up`
+    # goes stale the moment redis-master's container gets recreated, because Docker hands out
+    # container IPs from the network's pool in creation order, not by hostname - a later `up`/`down`
+    # cycle can easily reassign that same IP to a different container (verified live: a stale
+    # sentinel.conf here ended up pointing "mymaster" at what had become redis-replica1's IP, and
+    # StackExchange.Redis's Sentinel client rejected it once it saw `role:slave` in INFO, throwing
+    # "Failed connecting to configured primary" on every request) - so a pristine, never-rewritten
+    # config still needs a fresh re-resolve on every start. But unconditionally regenerating on every
+    # start (an earlier version of this fix) has the opposite failure mode: it discards a REAL
+    # failover Sentinel already learned about (mymaster correctly pointing at the promoted replica)
+    # the moment this container next restarts, resetting "mymaster" back to whatever "redis-master"
+    # currently resolves to - which may by then be a demoted replica or a stale independent master,
+    # not the real one. Checking for the CONFIG REWRITE marker distinguishes "this file still has
+    # the pristine template's guess" (safe, even necessary, to re-resolve) from "Sentinel has actually
+    # learned something since" (must be preserved, not overwritten). The sed is anchored to the
+    # `sentinel monitor` line specifically (not a bare `s/redis-master/`) so it substitutes the IP
+    # into the directive without also mangling this comment's own prose.
+    command: ["if [ -f /etc/redis/sentinel.conf ] && grep -q '# Generated by CONFIG REWRITE' /etc/redis/sentinel.conf; then echo 'sentinel.conf already has Sentinel-learned state - keeping it as-is'; else until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
     volumes:
       - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
       - redis-sentinel-1-data:/etc/redis
@@ -206,10 +241,11 @@ services:
     image: redis:7-alpine
     entrypoint: ["/bin/sh", "-c"]
     # See the matching comment on redis-sentinel-1 for why this resolves "redis-master" itself
-    # (Sentinel's own internal resolver faults on it) and why the config is regenerated fresh from
-    # the template on every start rather than only the first (a baked-in IP goes stale the moment
-    # container recreation reassigns it to a different container).
-    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; exec redis-sentinel /etc/redis/sentinel.conf"]
+    # (Sentinel's own internal resolver faults on it) and why the config is only regenerated from the
+    # template when the existing one has never been rewritten by Sentinel itself (detected via the
+    # "# Generated by CONFIG REWRITE" marker) - not unconditionally on every start, which would
+    # discard a real, already-learned failover the next time this container restarts.
+    command: ["if [ -f /etc/redis/sentinel.conf ] && grep -q '# Generated by CONFIG REWRITE' /etc/redis/sentinel.conf; then echo 'sentinel.conf already has Sentinel-learned state - keeping it as-is'; else until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
     volumes:
       - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
       - redis-sentinel-2-data:/etc/redis
@@ -232,10 +268,11 @@ services:
     image: redis:7-alpine
     entrypoint: ["/bin/sh", "-c"]
     # See the matching comment on redis-sentinel-1 for why this resolves "redis-master" itself
-    # (Sentinel's own internal resolver faults on it) and why the config is regenerated fresh from
-    # the template on every start rather than only the first (a baked-in IP goes stale the moment
-    # container recreation reassigns it to a different container).
-    command: ["until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; exec redis-sentinel /etc/redis/sentinel.conf"]
+    # (Sentinel's own internal resolver faults on it) and why the config is only regenerated from the
+    # template when the existing one has never been rewritten by Sentinel itself (detected via the
+    # "# Generated by CONFIG REWRITE" marker) - not unconditionally on every start, which would
+    # discard a real, already-learned failover the next time this container restarts.
+    command: ["if [ -f /etc/redis/sentinel.conf ] && grep -q '# Generated by CONFIG REWRITE' /etc/redis/sentinel.conf; then echo 'sentinel.conf already has Sentinel-learned state - keeping it as-is'; else until getent hosts redis-master >/dev/null 2>&1; do echo 'waiting for redis-master DNS...'; sleep 1; done; MASTER_IP=$$(getent hosts redis-master | awk '{print $$1}' | head -1); sed \"s/^sentinel monitor mymaster redis-master/sentinel monitor mymaster $$MASTER_IP/\" /etc/redis-template/sentinel.conf > /etc/redis/sentinel.conf; fi; exec redis-sentinel /etc/redis/sentinel.conf"]
     volumes:
       - ./infra/redis/sentinel.conf:/etc/redis-template/sentinel.conf:ro
       - redis-sentinel-3-data:/etc/redis
@@ -383,24 +420,31 @@ services:
 
   # Browses the sqlite fallback stores that link-api/redirect-api write to when RabbitMq is
   # unreachable (see SqliteMessageFallbackStore) - one viewer per service since each keeps its own
-  # file, not a shared database.
+  # file, not a shared database. Read-only on both sides: `-x` is only "don't auto-launch a
+  # browser", not a read-only flag (that's `-r`/`--read-only`) - without it, sqlite-web is a full
+  # CRUD admin UI (edit/insert/delete rows, run arbitrary SQL) on the exact file
+  # SqliteMessageFallbackStore/RabbitMqRetryWorker are concurrently reading/writing, and a row
+  # deleted through the viewer is a fallback message permanently lost - it can never be republished
+  # once removed, defeating the entire point of the outage-recovery feature this is meant to let you
+  # observe. The `:ro` volume mount is a second, filesystem-level backstop in case `-r` is ever
+  # dropped or the image's flag behavior changes.
   link-api-fallback-viewer:
     image: coleifer/sqlite-web:latest
-    command: ["sqlite_web", "-H", "0.0.0.0", "-x", "/data/rabbitmq-fallback.db"]
+    command: ["sqlite_web", "-H", "0.0.0.0", "-x", "-r", "/data/rabbitmq-fallback.db"]
     ports:
       - "8086:8080"
     volumes:
-      - link-api-data:/data
+      - link-api-data:/data:ro
     depends_on:
       - link-api
 
   redirect-api-fallback-viewer:
     image: coleifer/sqlite-web:latest
-    command: ["sqlite_web", "-H", "0.0.0.0", "-x", "/data/rabbitmq-fallback.db"]
+    command: ["sqlite_web", "-H", "0.0.0.0", "-x", "-r", "/data/rabbitmq-fallback.db"]
     ports:
       - "8087:8080"
     volumes:
-      - redirect-api-data:/data
+      - redirect-api-data:/data:ro
     depends_on:
       - redirect-api
 
@@ -456,8 +500,12 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+    # /health/ready (not /health/live, which runs zero checks and is Healthy the instant the
+    # process starts listening) - service_healthy is what nginx's own depends_on gates on for
+    # link-api/redirect-api below, so it needs to mean "can actually reach Postgres/RabbitMQ", not
+    # just "the process is up". Same reasoning on every other service's healthcheck in this file.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -481,6 +529,7 @@ services:
       # can read the same file.
       ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
       Jwt__SigningKey: *jwt-signing-key
+      Internal__ApiKey: *internal-api-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
       # runs (as short as 1s) even last, which left the bottleneck advisor systematically
@@ -493,6 +542,17 @@ services:
       Cache__Enabled: "${CACHE_ENABLED:-true}"
     volumes:
       - link-api-data:/data
+    # LinkApi.csproj turns on Server GC, which sizes one heap per logical core it detects - with no
+    # limit here it detects the whole host, so scaling this service to N replicas (control-api's
+    # ScalableServices) multiplies reserved GC heap memory by N against the host's full core count,
+    # not against what each replica is actually meant to get. .NET reads a container's cgroup
+    # cpus/memory quota (not just the host's) to size Server GC since .NET Core 3.0+, so this limit
+    # is what makes that sizing reflect one replica's real share instead of the whole host.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
     depends_on:
       pgcat:
         condition: service_healthy
@@ -507,7 +567,7 @@ services:
       otel-collector:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -533,6 +593,13 @@ services:
       Cache__Enabled: "${CACHE_ENABLED:-true}"
     volumes:
       - redirect-api-data:/data
+    # See link-api's identical limit above - same reasoning, same Server GC setting in
+    # RedirectApi.csproj, same ScalableServices membership.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
     depends_on:
       pgcat:
         condition: service_healthy
@@ -547,7 +614,7 @@ services:
       otel-collector:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -592,7 +659,7 @@ services:
       otel-collector:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -631,7 +698,7 @@ services:
       otel-collector:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -641,16 +708,24 @@ services:
       context: ./infra/control-api
       dockerfile: Dockerfile
     ports:
-      - "5299:8080"
+      # Bound to loopback, not all interfaces: this holds the host's Docker socket (root-equivalent
+      # control over every container in this compose project) with no authentication on top of it -
+      # fine for "the person at this keyboard", not fine for "anyone who can reach this host's IP".
+      # Binding to 127.0.0.1 stops another machine on the LAN from ever reaching it; it does not stop
+      # another process on this same host - this is still a local-dev-only tool, not a hardened one.
+      - "127.0.0.1:5299:8080"
     environment:
       Docker__Endpoint: "unix:///var/run/docker.sock"
       Docker__ComposeProject: "sandbox"
-      Docker__ComposeFile: "/workspace/docker-compose.yml"
-      Architecture__File: "/workspace/frontend/architecture-map/src/data/architecture.json"
+      Docker__ComposeFile: "/workspace/sandbox/docker-compose.yml"
+      Architecture__File: "/workspace/sandbox/frontend/architecture-map/src/data/architecture.json"
       Pgcat__ConfigDir: "/pgcat-config"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       Cors__AllowedOrigins__1: "http://localhost:5174"
       Scenarios__DataDir: "/data"
+      # Sent as the X-Internal-Api-Key header to LinkApi's GET /Links when preloading a traffic
+      # data-pool - see InternalApiKeyAuthenticationHandler for why a per-user JWT can't do this.
+      Internal__ApiKey: *internal-api-key
     volumes:
       # Lets this container talk to the Docker Engine managing the whole stack, so it can
       # stop/start/restart sibling containers on request. Local-stack-only tool - never point this
@@ -659,7 +734,11 @@ services:
       # Read-only: needed so the `docker compose` CLI inside this container (see its Dockerfile)
       # can find docker-compose.yml to run `--scale`. Compose itself does the actual work against
       # the Docker Engine via the socket above; this mount is just so it can read its own file.
-      - ./:/workspace:ro
+      # Mounts the repo root (not just sandbox/) so that if compose ever decides a build is needed
+      # (image missing locally) rather than reusing an already-built one, the build `context: ..`
+      # link-api/redirect-api/etc. declare - resolved relative to the mounted docker-compose.yml,
+      # i.e. relative to /workspace/sandbox - actually exists in this container's filesystem too.
+      - ../:/workspace:ro
       # Separate, writable mount of the same host directory the pgcat service reads its config from
       # (read-only, below) - lets control-api rewrite pgcat.toml directly for the pool-settings
       # control without touching the read-only /workspace mount above. pgcat's own `autoreload`
@@ -680,6 +759,7 @@ volumes:
   redis-sentinel-1-data:
   redis-sentinel-2-data:
   redis-sentinel-3-data:
+  redis-master-state:
   redisinsight-data:
   control-api-data:
   link-api-data:

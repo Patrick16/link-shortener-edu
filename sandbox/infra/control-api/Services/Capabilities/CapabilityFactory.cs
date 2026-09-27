@@ -16,10 +16,10 @@ public sealed class CapabilityFactory
         ["pgcat-toggle"] = (docker, loggerFactory) => new PgcatToggleCapability(docker, loggerFactory.CreateLogger<PgcatToggleCapability>()),
         ["cache-toggle"] = (docker, loggerFactory) => new CacheToggleCapability(docker, loggerFactory.CreateLogger<CacheToggleCapability>()),
         ["nginx-toggle"] = (docker, _) => new NginxToggleCapability(docker),
-        ["sentinel-config"] = (docker, _) => new SentinelConfigCapability(docker),
+        ["sentinel-config"] = (docker, loggerFactory) => new SentinelConfigCapability(docker, loggerFactory.CreateLogger<SentinelConfigCapability>()),
         ["rabbitmq-prefetch"] = (docker, loggerFactory) => new RabbitMqPrefetchCapability(docker, loggerFactory.CreateLogger<RabbitMqPrefetchCapability>()),
         ["mongo-read-preference"] = (docker, loggerFactory) => new MongoReadPreferenceCapability(docker, loggerFactory.CreateLogger<MongoReadPreferenceCapability>()),
-        ["replication-lag"] = (docker, _) => new ReplicationLagCapability(docker),
+        ["replication-lag"] = (docker, loggerFactory) => new ReplicationLagCapability(docker, loggerFactory.CreateLogger<ReplicationLagCapability>()),
         ["flush-cache"] = (docker, _) => new FlushCacheCapability(docker),
     };
 

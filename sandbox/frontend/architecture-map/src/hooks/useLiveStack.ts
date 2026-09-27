@@ -28,6 +28,27 @@ function groupByService(list: ManagedContainer[]): Record<string, ManagedContain
   return byId
 }
 
+// Container ids churn continuously here - every scale up/down and every container replacement
+// mints a new id and abandons the old one. Without this, resourceHistory (keyed by containerId)
+// keeps one permanently-retained ~30-sample array per retired container for as long as the tab
+// stays open, which is the app's actual intended usage pattern (a long-running infra console), not
+// an edge case. Mirrors the equivalent server-side prune added to ResourceStatsStore.
+function pruneStaleHistory(
+  history: Record<string, ResourceSample[]>,
+  liveContainerIds: ReadonlySet<string>,
+): Record<string, ResourceSample[]> {
+  const staleIds = Object.keys(history).filter((id) => !liveContainerIds.has(id))
+  if (staleIds.length === 0) {
+    return history
+  }
+
+  const next = { ...history }
+  for (const id of staleIds) {
+    delete next[id]
+  }
+  return next
+}
+
 // One SignalR connection shared by both container status and resource stats - both are pushed
 // over the same /hub/status hub (see StatusPollerService / ResourceStatsPollerService), so there's
 // no reason to open two sockets for them.
@@ -42,9 +63,17 @@ export function useLiveStack(): LiveStackState {
   useEffect(() => {
     let cancelled = false
 
+    // Always the full current set (see StatusPollerService), so this is also the one place that
+    // knows which containerIds are still live - the natural point to prune resourceHistory too.
+    function applyContainers(list: ManagedContainer[]) {
+      setContainers(groupByService(list))
+      const liveContainerIds = new Set(list.map((c) => c.containerId))
+      setResourceHistory((prev) => pruneStaleHistory(prev, liveContainerIds))
+    }
+
     controlApi
       .listContainers()
-      .then((list) => !cancelled && setContainers(groupByService(list)))
+      .then((list) => !cancelled && applyContainers(list))
       .catch((err) => !cancelled && setError(String(err)))
       .finally(() => !cancelled && setLoading(false))
 
@@ -55,9 +84,7 @@ export function useLiveStack(): LiveStackState {
 
     connection.on('containersUpdated', (list: ManagedContainer[]) => {
       if (cancelled) return
-      // Always the full current set (see StatusPollerService), so replacing rather than merging
-      // is what correctly reflects a replica actually being removed after a scale-down.
-      setContainers(groupByService(list))
+      applyContainers(list)
     })
 
     connection.on('resourceStatsUpdated', (samples: ResourceSample[]) => {

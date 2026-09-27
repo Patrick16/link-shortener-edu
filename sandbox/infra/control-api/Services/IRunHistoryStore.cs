@@ -13,6 +13,8 @@ public interface IRunHistoryStore
     Task<bool> DeleteAsync(string id, CancellationToken ct);
 
     // Deletes every saved run - a manual reset for when past runs (e.g. from testing/demoing) are
-    // just clutter, not something worth the usual per-run retention cap waiting them out.
-    Task ClearAsync(CancellationToken ct);
+    // just clutter, not something worth the usual per-run retention cap waiting them out. Returns
+    // how many files it failed to delete (0 means every run was cleared) instead of throwing on the
+    // first failure and leaving the rest undeleted.
+    Task<int> ClearAsync(CancellationToken ct);
 }

@@ -5,6 +5,7 @@ using Common.Models;
 using Contracts.Events;
 using Infrastructure;
 using LinkApi.Models;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -57,10 +58,11 @@ public class LinksController(
         return new LinkResponse(hash, createdAt);
     }
 
-    // Unlike CreateLink, this is a listing of one person's own links - anonymous callers have no
-    // "own links" to list, so this requires a valid Bearer token rather than treating auth as
-    // optional.
-    [Authorize]
+    // Unlike CreateLink, this is a listing of links - anonymous callers have no "own links" to
+    // list, so this requires either a valid Bearer token (scoped to that caller's own links) or the
+    // InternalApiKey scheme (control-api's data-pool preload, which needs a broad sample across
+    // every user's links, not one arbitrary user's own - a per-user JWT can't express that at all).
+    [Authorize(AuthenticationSchemes = $"{JwtBearerDefaults.AuthenticationScheme},{Constants.InternalApiKeyAuthenticationScheme}")]
     [HttpGet]
     public async Task<ActionResult<LinksPageResponse>> GetLinks(
         [FromQuery] int page = 1,
@@ -74,20 +76,39 @@ public class LinksController(
                 title: "Invalid query parameter.");
         }
 
-        // [Authorize] already guarantees a valid token, so Sub is always present and parseable.
-        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
-
-        var query = _context.Links.AsNoTracking().Where(x => x.UserId == userId);
+        var query = _context.Links.AsNoTracking();
+        if (!User.HasClaim(Constants.InternalClaim, "true"))
+        {
+            // [Authorize] already guarantees one of the two schemes succeeded; for the JWT scheme
+            // that means Sub is always present and parseable.
+            var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+            query = query.Where(x => x.UserId == userId);
+        }
 
         var totalCount = await query.CountAsync(cancellationToken);
-        var items = await query
-            .OrderByDescending(x => x.CreatedAt)
-            .Skip((page - 1) * PageSize)
-            .Take(PageSize)
-            .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount))
-            .ToListAsync(cancellationToken);
-
         var totalPages = (int)Math.Ceiling(totalCount / (double)PageSize);
+
+        // (page - 1) * PageSize done in plain int arithmetic overflows to negative well before
+        // int.MaxValue (~43M at PageSize=50) - Postgres then rejects the resulting OFFSET, turning a
+        // page number past the end into an unhandled 500 instead of the empty result it should be.
+        // Computing in long side-steps the overflow, and skipping the query entirely once the offset
+        // is already past every row means Skip never sees a value large enough to overflow when cast
+        // back to int, and avoids a wasted round trip for a page that can only come back empty.
+        var skip = (long)(page - 1) * PageSize;
+        var items = skip >= totalCount
+            ? []
+            : await query
+                // CreatedAt alone isn't unique - two links created in the same request batch (or
+                // restored/seeded rows) can share it, and SQL gives no ordering guarantee among rows
+                // with an equal sort key, so a row could be duplicated across two pages or skipped
+                // when paging through results. Hash (the primary key) as a tie-breaker makes the
+                // order - and therefore which rows land on which page - fully deterministic.
+                .OrderByDescending(x => x.CreatedAt)
+                .ThenBy(x => x.Hash)
+                .Skip((int)skip)
+                .Take(PageSize)
+                .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount))
+                .ToListAsync(cancellationToken);
 
         return new LinksPageResponse(items, page, PageSize, totalCount, totalPages);
     }

@@ -54,13 +54,38 @@ public class DockerServiceAppendCappedTests
     }
 
     [Fact]
-    public void AppendCapped_ChunkLandsExactlyOnLimit_DoesNotTruncate()
+    public void AppendCapped_ChunkLandsExactlyOnLimit_TruncatesAndAppendsMarker()
     {
+        // Regression: with a plain `>` comparison, a chunk landing exactly on maxChars fell through
+        // to the plain-append path (builder ends up exactly at maxChars, reported as "not truncated
+        // yet"). The *next* call then hit "already at limit" and returned true immediately, with
+        // the truncation marker never appended at all - see the two-call test below for that
+        // specific failure mode.
         var builder = new StringBuilder();
 
         var truncated = DockerService.AppendCapped(builder, "12345", maxChars: 5);
 
-        Assert.False(truncated);
-        Assert.Equal("12345", builder.ToString());
+        Assert.True(truncated);
+        Assert.StartsWith("12345", builder.ToString());
+        Assert.Contains("truncated", builder.ToString());
+    }
+
+    [Fact]
+    public void AppendCapped_ChunkLandsExactlyOnLimitFollowedByAnotherChunk_MarkerIsNotSilentlyDropped()
+    {
+        // The actual production shape of the bug: StreamLogsWithProgressAsync only calls
+        // AppendCapped again while the previous call reported "not truncated" - a dropped marker on
+        // an exact-boundary chunk would otherwise mean every later chunk is silently discarded with
+        // no "[output truncated]" marker ever appended, unlike the normal (non-exact-boundary)
+        // truncation path.
+        var builder = new StringBuilder();
+
+        var firstResult = DockerService.AppendCapped(builder, "12345", maxChars: 5);
+        var secondResult = DockerService.AppendCapped(builder, "more text that should never appear", maxChars: 5);
+
+        Assert.True(firstResult);
+        Assert.True(secondResult);
+        Assert.Contains("truncated", builder.ToString());
+        Assert.DoesNotContain("more text", builder.ToString());
     }
 }

@@ -59,8 +59,7 @@ export async function apiFetch<TResponse>(
   })
 
   if (!response.ok) {
-    const message = await response.text().catch(() => '')
-    throw new ApiError(response.status, message || response.statusText)
+    throw new ApiError(response.status, await extractErrorMessage(response))
   }
 
   if (response.status === 204) {
@@ -68,4 +67,37 @@ export async function apiFetch<TResponse>(
   }
 
   return (await response.json()) as TResponse
+}
+
+// [ApiController]'s default content negotiation serializes even a plain-string Conflict("...")/
+// Unauthorized("...") body as JSON (a quoted string), and RFC 7807 ProblemDetails (Problem(...))
+// wraps the human-readable message in a `detail` field alongside type/title/status/instance that
+// aren't meant for a user to see. Either way the raw response body is not something to render
+// as-is - this unwraps both shapes down to a plain message, falling back to the raw text (then
+// statusText) for anything else, e.g. a proxy error page or an empty body.
+async function extractErrorMessage(response: Response): Promise<string> {
+  const text = await response.text().catch(() => '')
+  if (!text) {
+    return response.statusText
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed === 'string') {
+      return parsed
+    }
+    if (parsed && typeof parsed === 'object') {
+      const problem = parsed as { detail?: unknown; title?: unknown }
+      if (typeof problem.detail === 'string' && problem.detail) {
+        return problem.detail
+      }
+      if (typeof problem.title === 'string' && problem.title) {
+        return problem.title
+      }
+    }
+  } catch {
+    // Not JSON - fall through to the raw text below.
+  }
+
+  return text
 }

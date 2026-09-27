@@ -42,7 +42,7 @@ created in the first place):
 **Register / Login** (`AuthApi`)
 1. `POST /register` (or `/login`) with `{ email, password }` (+ `name` for register)
 2. Password hashed with `Microsoft.AspNetCore.Identity.PasswordHasher<T>` (PBKDF2, salt embedded in
-   the hash — no separate salt column needed, even though `User.Sault` still exists on the model)
+   the hash — no separate salt column needed, even though `User.Salt` still exists on the model)
 3. On success, a JWT is returned (`HS256`, claims: `sub`, `email`, `name`) — the frontend stores it
    in `localStorage` and decodes it client-side just to show the signed-in email. `LinkApi` also
    validates this same token (see the next section) — same signing key, checked in `Common.Constants`.
@@ -81,6 +81,11 @@ created in the first place):
 Backend comes up via `docker compose`, the frontend dev server opens in its own window, and a
 browser tab opens to `http://localhost:5173`. `.\scripts\stop-stack.ps1` shuts the backend down
 (`-Wipe` also drops the Postgres volume, for a clean-slate restart).
+
+> **Upgrading an existing checkout and every service fails with "database ... does not exist"?**
+> `infra/postgres/init-databases.sql` only runs against a brand-new `postgres-data` volume - if
+> you'd already run the stack before `users_db`/`links_db`/`clicks_db` existed, Postgres won't
+> retroactively create them. Run `.\scripts\stop-stack.ps1 -Wipe` and start the stack again.
 
 ### By hand, with curl
 
@@ -166,9 +171,10 @@ curl http://localhost:8081/health/ready  # -> Healthy, or a non-200 if Postgres/
 - **Click *metadata* doesn't exist yet.** The `Clicks` row itself (hash, in/outbound link, timestamp)
   is real — but user-agent/referrer/headers → Mongo `ClicksMeta` isn't built (Mongo isn't in the
   stack). See `../architecture.md`.
-- **No dead-letter queue.** Both consumers (`ShortenerService`, `TrafficService`) nack-and-requeue
-  forever on a persistent processing failure — a poison message would loop indefinitely rather than
-  landing somewhere for inspection.
+- **No dead-letter queue.** Both consumers (`ShortenerService`, `TrafficService`) give up on a
+  message after 5 failed delivery attempts (`RabbitMqConsumer.MaxDeliveryAttempts`) and nack it
+  without requeueing — bounded, so a poison message can no longer loop indefinitely, but with nowhere
+  configured to catch it, it's simply dropped rather than landing somewhere for inspection.
 - **`infra/rabbitmq/definitions.json` (relative to `sandbox/`) is not used.** The exchange/queue/
   binding topology is declared by the application itself (see
   `src/backend/Shared/Infrastructure/RabbitMqPublisher.cs` and `RabbitMqConsumer.cs`), not loaded

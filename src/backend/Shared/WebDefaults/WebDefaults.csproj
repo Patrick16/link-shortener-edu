@@ -13,4 +13,10 @@
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
 	</ItemGroup>
 
+	<ItemGroup>
+		<!-- InternalApiKeyAuthenticationHandler reads its header name/config key from
+		     Common.Constants, the same convention the Jwt* constants already follow there. -->
+		<ProjectReference Include="..\Common\Common.csproj" />
+	</ItemGroup>
+
 </Project>

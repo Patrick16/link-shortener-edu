@@ -91,9 +91,31 @@ public class TraceStore
     private void EvictOld()
     {
         var cutoff = DateTimeOffset.UtcNow - RetentionWindow;
-        while (_spans.TryPeek(out var oldest) && oldest.StartTime < cutoff)
+
+        // A plain peek-and-stop-at-head scan assumed enqueue order is non-decreasing in StartTime,
+        // but enqueue order is actually *arrival* order at /api/traces/ingest - concurrent POSTs
+        // from the 5 independently-batching traced services can enqueue an older span after a
+        // newer one (a batch that was briefly slow to export, a GC pause, otel-collector's own
+        // batching delay...). Once a stale span ends up behind any younger one in the queue, a
+        // head-only scan can never reach it again - it sits in _spans indefinitely. Draining the
+        // whole queue and re-enqueueing only what's still within the window is O(n), but n is
+        // bounded by RetentionWindow's span volume, not the store's whole lifetime - a small, known
+        // cost for actually bounding memory instead of an ordering assumption that doesn't hold
+        // under real concurrent ingestion. A concurrent Ingest() enqueuing mid-drain can have its
+        // new span picked up by this same drain and simply requeued at the end (harmless reordering,
+        // not data loss) - ConcurrentQueue's own Try* methods are individually thread-safe either way.
+        var stillLive = new List<TraceSpanRecord>();
+        while (_spans.TryDequeue(out var span))
         {
-            _spans.TryDequeue(out _);
+            if (span.StartTime >= cutoff)
+            {
+                stillLive.Add(span);
+            }
+        }
+
+        foreach (var span in stillLive)
+        {
+            _spans.Enqueue(span);
         }
     }
 

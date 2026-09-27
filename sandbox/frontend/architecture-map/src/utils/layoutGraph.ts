@@ -2,9 +2,13 @@ import dagre from '@dagrejs/dagre'
 import type { ArchComponent, ArchConnection } from '../types/architecture'
 
 // Matches the fixed size Diagram.tsx gives every node (see the comment there on why - skips
-// React Flow's async ResizeObserver measurement step).
-const NODE_WIDTH = 170
-const NODE_HEIGHT = 40
+// React Flow's async ResizeObserver measurement step). Exported so Diagram.tsx imports these
+// instead of duplicating the literals - the two used to just say "keep in sync" in a comment on
+// each side, with nothing enforcing it: a resize on one side with no matching edit on the other
+// left dagre laying out with a stale half-width, so every node rendered visibly off-center from
+// the edges dagre routed for it, with no compiler or test error to flag the mismatch.
+export const NODE_WIDTH = 170
+export const NODE_HEIGHT = 40
 
 // Hand-picked x/y per component stopped scaling once the graph passed ~15 nodes - every new HA
 // cluster (Postgres replicas, Redis Sentinel, Mongo's replica set) meant re-eyeballing the whole

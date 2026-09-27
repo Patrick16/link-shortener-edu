@@ -32,6 +32,7 @@ builder.Services.AddDbContextPool<DatabaseContext>(
 builder.Services.AddSingleton<IJwtTokenGenerator, JwtTokenGenerator>();
 // Scoped, not Singleton - it depends on the pooled (scoped) DatabaseContext.
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
+builder.Services.AddHostedService<RefreshTokenCleanupWorker>();
 
 builder.Services.AddApiExceptionHandling();
 builder.Services.AddHealthChecks()
@@ -66,7 +67,7 @@ if (app.Environment.IsDevelopment())
 }
 
 // First in the pipeline so it can catch exceptions thrown by anything downstream.
-app.UseExceptionHandler();
+app.UseApiExceptionHandling();
 
 app.UseHttpsRedirection();
 

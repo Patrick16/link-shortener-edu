@@ -14,10 +14,6 @@ export function createLink(originalLink: string): Promise<LinkResponse> {
   return apiFetch<LinkResponse>(LINK_API_URL, '/links', { method: 'POST', body: request, auth: true })
 }
 
-export function getLink(hash: string): Promise<LinkResponse> {
-  return apiFetch<LinkResponse>(LINK_API_URL, `/links/${encodeURIComponent(hash)}`)
-}
-
 // Requires auth: the backend rejects anonymous callers with 401, since there's no "your links"
 // to list without knowing who you are.
 export function getLinks(page = 1): Promise<LinksPage> {

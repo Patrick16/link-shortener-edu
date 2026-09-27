@@ -2,16 +2,20 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 
 namespace Infrastructure;
 
 public sealed class RabbitMqPublisher(
     IRabbitMqConnection connection,
-    IMessageFallbackStore fallbackStore) : IMessagePublisher, IAsyncDisposable
+    IMessageFallbackStore fallbackStore,
+    ILogger<RabbitMqPublisher> logger) : IMessagePublisher, IAsyncDisposable
 {
     private readonly IRabbitMqConnection _connection = connection;
     private readonly IMessageFallbackStore _fallbackStore = fallbackStore;
+    private readonly ILogger<RabbitMqPublisher> _logger = logger;
 
     // Bounded pool of already-open, already-exchange-declared channels, reused across publishes
     // instead of opening a channel + re-declaring the exchange + closing the channel on every single
@@ -23,6 +27,15 @@ public sealed class RabbitMqPublisher(
     private const int PoolCapacity = 16;
     private readonly SemaphoreSlim _slots = new(PoolCapacity, PoolCapacity);
     private readonly ConcurrentQueue<IChannel> _idleChannels = new();
+
+    // Every channel currently rented out (returned by RentChannelAsync, not yet passed to
+    // ReleaseChannelAsync) - without this, DisposeAsync can only see _idleChannels, so a channel
+    // held by an in-flight PublishAsync/TryRepublishAsync call at shutdown is never disposed. Access
+    // to this set is always paired with a _disposeLock check (see DisposeAsync/ReleaseChannelAsync)
+    // so "who disposes this channel" is decided exactly once even if a release races the shutdown.
+    private readonly HashSet<IChannel> _outstandingChannels = [];
+    private readonly Lock _disposeLock = new();
+    private bool _disposed;
 
     public async Task PublishAsync<TMessage>(TMessage message, string topic, CancellationToken cancellationToken)
     {
@@ -86,6 +99,10 @@ public sealed class RabbitMqPublisher(
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            // The only other trace of this is the OTel span above, which nothing but a trace backend
+            // sees - without a plain log line, "RabbitMQ is unreachable" looks identical in the logs
+            // to "nobody is posting links", since the caller falls back to SQLite and moves on.
+            _logger.LogWarning(ex, "Failed to publish message {MessageId} to topic {Topic} - falling back to local storage", messageId, topic);
             return false;
         }
         finally
@@ -114,6 +131,7 @@ public sealed class RabbitMqPublisher(
             {
                 if (idle.IsOpen)
                 {
+                    TrackOutstanding(idle);
                     return idle;
                 }
 
@@ -129,6 +147,7 @@ public sealed class RabbitMqPublisher(
                     ExchangeType.Topic,
                     durable: true,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
+                TrackOutstanding(channel);
                 return channel;
             }
             catch
@@ -151,6 +170,14 @@ public sealed class RabbitMqPublisher(
         }
     }
 
+    private void TrackOutstanding(IChannel channel)
+    {
+        lock (_disposeLock)
+        {
+            _outstandingChannels.Add(channel);
+        }
+    }
+
     // A channel that just faulted (broker hiccup, publish exception) is discarded rather than
     // pooled - RentChannelAsync creates a replacement lazily on the next call, same as the pool
     // starting empty.
@@ -158,11 +185,31 @@ public sealed class RabbitMqPublisher(
     {
         try
         {
-            if (healthy && channel.IsOpen)
+            // claimedByDispose: true means DisposeAsync's own lock already ran first and removed
+            // this channel from _outstandingChannels into ITS disposal list (see below) - in that
+            // case this call must not touch the channel at all, or both this call and DisposeAsync's
+            // loop would call DisposeAsync() on the same channel. shouldDispose/shouldEnqueue are
+            // decided in the same lock as that removal so the three outcomes ("I own it, keep it
+            // idle" / "I own it, dispose it" / "DisposeAsync already owns it") are mutually
+            // exclusive no matter how this races against a concurrent DisposeAsync call.
+            bool shouldDispose = false;
+            lock (_disposeLock)
             {
-                _idleChannels.Enqueue(channel);
+                var stillOutstanding = _outstandingChannels.Remove(channel);
+                if (stillOutstanding)
+                {
+                    if (!_disposed && healthy && channel.IsOpen)
+                    {
+                        _idleChannels.Enqueue(channel);
+                    }
+                    else
+                    {
+                        shouldDispose = true;
+                    }
+                }
             }
-            else
+
+            if (shouldDispose)
             {
                 await channel.DisposeAsync().ConfigureAwait(false);
             }
@@ -178,7 +225,28 @@ public sealed class RabbitMqPublisher(
 
     public async ValueTask DisposeAsync()
     {
-        while (_idleChannels.TryDequeue(out var channel))
+        // Snapshotting _outstandingChannels and setting _disposed under the same lock a racing
+        // ReleaseChannelAsync uses is what closes the actual bug this fixes: a publish still
+        // in-flight at shutdown holds a channel that isn't in _idleChannels yet, so draining only
+        // that queue (the old behavior) misses it - if its ReleaseChannelAsync call happens to run
+        // after this method already returned, the channel would be enqueued into a queue nothing
+        // ever drains again and leaked for the rest of the process's life. Every channel this method
+        // doesn't find in _outstandingChannels was already handed off to (and will be disposed by) a
+        // concurrent ReleaseChannelAsync instead - see the "stillOutstanding" check there.
+        List<IChannel> toDispose;
+        lock (_disposeLock)
+        {
+            _disposed = true;
+            toDispose = [.. _outstandingChannels];
+            _outstandingChannels.Clear();
+        }
+
+        while (_idleChannels.TryDequeue(out var idle))
+        {
+            toDispose.Add(idle);
+        }
+
+        foreach (var channel in toDispose)
         {
             await channel.DisposeAsync().ConfigureAwait(false);
         }

@@ -8,11 +8,13 @@ namespace TrafficService;
 
 // Consumes ClickTrackedEvent and persists it to Postgres Clicks (the core click record) and a
 // ClickMeta document in Mongo (browser/OS/device/geo — schema-less, grows independently of the
-// core record). Redelivery-safe on the Postgres side: the event carries its own Id (generated once
-// by RedirectApi), so a message whose Id is already stored is treated as already processed and
-// skipped entirely, rather than failing on the primary-key violation — Mongo isn't touched again
-// either in that case. The Mongo write itself is also independently idempotent (upsert by Id, see
-// MongoClickMetaStore), since the two writes aren't transactional with each other.
+// core record). The two writes aren't transactional with each other, so redelivery has to handle
+// each independently: the event carries its own Id (generated once by RedirectApi), so a message
+// whose Id is already in Postgres skips only the Postgres insert (avoiding the primary-key
+// violation) but still goes on to attempt the Mongo write every time - that write is itself
+// idempotent (upsert by Id, see MongoClickMetaStore), so retrying it on redelivery is always safe,
+// and skipping it just because Postgres already has the row would otherwise mean any redelivery
+// caused by a transient Mongo failure permanently loses that click's metadata.
 public sealed class ClickTrackedConsumer(
     IMessageConsumer consumer,
     IDbContextFactory<DatabaseContext> dbContextFactory,
@@ -40,12 +42,15 @@ public sealed class ClickTrackedConsumer(
         var alreadyStored = await context.Clicks.AnyAsync(x => x.Id == @event.Id, cancellationToken);
         if (alreadyStored)
         {
-            _logger.LogInformation("Click {ClickId} is already persisted, skipping redelivered message", @event.Id);
-            return;
+            _logger.LogInformation(
+                "Click {ClickId} is already persisted in Postgres - skipping the insert, but still " +
+                "re-attempting the Mongo ClickMeta write in case an earlier attempt failed", @event.Id);
         }
-
-        context.Clicks.Add(new Click(@event.Id, @event.ClickedAt, @event.InboundLink, @event.OutboundLink, @event.Hash));
-        await context.SaveChangesAsync(cancellationToken);
+        else
+        {
+            context.Clicks.Add(new Click(@event.Id, @event.ClickedAt, @event.InboundLink, @event.OutboundLink, @event.Hash));
+            await context.SaveChangesAsync(cancellationToken);
+        }
 
         var parsedUserAgent = _userAgentParser.Parse(@event.UserAgent);
         var geo = await _geoIpResolver.ResolveAsync(@event.IpAddress, cancellationToken);

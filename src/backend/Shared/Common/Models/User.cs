@@ -5,4 +5,4 @@ public record class User(
     string Name,
     string Email,
     string PasswordHash,
-    string Sault);
+    string Salt);

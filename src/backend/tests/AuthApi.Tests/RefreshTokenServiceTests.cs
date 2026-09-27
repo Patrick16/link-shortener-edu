@@ -148,34 +148,66 @@ public class RefreshTokenServiceTests : IDisposable
     public async Task RotateAsync_TwoConcurrentCallsWithSameToken_OnlyOneWinsAndBothTokensEndUpRevoked()
     {
         // Simulates a React StrictMode double-invoke or two browser tabs refreshing at the same
-        // instant: two separate requests (two separate DbContexts, same underlying database) both
-        // present the same still-valid raw token at once. Before the atomic ExecuteUpdateAsync fix,
-        // both could read RevokedAt == null before either saved, so both would "win" and the token
-        // family would silently fork instead of reuse detection ever firing.
-        await using var issuingContext = NewContext();
-        var issuingService = new RefreshTokenService(issuingContext, Config());
-        var userId = Guid.NewGuid();
-        var (rawToken, _) = await issuingService.IssueAsync(userId, CancellationToken.None);
+        // instant: two separate requests both present the same still-valid raw token at once. Before
+        // the atomic ExecuteUpdateAsync fix, both could read RevokedAt == null before either saved,
+        // so both would "win" and the token family would silently fork instead of reuse detection
+        // ever firing.
+        //
+        // True concurrency needs two independent connections to the same database, not two
+        // DbContexts sharing this class's one SqliteConnection field (Microsoft.Data.Sqlite doesn't
+        // support two commands running at once over a single connection object) - a real on-disk
+        // temp file with an explicit busy-timeout is what lets serviceA/serviceB's RotateAsync
+        // calls genuinely overlap and race through SQLite's own row-level locking, rather than the
+        // two calls' relative order being decided by this test's own await sequencing. Without the
+        // busy timeout, whichever call loses the race would fail outright with "database is locked"
+        // (SQLITE_BUSY) instead of just waiting its turn behind the winner's write lock.
+        var dbPath = Path.Combine(Path.GetTempPath(), $"refresh-token-race-{Guid.NewGuid()}.db");
+        try
+        {
+            DatabaseContext NewFileContext()
+            {
+                var options = new DbContextOptionsBuilder<DatabaseContext>()
+                    .UseSqlite($"Data Source={dbPath};Pooling=False;Default Timeout=5")
+                    .Options;
+                var context = new DatabaseContext(options);
+                context.Database.EnsureCreated();
+                return context;
+            }
 
-        await using var contextA = NewContext();
-        await using var contextB = NewContext();
-        var serviceA = new RefreshTokenService(contextA, Config());
-        var serviceB = new RefreshTokenService(contextB, Config());
+            await using var issuingContext = NewFileContext();
+            var issuingService = new RefreshTokenService(issuingContext, Config());
+            var userId = Guid.NewGuid();
+            var (rawToken, _) = await issuingService.IssueAsync(userId, CancellationToken.None);
 
-        var resultA = await serviceA.RotateAsync(rawToken, CancellationToken.None);
-        var resultB = await serviceB.RotateAsync(rawToken, CancellationToken.None);
+            await using var contextA = NewFileContext();
+            await using var contextB = NewFileContext();
+            var serviceA = new RefreshTokenService(contextA, Config());
+            var serviceB = new RefreshTokenService(contextB, Config());
 
-        // Exactly one of the two calls claimed the rotation - never both, and never neither.
-        var winners = new[] { resultA, resultB }.Count(r => r is not null);
-        Assert.Equal(1, winners);
+            var taskA = serviceA.RotateAsync(rawToken, CancellationToken.None);
+            var taskB = serviceB.RotateAsync(rawToken, CancellationToken.None);
+            var results = await Task.WhenAll(taskA, taskB);
 
-        // The "loser" treats the already-claimed token as a replay and burns every live token for
-        // this user, including the one the "winner" just issued - the family is dead, not forked.
-        await using var verifyContext = NewContext();
-        var liveTokens = await verifyContext.RefreshTokens
-            .Where(x => x.UserId == userId && x.RevokedAt == null)
-            .ToListAsync();
-        Assert.Empty(liveTokens);
+            // Exactly one of the two calls claimed the rotation - never both, and never neither.
+            var winners = results.Count(r => r is not null);
+            Assert.Equal(1, winners);
+
+            // The "loser" treats the already-claimed token as a replay and burns every live token
+            // for this user, including the one the "winner" just issued - the family is dead, not
+            // forked.
+            await using var verifyContext = NewFileContext();
+            var liveTokens = await verifyContext.RefreshTokens
+                .Where(x => x.UserId == userId && x.RevokedAt == null)
+                .ToListAsync();
+            Assert.Empty(liveTokens);
+        }
+        finally
+        {
+            if (File.Exists(dbPath))
+            {
+                File.Delete(dbPath);
+            }
+        }
     }
 
     [Fact]

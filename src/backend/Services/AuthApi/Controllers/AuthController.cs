@@ -31,27 +31,36 @@ public class AuthController(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var emailTaken = await _context.Users.AnyAsync(x => x.Email == request.Email, cancellationToken);
+        var normalizedEmail = NormalizeEmail(request.Email);
+        var emailTaken = await _context.Users.AnyAsync(x => x.Email == normalizedEmail, cancellationToken);
         if (emailTaken)
         {
-            return Problem(
-                detail: "A user with this email already exists.",
-                statusCode: StatusCodes.Status409Conflict,
-                title: "Email already registered.");
+            return EmailAlreadyRegistered();
         }
 
         // PasswordHasher.HashPassword needs a user instance for context but doesn't read its fields;
         // the real one (with its real Id) isn't in the database yet, so this is a throwaway stand-in.
-        var placeholder = new User(Guid.Empty, request.Name, request.Email, string.Empty, string.Empty);
+        var placeholder = new User(Guid.Empty, request.Name, normalizedEmail, string.Empty, string.Empty);
         var passwordHash = PasswordHasher.HashPassword(placeholder, request.Password);
 
         // PasswordHasher's own hash already embeds a random salt (PBKDF2, self-describing format) —
-        // Sault is unused here; kept as-is since it's an existing field on a shared model, not something
+        // Salt is unused here; kept as-is since it's an existing field on a shared model, not something
         // this change should redefine on its own. Worth revisiting if you want it removed.
-        var user = new User(Guid.NewGuid(), request.Name, request.Email, passwordHash, string.Empty);
+        var user = new User(Guid.NewGuid(), request.Name, normalizedEmail, passwordHash, string.Empty);
 
         _context.Users.Add(user);
-        await _context.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // The AnyAsync check above and this insert aren't atomic: two requests for the same email
+            // can both pass the check before either commits. The unique index on Email (DatabaseContext)
+            // then rejects the loser here instead of at the check, so translate that into the same 409
+            // the check normally returns rather than letting it surface as an unhandled 500.
+            return EmailAlreadyRegistered();
+        }
 
         await IssueRefreshCookieAsync(user.Id, cancellationToken);
         var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
@@ -65,7 +74,8 @@ public class AuthController(
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var user = await _context.Users.FirstOrDefaultAsync(x => x.Email == request.Email, cancellationToken);
+        var normalizedEmail = NormalizeEmail(request.Email);
+        var user = await _context.Users.FirstOrDefaultAsync(x => x.Email == normalizedEmail, cancellationToken);
         // Same "invalid email or password" response whether the email doesn't exist or the password
         // is wrong — telling those apart lets an attacker enumerate registered emails.
         if (user is null)
@@ -159,4 +169,15 @@ public class AuthController(
             detail: "Invalid email or password.",
             statusCode: StatusCodes.Status401Unauthorized,
             title: "Authentication failed.");
+
+    private ObjectResult EmailAlreadyRegistered() =>
+        Problem(
+            detail: "A user with this email already exists.",
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Email already registered.");
+
+    // Postgres string comparison is case-sensitive by default; normalizing on both write (Register)
+    // and read (Login, the duplicate-email check) keeps "Alice@x.com" and "alice@x.com" as one account
+    // instead of two, matching how users actually think of email addresses.
+    private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
 }

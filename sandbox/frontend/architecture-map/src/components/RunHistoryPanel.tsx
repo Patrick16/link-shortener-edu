@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { controlApi } from '../api/controlApi'
 import { TrafficReportView } from './TrafficReportView'
 import { CompareRunsModal } from './CompareRunsModal'
@@ -22,9 +22,24 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [deleting, setDeleting] = useState(false)
   const [comparing, setComparing] = useState(false)
+  const [deleteFailedCount, setDeleteFailedCount] = useState(0)
+  const [clearError, setClearError] = useState<string | null>(null)
+
+  // Bumped every time a clear actually completes, so a refresh() started before it (e.g. the
+  // lastSavedRunId effect firing right as the user clicks "Clear history") can tell it's now stale
+  // instead of applying its response after the fact - see clearHistory's own comment below.
+  const clearGenerationRef = useRef(0)
 
   function refresh() {
-    controlApi.listRuns().then(setRuns).catch(() => {})
+    const generation = clearGenerationRef.current
+    controlApi
+      .listRuns()
+      .then((fetched) => {
+        if (generation === clearGenerationRef.current) {
+          setRuns(fetched)
+        }
+      })
+      .catch(() => {})
   }
 
   useEffect(refresh, [])
@@ -54,11 +69,32 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
   }
 
   async function clearHistory() {
+    // "Clear" wipes every saved run in one click with no undo, unlike the single-/multi-select
+    // delete actions below it - a misclick here has a much larger blast radius than those.
+    if (!window.confirm(`Delete all ${runs.length} saved run${runs.length === 1 ? '' : 's'}? This cannot be undone.`)) {
+      return
+    }
+
     setClearing(true)
+    setClearError(null)
     try {
-      await controlApi.clearRuns()
-      setRuns([])
+      const { failedCount } = await controlApi.clearRuns()
+      // A clear that just completed always wins over whatever refresh() call was already in
+      // flight when the user clicked it - bumping this makes any such call's own response arrive
+      // as stale (see refresh()'s check) instead of silently repopulating runs with the pre-clear
+      // list a moment after this function already emptied it.
+      clearGenerationRef.current += 1
+      if (failedCount > 0) {
+        // Some files failed to delete server-side (see RunHistoryStore.ClearAsync) - re-fetch what
+        // actually survived instead of assuming everything was cleared.
+        setClearError(`Failed to delete ${failedCount} run${failedCount === 1 ? '' : 's'} - still shown below.`)
+        refresh()
+      } else {
+        setRuns([])
+      }
       setChecked(new Set())
+    } catch {
+      setClearError('Failed to clear run history - see the console for details.')
     } finally {
       setClearing(false)
     }
@@ -77,10 +113,20 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
     const ids = [...checked]
     if (ids.length === 0) return
     setDeleting(true)
+    setDeleteFailedCount(0)
     try {
-      await Promise.all(ids.map((id) => controlApi.deleteRun(id).catch(() => {})))
-      setRuns((prev) => prev.filter((r) => !checked.has(r.id)))
-      setChecked(new Set())
+      // Per-id success/failure, not just "did the batch throw" - a network blip or control-api
+      // restarting mid-delete on just one of several selected runs used to still remove every
+      // checked id from the visible list (Promise.all(...).catch(() => {}) swallowed the failure),
+      // making a run whose file was never actually deleted disappear as if it had been - it only
+      // reappeared on the next refresh, reading as the delete having "undone itself".
+      const results = await Promise.allSettled(ids.map((id) => controlApi.deleteRun(id)))
+      const succeeded = new Set(ids.filter((_, i) => results[i].status === 'fulfilled'))
+      const failedCount = ids.length - succeeded.size
+
+      setRuns((prev) => prev.filter((r) => !succeeded.has(r.id)))
+      setChecked((prev) => new Set([...prev].filter((id) => !succeeded.has(id))))
+      setDeleteFailedCount(failedCount)
     } finally {
       setDeleting(false)
     }
@@ -160,6 +206,7 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
           </button>
         )}
       </div>
+      {clearError && <p className="service-card-error">{clearError}</p>}
 
       {checked.size > 0 && (
         <div className="run-history-selection-toolbar">
@@ -173,6 +220,11 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
           <button className="run-history-selection-clear" onClick={() => setChecked(new Set())}>
             Clear selection
           </button>
+          {deleteFailedCount > 0 && (
+            <p className="service-card-error">
+              Failed to delete {deleteFailedCount} of the selected run{deleteFailedCount === 1 ? '' : 's'} - still shown below.
+            </p>
+          )}
         </div>
       )}
 

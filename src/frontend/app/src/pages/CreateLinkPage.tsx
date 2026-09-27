@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { buildShortUrl, createLink } from '../api/linkApi'
 import { ApiError } from '../api/client'
 import type { LinkResponse } from '../types'
@@ -9,6 +9,18 @@ export default function CreateLinkPage() {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Without this, a copy right before navigating away leaves the timeout armed - it still fires
+  // 2s later and calls setCopied on an unmounted component (a React "state update on an unmounted
+  // component" warning; a real leak if this page ever grows more such one-shot timers).
+  useEffect(() => {
+    return () => {
+      if (copiedTimeoutRef.current !== null) {
+        clearTimeout(copiedTimeoutRef.current)
+      }
+    }
+  }, [])
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault()
@@ -30,7 +42,10 @@ export default function CreateLinkPage() {
     try {
       await navigator.clipboard.writeText(url)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      if (copiedTimeoutRef.current !== null) {
+        clearTimeout(copiedTimeoutRef.current)
+      }
+      copiedTimeoutRef.current = setTimeout(() => setCopied(false), 2000)
     } catch {
       // Clipboard API can be unavailable (permissions, non-secure context) — not worth surfacing.
     }

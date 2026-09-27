@@ -113,6 +113,28 @@ public class TraceStoreTests
     }
 
     [Fact]
+    public void EvictOld_StaleSpanArrivesAfterANewerOneInTheSameBatch_IsStillEvicted()
+    {
+        // Regression: a peek-and-stop-at-head scan assumed enqueue order matches StartTime order,
+        // but enqueue order is actually arrival order - concurrent POSTs from 5 independently-
+        // batching services (or, as reproduced here, just two spans within one Ingest call) can put
+        // an older span behind a newer one in queue order. Once that happens, a head-only eviction
+        // scan sees the still-valid newer span at the head and stops immediately, never reaching the
+        // already-stale span sitting right behind it - it would then never be evicted, ever.
+        var sut = new TraceStore();
+        var now = DateTimeOffset.UtcNow;
+        var staleTime = now.AddMinutes(-20); // outside the 15-minute retention window
+        sut.Ingest(Request("LinkApi",
+            ("newer", UnixNano(now), UnixNano(now.AddMilliseconds(10))),
+            ("stale", UnixNano(staleTime), UnixNano(staleTime.AddMilliseconds(10)))));
+
+        var spans = sut.GetSpansBetween(DateTimeOffset.MinValue, DateTimeOffset.MaxValue);
+
+        Assert.DoesNotContain(spans, s => s.SpanName == "stale");
+        Assert.Contains(spans, s => s.SpanName == "newer");
+    }
+
+    [Fact]
     public void GetHopStatsBetween_NoSpansInWindow_ReturnsEmpty()
     {
         var sut = new TraceStore();

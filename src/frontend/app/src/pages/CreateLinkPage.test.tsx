@@ -85,4 +85,27 @@ describe('CreateLinkPage', () => {
     expect(writeText).toHaveBeenCalledWith(linkApi.buildShortUrl('abc12345'))
     expect(await screen.findByRole('button', { name: 'Copied!' })).toBeInTheDocument()
   })
+
+  it('clears the pending "Copied!" reset timeout on unmount', async () => {
+    // Regression: unmounting within the 2s "Copied!" window used to leave the timeout armed - it
+    // still fired and called setState on an unmounted component (a React warning, and the kind of
+    // pattern that becomes a real leak if this page grows more one-shot timers).
+    const user = userEvent.setup()
+    vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined)
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+    vi.mocked(linkApi.createLink).mockResolvedValue({
+      shortenLink: 'abc12345',
+      createdAt: '2099-01-01T00:00:00Z',
+    })
+    const { unmount } = render(<CreateLinkPage />)
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+    await screen.findByRole('link', { name: linkApi.buildShortUrl('abc12345') })
+    await user.click(screen.getByRole('button', { name: 'Copy' }))
+    await screen.findByRole('button', { name: 'Copied!' })
+
+    unmount()
+
+    expect(clearTimeoutSpy).toHaveBeenCalled()
+  })
 })

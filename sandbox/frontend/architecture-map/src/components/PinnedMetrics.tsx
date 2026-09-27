@@ -89,7 +89,27 @@ export function PinnedMetrics({ pinnedIds, metaById, knownServiceIds, containers
     if (key !== sortKey) {
       return null
     }
-    return <span className="pinned-metrics-sort-arrow">{sortDir === 'desc' ? '▾' : '▴'}</span>
+    // aria-hidden: this glyph is purely decorative once the button's own aria-label (below) spells
+    // out the same state in words - without it, a screen reader that ever exposes the button's
+    // visible text alongside the label would read the raw arrow character with no meaning attached.
+    return (
+      <span className="pinned-metrics-sort-arrow" aria-hidden="true">
+        {sortDir === 'desc' ? '▾' : '▴'}
+      </span>
+    )
+  }
+
+  // Describes the column's current sort state in words instead of relying on the visual ▾/▴ glyph
+  // alone - a screen-reader user tabbing to one of these buttons used to hear only "CPU %, button"
+  // with no indication the column was sortable, which one was active, or which direction was
+  // applied (unlike the adjacent collapse button, which already carries its own aria-label/title).
+  function sortAriaLabel(label: string, key: SortKey) {
+    if (key !== sortKey) {
+      return `Sort by ${label}`
+    }
+    const current = sortDir === 'desc' ? 'descending' : 'ascending'
+    const next = sortDir === 'desc' ? 'ascending' : 'descending'
+    return `Sort by ${label}, currently sorted ${current}. Activate to sort ${next}.`
   }
 
   const rows: Row[] = pinnedIds
@@ -146,13 +166,25 @@ export function PinnedMetrics({ pinnedIds, metaById, knownServiceIds, containers
       {!collapsed && (
         <div className="pinned-metrics-grid">
           <span className="pinned-metrics-col-header" />
-          <button className="pinned-metrics-col-header pinned-metrics-sort-btn" onClick={() => handleSortClick('cpuPercent')}>
+          <button
+            className="pinned-metrics-col-header pinned-metrics-sort-btn"
+            onClick={() => handleSortClick('cpuPercent')}
+            aria-label={sortAriaLabel('CPU %', 'cpuPercent')}
+          >
             CPU %{sortIndicator('cpuPercent')}
           </button>
-          <button className="pinned-metrics-col-header pinned-metrics-sort-btn" onClick={() => handleSortClick('ramMb')}>
+          <button
+            className="pinned-metrics-col-header pinned-metrics-sort-btn"
+            onClick={() => handleSortClick('ramMb')}
+            aria-label={sortAriaLabel('RAM MB', 'ramMb')}
+          >
             RAM MB{sortIndicator('ramMb')}
           </button>
-          <button className="pinned-metrics-col-header pinned-metrics-sort-btn" onClick={() => handleSortClick('tcp')}>
+          <button
+            className="pinned-metrics-col-header pinned-metrics-sort-btn"
+            onClick={() => handleSortClick('tcp')}
+            aria-label={sortAriaLabel('TCP', 'tcp')}
+          >
             TCP{sortIndicator('tcp')}
           </button>
           <span className="pinned-metrics-col-header" />

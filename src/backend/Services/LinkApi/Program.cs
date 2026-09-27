@@ -2,6 +2,7 @@ using System.Text;
 using Common;
 using Infrastructure;
 using LinkApi;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -64,10 +65,12 @@ builder.Services.AddCors(options =>
         policy.WithOrigins(corsOrigins).AllowAnyMethod().AllowAnyHeader());
 });
 
-// Authentication is optional here — nothing in this service has [Authorize], so an anonymous
-// request is never rejected. This only lets CreateLink read the caller's userId from a valid
-// Bearer token when one is present. Same signing key/issuer/audience config keys AuthApi issues
-// with (see Common.Constants) — they have to match or every token would fail validation here.
+// CreateLink has no [Authorize] - an anonymous request is never rejected there, this only lets it
+// read the caller's userId from a valid Bearer token when one is present. GetLinks does require
+// [Authorize] (per-user listing); it also accepts the InternalApiKey scheme below so a genuinely
+// internal, non-user caller (control-api's data-pool preload) can get unscoped access instead.
+// Jwt* config keys are shared with AuthApi, which issues the tokens (see Common.Constants) — they
+// have to match or every token would fail validation here.
 var jwtSigningKey = builder.Configuration[Constants.JwtSigningKeySection];
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -86,7 +89,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSigningKey ?? string.Empty)),
         };
-    });
+    })
+    .AddScheme<AuthenticationSchemeOptions, InternalApiKeyAuthenticationHandler>(
+        Constants.InternalApiKeyAuthenticationScheme, null);
 
 var app = builder.Build();
 
@@ -98,7 +103,7 @@ if (app.Environment.IsDevelopment())
 }
 
 // First in the pipeline so it can catch exceptions thrown by anything downstream.
-app.UseExceptionHandler();
+app.UseApiExceptionHandling();
 
 app.UseHttpsRedirection();
 

@@ -109,6 +109,26 @@ public class RedirectControllerTests
     }
 
     [Fact]
+    public async Task RedirectToOrigin_CacheMiss_FetchDoesNotTrackReturnedEntity()
+    {
+        // The DB fetch behind a cache miss is a pure read on this hot path - the entity is only ever
+        // serialized into the cache and returned to the client, never mutated or saved back. Without
+        // AsNoTracking, EF's change tracker snapshots it anyway, for no benefit, on every cache miss.
+        await using var context = NewContext();
+        var stored = new Link("abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, null);
+        context.Links.Add(stored);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+        var sut = NewController(context, out var cache, out _, out _);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task<Link?>>, CancellationToken>((_, fetch, _) => fetch());
+
+        await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        Assert.Empty(context.ChangeTracker.Entries());
+    }
+
+    [Fact]
     public async Task RedirectToOrigin_LinkNotFound_ReturnsNotFoundAndDoesNotPublishOrIncrement()
     {
         await using var context = NewContext();

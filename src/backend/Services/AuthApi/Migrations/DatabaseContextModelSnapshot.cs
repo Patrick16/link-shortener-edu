@@ -72,7 +72,7 @@ namespace AuthApi.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("Sault")
+                    b.Property<string>("Salt")
                         .IsRequired()
                         .HasColumnType("text");
 

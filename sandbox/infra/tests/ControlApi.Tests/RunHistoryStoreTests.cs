@@ -78,6 +78,47 @@ public class RunHistoryStoreTests : IDisposable
         Assert.Equal(snapshot.Report.HttpRequests, loaded.Report.HttpRequests);
     }
 
+    [Theory]
+    [InlineData("../../etc/passwd")]
+    [InlineData("..%2F..%2Fscenarios%2Fsome-saved-scenario")]
+    [InlineData("../custom-scenarios")]
+    [InlineData("run.1")]
+    [InlineData("/etc/passwd")]
+    public async Task GetAsync_PathTraversalId_ReturnsNullWithoutTouchingTheFilesystem(string id)
+    {
+        // Regression: PathFor used to build the target path from the id with no validation at all -
+        // Path.Combine happily resolves "../"-containing ids outside _dir, and control-api has no
+        // authentication, so this was a real arbitrary-file-read (here) / arbitrary-file-delete
+        // (DeleteAsync, below) primitive reachable from any local process.
+        var sut = NewSut();
+
+        var loaded = await sut.GetAsync(id, CancellationToken.None);
+
+        Assert.Null(loaded);
+    }
+
+    [Theory]
+    [InlineData("../../etc/passwd")]
+    [InlineData("..%2F..%2Fscenarios%2Fsome-saved-scenario")]
+    [InlineData("../custom-scenarios")]
+    [InlineData("run.1")]
+    [InlineData("/etc/passwd")]
+    public async Task DeleteAsync_PathTraversalId_ReturnsFalseWithoutDeletingAnything(string id)
+    {
+        var sut = NewSut();
+        // A real file that a traversal id could plausibly reach for - ScenarioStore keeps
+        // custom-scenarios.json directly in the same DataDir that RunHistoryStore's own "runs"
+        // subdirectory lives under, so "../custom-scenarios.json" from inside "runs" would reach it.
+        // Proves it's untouched, not just that the literal traversal path itself survives.
+        var sentinelFile = Path.Combine(_tempDir, "custom-scenarios.json");
+        await File.WriteAllTextAsync(sentinelFile, "[]");
+
+        var deleted = await sut.DeleteAsync(id, CancellationToken.None);
+
+        Assert.False(deleted);
+        Assert.True(File.Exists(sentinelFile));
+    }
+
     [Fact]
     public async Task GetAsync_UnknownId_ReturnsNull()
     {
@@ -127,6 +168,73 @@ public class RunHistoryStoreTests : IDisposable
         var runs = await sut.ListAsync(CancellationToken.None);
 
         Assert.Equal(["run-good"], runs.Select(r => r.Id));
+    }
+
+    [Fact]
+    public async Task ListAsync_SummaryIsCorrectEvenWithALargeRawOutputField()
+    {
+        // ReadSummaryAsync (what ListAsync now uses instead of a full RunSnapshot deserialization)
+        // must still extract the right scalars even though it deliberately never reads RawOutput -
+        // this is the direct correctness check for that change, not just a "does it still work" one.
+        var sut = NewSut();
+        var baseSnapshot = NewSnapshot("run-1");
+        var snapshot = baseSnapshot with { Report = baseSnapshot.Report with { RawOutput = new string('x', 500_000) } };
+        await sut.SaveAsync(snapshot, CancellationToken.None);
+
+        var runs = await sut.ListAsync(CancellationToken.None);
+
+        var summary = Assert.Single(runs);
+        Assert.Equal("run-1", summary.Id);
+        Assert.Equal(100, summary.HttpRequests);
+        Assert.Equal(0, summary.FailedRequests);
+        Assert.Equal(0, summary.ExitCode);
+        Assert.Equal(10, summary.HttpRequestRate);
+        Assert.Equal("smoke-test", summary.Scenario);
+    }
+
+    [Fact]
+    public async Task GetAsync_ConcurrentWithClearAsync_NeverThrowsUnhandled()
+    {
+        // Regression: GetAsync used to check File.Exists then File.OpenRead with no lock at all,
+        // racing SaveAsync's stale-file cleanup (and, once added, DeleteAsync/ClearAsync) - a delete
+        // landing between those two calls threw FileNotFoundException instead of GetAsync returning
+        // null. Now that GetAsync takes the same _lock as Save/Delete/Clear, running many of each
+        // concurrently must never throw regardless of interleaving.
+        var sut = NewSut();
+        await sut.SaveAsync(NewSnapshot("run-1"), CancellationToken.None);
+
+        var tasks = new List<Task>();
+        for (var i = 0; i < 50; i++)
+        {
+            tasks.Add(sut.GetAsync("run-1", CancellationToken.None));
+            tasks.Add(sut.ClearAsync(CancellationToken.None));
+        }
+
+        await Task.WhenAll(tasks);
+    }
+
+    [Fact]
+    public async Task ClearAsync_OneFileLockedByAnotherHandle_DeletesTheRestAndReportsFailedCount()
+    {
+        // Regression: File.Delete inside the loop had no try/catch, unlike ListAsync's own per-file
+        // catch for a corrupt file. A single delete throwing (permissions, or here, a file another
+        // process/handle still has open) used to abort the whole loop, leaving every run after it
+        // in iteration order still on disk while everything before it was already gone.
+        var sut = NewSut();
+        await sut.SaveAsync(NewSnapshot("run-locked"), CancellationToken.None);
+        await sut.SaveAsync(NewSnapshot("run-a"), CancellationToken.None);
+        await sut.SaveAsync(NewSnapshot("run-b"), CancellationToken.None);
+        var lockedPath = Path.Combine(_tempDir, "runs", "run-locked.json");
+        // FileShare.Read (not None): still lets ListAsync's own File.OpenRead succeed below - the
+        // point is to block only the delete (Windows requires FileShare.Delete from every other open
+        // handle before a file can be removed), not every other access to the file.
+        using var lockHandle = new FileStream(lockedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        var failedCount = await sut.ClearAsync(CancellationToken.None);
+
+        Assert.Equal(1, failedCount);
+        var remaining = await sut.ListAsync(CancellationToken.None);
+        Assert.Equal(["run-locked"], remaining.Select(r => r.Id));
     }
 
     [Fact]

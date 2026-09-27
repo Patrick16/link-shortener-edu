@@ -149,6 +149,29 @@ public class LinksControllerTests
     }
 
     [Fact]
+    public async Task GetLinks_InternalApiKeyCaller_ReturnsEveryUsersLinksUnfiltered()
+    {
+        // The InternalApiKey scheme grants control-api's data-pool preload unscoped access - a
+        // broad sample across every user's links, since a per-user JWT could never express that.
+        // The controller distinguishes it from a normal JWT-authenticated caller purely by the
+        // Constants.InternalClaim claim, which InternalApiKeyAuthenticationHandler is what actually
+        // attaches in production - this test drives the controller with that same claim directly,
+        // the same way the JWT-authenticated tests below drive it with a Sub claim.
+        await using var context = NewContext();
+        context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, Guid.NewGuid()));
+        context.Links.Add(new Link("bbb22222", "https://b.example", "bbb22222", DateTime.UtcNow, Guid.NewGuid()));
+        context.Links.Add(new Link("ccc33333", "https://c.example", "ccc33333", DateTime.UtcNow, null));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(Constants.InternalClaim, "true")], "InternalApiKey");
+        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var result = await sut.GetLinks(page: 1, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        Assert.Equal(3, response.TotalCount);
+    }
+
+    [Fact]
     public async Task GetLinks_SecondPage_SkipsFirstPageSize()
     {
         var userId = Guid.NewGuid();
@@ -168,6 +191,56 @@ public class LinksControllerTests
         Assert.Equal(60, response.TotalCount);
         Assert.Equal(2, response.TotalPages);
         Assert.Equal(10, response.Items.Count);
+    }
+
+    [Fact]
+    public async Task GetLinks_PageFarBeyondTheEnd_ReturnsEmptyItemsInsteadOfOverflowing()
+    {
+        // Regression: (page - 1) * PageSize in plain int arithmetic overflows to negative well
+        // before int.MaxValue (~43M at PageSize=50) - Postgres then rejects the resulting OFFSET,
+        // so a page number past the end used to 500 instead of coming back as an empty page.
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, userId));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var result = await sut.GetLinks(page: 99_999_999, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        Assert.Equal(1, response.TotalCount);
+        Assert.Empty(response.Items);
+    }
+
+    [Fact]
+    public async Task GetLinks_LinksShareTheSameCreatedAt_OrderingIsStableAcrossPages()
+    {
+        // Regression: ordering by CreatedAt alone gives SQL no tie-breaker for equal timestamps, so
+        // a row could be duplicated across two pages or skipped when paging through results. Every
+        // link here shares the exact same CreatedAt to force the tie; Hash as a secondary sort key
+        // makes page 1 + page 2 partition the set with no overlap and no gap regardless of it.
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        var createdAt = DateTime.UtcNow;
+        var hashes = Enumerable.Range(0, 60).Select(i => $"h{i:D7}").ToList();
+        foreach (var hash in hashes)
+        {
+            context.Links.Add(new Link(hash, $"https://example.com/{hash}", hash, createdAt, userId));
+        }
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var page1 = Assert.IsType<LinksPageResponse>((await sut.GetLinks(page: 1, CancellationToken.None)).Value);
+        var page2 = Assert.IsType<LinksPageResponse>((await sut.GetLinks(page: 2, CancellationToken.None)).Value);
+
+        var page1Hashes = page1.Items.Select(i => i.ShortenLink).ToList();
+        var page2Hashes = page2.Items.Select(i => i.ShortenLink).ToList();
+        Assert.Equal(50, page1Hashes.Count);
+        Assert.Equal(10, page2Hashes.Count);
+        Assert.Empty(page1Hashes.Intersect(page2Hashes));
+        Assert.Equal(hashes.Count, page1Hashes.Concat(page2Hashes).Distinct().Count());
     }
 
     [Fact]

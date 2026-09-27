@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Formats.Tar;
 using System.Globalization;
@@ -117,6 +118,37 @@ public class DockerService : IDockerService
     private readonly string _pgcatConfigDir;
     private readonly ILogger<DockerService> _logger;
 
+    // `docker compose up --scale`/`up --force-recreate` isn't designed to be run concurrently
+    // against the same project - two overlapping invocations can race on the same container-number
+    // slots (one errors with "container name already in use" / "no such container") or, for the
+    // toggle handlers that pass extraEnv, race on which value docker-compose's ${VAR} interpolation
+    // actually picks up for a service both calls happen to touch. Serializing every compose
+    // invocation through this instance-wide gate (DockerService is a singleton, so one gate covers
+    // every request) turns "two concurrent runs corrupting each other's state" into "one queued
+    // behind the other, each seeing a consistent project state" - a real cost (a scale call can wait
+    // on an unrelated toggle's recreate) accepted over the alternative of silently wrong results.
+    private readonly SemaphoreSlim _composeGate = new(1, 1);
+
+    // Separate from _composeGate: that one only serializes the docker-compose subprocess itself,
+    // not a whole read-then-write sequence around it. Two kinds of sequences share this gate:
+    // (1) each toggle handler's "read CurrentStandingEnv, recreate, write the field back" - without
+    // this, two concurrent toggle requests (same or different axis) can each snapshot
+    // CurrentStandingEnv() before either has written back its new value, then queue at _composeGate
+    // in either order, so whichever runs its docker-compose second does so with a stale env
+    // snapshot that doesn't include the first call's change, silently reverting it on the shared
+    // container even though the first call already reported success; and (2) BuildPreserveScaleArgsAsync's
+    // "read each service's current replica count via CountReplicasAsync, then recreate with
+    // --scale <that count>" - ScaleAsync also takes this same gate (not because it reads
+    // CurrentStandingEnv itself, but because its write is exactly what a toggle handler's read can
+    // otherwise go stale against) so a scale-up can never land in the gap between one of those
+    // reads and its later --scale re-assertion, which would otherwise reassert the pre-scale count
+    // and silently undo the scale-up. Together these make each gated call's full read-recreate-write
+    // atomic relative to every other one, so GetInfraStatus()/the per-axis getters/the actual running
+    // replica count always match whichever call was actually applied last. Held across the
+    // (also-gated) RunComposeAsync call without deadlocking, since it's a distinct SemaphoreSlim
+    // instance, not a re-entrant acquisition of _composeGate.
+    private readonly SemaphoreSlim _toggleGate = new(1, 1);
+
     // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
     // tool despite not surviving a control-api restart.
     private bool _nginxBypassed;
@@ -137,6 +169,27 @@ public class DockerService : IDockerService
     // Mirrors Npgsql's own default (and the shipped ${NPGSQL_MAX_POOL_SIZE:-100} fallback).
     private int _npgsqlPoolSize = 100;
 
+    // Every axis below recreates a service `docker compose up --force-recreate` can also touch via
+    // a DIFFERENT toggle: DbTouchingServices (pgcat, cache, npgsql-pool-size) and
+    // RabbitMqConsumingServices/traffic-service (rabbitmq-prefetch, mongo-read-preference) overlap
+    // on shortener-service/traffic-service, and DbTouchingServices/CacheUsingServices overlap on
+    // link-api/redirect-api. `docker compose up` only applies the env vars THIS ONE invocation
+    // passes - every other var falls back to its docker-compose.yml default - so recreating a
+    // shared service with only one axis's own variable silently reverts every other axis to its
+    // default for that service, even though nothing else changed and the UI still shows the old
+    // toggle's value. Every handler below merges this full current state and overrides only its own
+    // key before recreating, so triggering any one toggle re-applies every other toggle's current
+    // value too instead of quietly undoing it.
+    internal Dictionary<string, string> CurrentStandingEnv() => new()
+    {
+        ["DB_HOST"] = _pgcatEnabled ? "pgcat" : "postgres",
+        ["DB_PORT"] = _pgcatEnabled ? "6432" : "5432",
+        ["CACHE_ENABLED"] = _cacheEnabled ? "true" : "false",
+        ["NPGSQL_MAX_POOL_SIZE"] = _npgsqlPoolSize.ToString(),
+        ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString(),
+        ["MONGO_READ_PREFERENCE"] = _mongoReadPreference,
+    };
+
     public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
     {
         _logger = logger;
@@ -149,6 +202,19 @@ public class DockerService : IDockerService
         var endpoint = configuration["Docker:Endpoint"]
             ?? (OperatingSystem.IsWindows() ? "npipe://./pipe/docker_engine" : "unix:///var/run/docker.sock");
         _client = new DockerClientConfiguration(new Uri(endpoint)).CreateClient();
+
+        // LinkApi's GET /Links requires either a per-user Bearer token or this shared secret (see
+        // src/backend/Shared/WebDefaults/InternalApiKeyAuthenticationHandler.cs) - control-api has
+        // no user session/JWT of its own, and the whole point of this call is an unscoped sample
+        // across every user's links, which a per-user token couldn't grant even if control-api
+        // somehow had one. Header name/config key are duplicated as plain strings rather than a
+        // shared reference, deliberately - sandbox/ (this tool) and src/ (the product) are kept
+        // decoupled on purpose (see docs/README.md); the docker-compose.yml internal-api-key anchor
+        // is what actually keeps the two sides' secret value in sync, not a shared constant.
+        if (configuration["Internal:ApiKey"] is { } internalApiKey)
+        {
+            _httpClient.DefaultRequestHeaders.Add("X-Internal-Api-Key", internalApiKey);
+        }
     }
 
     public async Task<IReadOnlyList<ManagedContainer>> ListContainersAsync(CancellationToken ct)
@@ -378,7 +444,7 @@ public class DockerService : IDockerService
         cmd.Add("/scripts/scenario.js");
 
         // Nginx bypass only changes where k6 itself sends requests (LINK_API_URL/REDIRECT_API_URL
-        // env vars the scripts already read - see smoke.js) - nginx keeps running either way, so
+        // env vars flow.js already reads) - nginx keeps running either way, so
         // the frontend app's own manual use of it is unaffected. Bypassing means requests go
         // straight to the compose service name, which Docker's embedded DNS still round-robins
         // across replicas per-connection, but k6 keeps a connection alive per VU, so in practice
@@ -419,34 +485,77 @@ public class DockerService : IDockerService
             HostConfig = new HostConfig { NetworkMode = _composeNetwork },
         }, ct);
 
-        await using (var tarStream = await BuildScriptTarAsync(scriptPath, ct))
+        // Everything from here on has a running (or about to run) k6 container on its hands - a
+        // client aborting the request (tab closed, fetch aborted) cancels ct mid-await, or any of
+        // these calls can just throw. Without cleanup on that path, the container is never stopped
+        // or removed: it keeps generating its full --vus/--duration load against the stack after
+        // the request that started it is gone, then lingers as clutter afterward. Every exit from
+        // this point must go through the catch below.
+        try
         {
-            // The destination itself must already exist for the Docker API to accept the
-            // extraction - "/" always does, and the tar entry's own "scripts/scenario.js" path
-            // makes the extraction create that subdirectory as it unpacks.
-            await _client.Containers.ExtractArchiveToContainerAsync(
-                created.ID,
-                new ContainerPathStatParameters { Path = "/" },
-                tarStream,
-                ct);
+            await using (var tarStream = await BuildScriptTarAsync(scriptPath, ct))
+            {
+                // The destination itself must already exist for the Docker API to accept the
+                // extraction - "/" always does, and the tar entry's own "scripts/scenario.js" path
+                // makes the extraction create that subdirectory as it unpacks.
+                await _client.Containers.ExtractArchiveToContainerAsync(
+                    created.ID,
+                    new ContainerPathStatParameters { Path = "/" },
+                    tarStream,
+                    ct);
+            }
+
+            _logger.LogWarning(
+                "Running k6 scenario {Scenario} ({Vus} VUs{Mode}) as {ContainerId}",
+                request.Scenario, request.Vus,
+                targetIterations is { } t ? $", {t} iterations" : request.Stages is { Count: > 0 } s ? $", {totalSeconds}s, {s.Count} stages" : $", {totalSeconds}s",
+                created.ID);
+
+            await _client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
+
+            var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, targetIterations, onProgress, ct);
+
+            var inspect = await _client.Containers.InspectContainerAsync(created.ID, ct);
+            var stepIds = resolvedSteps.Select(s => s.Id).Distinct().ToList();
+            var report = await ReadSummaryAsync(created.ID, request.Scenario, stepIds, inspect.State.ExitCode, output, ct);
+            await _client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
+
+            return report;
+        }
+        catch
+        {
+            await TryStopAndRemoveContainerAsync(created.ID);
+            throw;
+        }
+    }
+
+    // Best-effort cleanup for a k6 container abandoned by an exception or cancellation partway
+    // through RunTrafficAsync. Uses CancellationToken.None deliberately - the caller's ct may
+    // itself be the cancellation that got us here, and stopping/removing with an already-cancelled
+    // token would just throw immediately, leaving the container running. Each step is independent
+    // and swallows its own failure (already stopped/removed, or the daemon is unreachable) so a
+    // failed stop doesn't skip the remove attempt.
+    private async Task TryStopAndRemoveContainerAsync(string containerId)
+    {
+        try
+        {
+            await _client.Containers.StopContainerAsync(
+                containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to stop abandoned k6 container {ContainerId} during cleanup", containerId);
         }
 
-        _logger.LogWarning(
-            "Running k6 scenario {Scenario} ({Vus} VUs{Mode}) as {ContainerId}",
-            request.Scenario, request.Vus,
-            targetIterations is { } t ? $", {t} iterations" : request.Stages is { Count: > 0 } s ? $", {totalSeconds}s, {s.Count} stages" : $", {totalSeconds}s",
-            created.ID);
-
-        await _client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
-
-        var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, targetIterations, onProgress, ct);
-
-        var inspect = await _client.Containers.InspectContainerAsync(created.ID, ct);
-        var stepIds = resolvedSteps.Select(s => s.Id).Distinct().ToList();
-        var report = await ReadSummaryAsync(created.ID, request.Scenario, stepIds, inspect.State.ExitCode, output, ct);
-        await _client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
-
-        return report;
+        try
+        {
+            await _client.Containers.RemoveContainerAsync(
+                containerId, new ContainerRemoveParameters { Force = true }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to remove abandoned k6 container {ContainerId} during cleanup", containerId);
+        }
     }
 
     // Dispatches on the source id so adding a second DataSourceDefinition later only means adding a
@@ -476,9 +585,15 @@ public class DockerService : IDockerService
             HttpResponseMessage response;
             try
             {
+                // The default HttpClient request timeout (100s) expires as a TaskCanceledException/
+                // OperationCanceledException, not HttpRequestException - without also catching that,
+                // a partitioned/100%-packet-loss link-api (this app's own chaos "Partition" control)
+                // hangs here for ~100s and then throws uncaught, aborting the entire traffic run
+                // instead of the graceful "pool ends up smaller, run still starts with the fixture
+                // fallback" behavior this method's own design intends.
                 response = await _httpClient.GetAsync($"{baseUrl}/Links?page={page}", ct);
             }
-            catch (HttpRequestException ex)
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
             {
                 _logger.LogWarning(ex, "Fetching link pool page {Page} failed - stopping with {Count} collected", page, hashes.Count);
                 break;
@@ -487,6 +602,9 @@ public class DockerService : IDockerService
             using var responseDisposer = response;
             if (!response.IsSuccessStatusCode)
             {
+                _logger.LogWarning(
+                    "Fetching link pool page {Page} returned {StatusCode} - stopping with {Count} collected",
+                    page, response.StatusCode, hashes.Count);
                 break;
             }
 
@@ -619,7 +737,12 @@ public class DockerService : IDockerService
             return true;
         }
 
-        if (builder.Length + chunk.Length > maxChars)
+        // >= , not >: a chunk that lands exactly on the boundary must also take this branch. With
+        // a plain >, that chunk fell through to the plain-append path below with the builder now
+        // sitting exactly at maxChars but reported as "not truncated yet" - the *next* call would
+        // then hit the first branch above (builder.Length >= maxChars) and return true immediately,
+        // with the truncation marker never appended at all.
+        if (builder.Length + chunk.Length >= maxChars)
         {
             builder.Append(chunk, 0, Math.Max(0, maxChars - builder.Length));
             builder.Append(RawOutputTruncatedMarker);
@@ -643,11 +766,17 @@ public class DockerService : IDockerService
             // populated (two samples internally), which is what the CPU% formula below needs -
             // same as what `docker stats --no-stream` does under the hood.
             ContainerStatsResponse? stats = null;
-            await _client.Containers.GetContainerStatsAsync(
+            var statsTask = _client.Containers.GetContainerStatsAsync(
                 container.ContainerId,
                 new ContainerStatsParameters { Stream = false },
                 new Progress<ContainerStatsResponse>(s => stats = s),
                 ct);
+            // Started alongside the stats call, not after it - GetCachedTcpConnectionCountAsync's
+            // own docker-exec round trip used to run strictly after GetContainerStatsAsync finished,
+            // lengthening this container's critical path by its full duration on every tick. Running
+            // them concurrently means the slower of the two, not their sum, is what this task waits on.
+            var tcpTask = GetCachedTcpConnectionCountAsync(container.ContainerId, ct);
+            await Task.WhenAll(statsTask, tcpTask);
 
             if (stats is null)
             {
@@ -662,7 +791,7 @@ public class DockerService : IDockerService
                 ? stats.CPUStats.OnlineCPUs
                 : (uint)(stats.CPUStats.CPUUsage.PercpuUsage?.Count ?? 1);
             var cpuPercent = systemDelta > 0 && cpuDelta > 0 ? cpuDelta / systemDelta * onlineCpus * 100.0 : 0.0;
-            var tcpConnections = await GetTcpConnectionCountAsync(container.ContainerId, ct);
+            var tcpConnections = tcpTask.Result;
 
             return new ResourceSample(
                 container.ServiceId,
@@ -683,6 +812,33 @@ public class DockerService : IDockerService
             _logger.LogDebug(ex, "Failed to fetch resource stats for container {ContainerId} - skipping this tick", container.ContainerId);
             return null;
         }
+    }
+
+    // A TCP connection count is only ever displayed in PinnedMetrics' overlay (see NodePanel.tsx's
+    // own comment - it's not shown per-node in the diagram at all), where a reading refreshing every
+    // 10s instead of every 2s isn't something a user would ever actually notice. The docker-exec
+    // behind it is not free though: GetResourceSampleAsync runs once per running container every 2s
+    // (ResourceStatsPollerService), and this exec spawns 3 new processes (sh, cat, grep) inside every
+    // one of them - the poller's own pre-existing comment already documents the stats call alone as
+    // "observed ~2s each against Docker Desktop on Windows", i.e. already saturating the 2s interval
+    // on its own, so stacking a full extra exec onto every tick for every container turned this into
+    // an unbounded, continuous per-container process-spawn cost purely to render a number nothing
+    // needs faster than every few seconds. Cached per container instead, refreshed only once this
+    // interval has actually elapsed - cuts real exec volume (not just latency) by ~5x.
+    private static readonly TimeSpan TcpConnectionsRefreshInterval = TimeSpan.FromSeconds(10);
+    private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset SampledAt)> _tcpConnectionsCache = new();
+
+    private async Task<int> GetCachedTcpConnectionCountAsync(string containerId, CancellationToken ct)
+    {
+        if (_tcpConnectionsCache.TryGetValue(containerId, out var cached) &&
+            DateTimeOffset.UtcNow - cached.SampledAt < TcpConnectionsRefreshInterval)
+        {
+            return cached.Count;
+        }
+
+        var count = await GetTcpConnectionCountAsync(containerId, ct);
+        _tcpConnectionsCache[containerId] = (count, DateTimeOffset.UtcNow);
+        return count;
     }
 
     // Reads the container's own /proc/net/tcp[6] rather than shelling out to ss/netstat - those
@@ -713,24 +869,41 @@ public class DockerService : IDockerService
             return new ScaleResult(serviceId, replicas, false, $"'{serviceId}' is not a scalable service");
         }
 
-        // --no-recreate keeps existing replicas untouched, but any *new* replica this scale-up
-        // creates is a fresh `docker compose up`, which re-renders RabbitMq__PrefetchCount from
-        // ${RABBITMQ_PREFETCH:-10} in the compose file - without forwarding the value the
-        // rabbitmq-prefetch control last set, new replicas would silently fall back to 10 while
-        // the rest of the fleet is still running whatever was set (e.g. 1000).
-        var env = RabbitMqConsumingServices.Contains(serviceId)
-            ? new Dictionary<string, string> { ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString() }
-            : null;
-
-        var (exitCode, output) = await RunComposeAsync(
-            ["up", "-d", "--scale", $"{serviceId}={replicas}", "--no-recreate", serviceId], env, ct);
-
-        if (exitCode != 0)
+        // Shares _toggleGate with SetRabbitMqPrefetchAsync/SetNpgsqlPoolSizeAsync/pgcat/cache
+        // (see that field's own comment) - not because this method reads CurrentStandingEnv or
+        // BuildPreserveScaleArgsAsync itself, but because those methods' own replica-count read
+        // (CountReplicasAsync) and their later --scale re-assertion need this method's write to be
+        // fully serialized against, not just against each other. Without this, ScaleAsync could
+        // change a service's replica count in the gap between one of those methods' read and its
+        // own later docker-compose call, which would then reassert a now-stale count and silently
+        // undo the scale-up - the exact bug _toggleGate/BuildPreserveScaleArgsAsync exist to
+        // prevent, just reachable via this method instead of via two toggle calls racing each other.
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            _logger.LogWarning("Scaling {ServiceId} failed (exit {ExitCode}): {Output}", serviceId, exitCode, output);
-        }
+            // --no-recreate keeps existing replicas untouched, but any *new* replica this scale-up
+            // creates is a fresh `docker compose up`, which re-renders RabbitMq__PrefetchCount from
+            // ${RABBITMQ_PREFETCH:-10} in the compose file - without forwarding the value the
+            // rabbitmq-prefetch control last set, new replicas would silently fall back to 10 while
+            // the rest of the fleet is still running whatever was set (e.g. 1000).
+            var env = RabbitMqConsumingServices.Contains(serviceId)
+                ? new Dictionary<string, string> { ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString() }
+                : null;
 
-        return new ScaleResult(serviceId, replicas, exitCode == 0, output);
+            var (exitCode, output) = await RunComposeAsync(
+                ["up", "-d", "--scale", $"{serviceId}={replicas}", "--no-recreate", serviceId], env, ct);
+
+            if (exitCode != 0)
+            {
+                _logger.LogWarning("Scaling {ServiceId} failed (exit {ExitCode}): {Output}", serviceId, exitCode, output);
+            }
+
+            return new ScaleResult(serviceId, replicas, exitCode == 0, output);
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
     }
 
     // Shared by ScaleAsync and the pgcat/cache infra toggles - all three are "shell out to the real
@@ -740,32 +913,40 @@ public class DockerService : IDockerService
     // - that's what makes toggling DB_HOST/CACHE_ENABLED actually take effect on recreate.
     private async Task<(int ExitCode, string Output)> RunComposeAsync(IEnumerable<string> args, IDictionary<string, string>? extraEnv, CancellationToken ct)
     {
-        var psi = new ProcessStartInfo
+        await _composeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            FileName = "docker",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        foreach (var arg in new[] { "compose", "-p", _composeProject, "-f", _composeFile }.Concat(args))
-        {
-            psi.ArgumentList.Add(arg);
-        }
-
-        if (extraEnv is not null)
-        {
-            foreach (var (key, value) in extraEnv)
+            var psi = new ProcessStartInfo
             {
-                psi.Environment[key] = value;
+                FileName = "docker",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var arg in new[] { "compose", "-p", _composeProject, "-f", _composeFile }.Concat(args))
+            {
+                psi.ArgumentList.Add(arg);
             }
-        }
 
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start the docker compose process");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
-        var stderrTask = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
-        var output = await stdoutTask + await stderrTask;
-        return (process.ExitCode, output);
+            if (extraEnv is not null)
+            {
+                foreach (var (key, value) in extraEnv)
+                {
+                    psi.Environment[key] = value;
+                }
+            }
+
+            using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start the docker compose process");
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+            var output = await stdoutTask + await stderrTask;
+            return (process.ExitCode, output);
+        }
+        finally
+        {
+            _composeGate.Release();
+        }
     }
 
     public async Task<string?> FlushRedisAsync(CancellationToken ct)
@@ -797,6 +978,18 @@ public class DockerService : IDockerService
 
     private async Task<string> ExecAsync(string containerId, IList<string> cmd, CancellationToken ct)
     {
+        var (_, output) = await ExecWithExitCodeAsync(containerId, cmd, ct);
+        return output;
+    }
+
+    // Callers that only read status/config (the other ~10 call sites) go through ExecAsync above
+    // and don't care whether the command itself succeeded inside the container - a read returning
+    // empty/unparseable output already fails safely on its own. The two write-paths that mutate
+    // container state (SetReplicationLagAsync's ALTER SYSTEM, SetSentinelConfigAsync's SENTINEL
+    // SET) need the actual exit code: docker exec always succeeds at *starting* the command, so a
+    // failed ALTER SYSTEM/SENTINEL SET only shows up in this exit code, never as an exception.
+    private async Task<(long ExitCode, string Output)> ExecWithExitCodeAsync(string containerId, IList<string> cmd, CancellationToken ct)
+    {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ExecTimeout);
         try
@@ -810,7 +1003,10 @@ public class DockerService : IDockerService
 
             using var stream = await _client.Exec.StartAndAttachContainerExecAsync(exec.ID, false, timeoutCts.Token);
             var (stdout, stderr) = await stream.ReadOutputToEndAsync(timeoutCts.Token);
-            return string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
+            var output = string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
+
+            var inspect = await _client.Exec.InspectContainerExecAsync(exec.ID, timeoutCts.Token);
+            return (inspect.ExitCode, output);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -1010,8 +1206,20 @@ public class DockerService : IDockerService
         // sends a multi-statement -c string as one simple-query message, which Postgres runs inside
         // an implicit transaction block, and ALTER SYSTEM refuses to run inside one (confirmed live:
         // "ERROR: ALTER SYSTEM cannot run inside a transaction block" when combined).
-        await ExecAsync(container.ID, ["psql", "-U", "postgres", "-c", $"ALTER SYSTEM SET recovery_min_apply_delay = '{delayMs}ms'"], ct);
-        await ExecAsync(container.ID, ["psql", "-U", "postgres", "-c", "SELECT pg_reload_conf()"], ct);
+        var (alterExitCode, alterOutput) = await ExecWithExitCodeAsync(container.ID, ["psql", "-U", "postgres", "-c", $"ALTER SYSTEM SET recovery_min_apply_delay = '{delayMs}ms'"], ct);
+        if (alterExitCode != 0)
+        {
+            _logger.LogWarning("Setting {ServiceId} replication lag failed (exit {ExitCode}): {Output}", serviceId, alterExitCode, alterOutput);
+            throw new InvalidOperationException($"psql exited {alterExitCode}: {alterOutput}");
+        }
+
+        var (reloadExitCode, reloadOutput) = await ExecWithExitCodeAsync(container.ID, ["psql", "-U", "postgres", "-c", "SELECT pg_reload_conf()"], ct);
+        if (reloadExitCode != 0)
+        {
+            _logger.LogWarning("Reloading {ServiceId} config after setting replication lag failed (exit {ExitCode}): {Output}", serviceId, reloadExitCode, reloadOutput);
+            throw new InvalidOperationException($"psql exited {reloadExitCode}: {reloadOutput}");
+        }
+
         _logger.LogWarning("Set {ServiceId} replication lag (recovery_min_apply_delay) to {DelayMs}ms", serviceId, delayMs);
         return new ReplicationLag(delayMs);
     }
@@ -1046,14 +1254,21 @@ public class DockerService : IDockerService
             var container = await FindAsync(serviceId, ct);
             if (container is null)
             {
-                continue;
+                // A missing container used to just `continue` past, then still return `config` at
+                // the end as if it had been applied to all three - the caller had no way to tell a
+                // partial application (e.g. one Sentinel down for maintenance) from a full one.
+                // Failing loudly here is the same "don't report success you didn't verify" principle
+                // as the exit-code checks below, just for "the container wasn't even there" instead
+                // of "the command it ran failed".
+                _logger.LogWarning("Setting Sentinel config failed: {ServiceId} container not found", serviceId);
+                throw new InvalidOperationException($"Sentinel container {serviceId} not found");
             }
 
             // Three separate SENTINEL SET calls, not one with multiple option/value pairs - kept to
             // exactly the shape already confirmed live against a real Sentinel, one option at a time.
-            await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", "down-after-milliseconds", config.DownAfterMs.ToString()], ct);
-            await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", "quorum", config.Quorum.ToString()], ct);
-            await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", "failover-timeout", config.FailoverTimeoutMs.ToString()], ct);
+            await SentinelSetAsync(container.ID, serviceId, "down-after-milliseconds", config.DownAfterMs.ToString(), ct);
+            await SentinelSetAsync(container.ID, serviceId, "quorum", config.Quorum.ToString(), ct);
+            await SentinelSetAsync(container.ID, serviceId, "failover-timeout", config.FailoverTimeoutMs.ToString(), ct);
         }
 
         _logger.LogWarning(
@@ -1063,61 +1278,102 @@ public class DockerService : IDockerService
         return config;
     }
 
+    // redis-cli exits non-zero not just on a connection failure but also when the server's reply to
+    // the command it ran was itself an error (e.g. "(error) ERR ..."), so this exit code is a real
+    // signal here - unlike a bare docker-exec-couldn't-start failure, it's specifically the SENTINEL
+    // SET command that Redis itself rejected.
+    private async Task SentinelSetAsync(string containerId, string serviceId, string option, string value, CancellationToken ct)
+    {
+        var (exitCode, output) = await ExecWithExitCodeAsync(containerId, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", option, value], ct);
+        if (exitCode != 0)
+        {
+            _logger.LogWarning("Setting Sentinel {Option} on {ServiceId} failed (exit {ExitCode}): {Output}", option, serviceId, exitCode, output);
+            throw new InvalidOperationException($"redis-cli exited {exitCode}: {output}");
+        }
+    }
+
     public int GetRabbitMqPrefetch() => _rabbitMqPrefetch;
 
     public async Task<int> SetRabbitMqPrefetchAsync(int prefetchCount, CancellationToken ct)
     {
-        var env = new Dictionary<string, string> { ["RABBITMQ_PREFETCH"] = prefetchCount.ToString() };
-
-        var scaleArgs = await BuildPreserveScaleArgsAsync(RabbitMqConsumingServices, ct);
-
-        _logger.LogWarning("Switching RabbitMq__PrefetchCount for {Services} to {PrefetchCount}", string.Join(", ", RabbitMqConsumingServices), prefetchCount);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. RabbitMqConsumingServices], env, ct);
-        if (exitCode != 0)
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            _logger.LogWarning("Setting RabbitMQ prefetch failed (exit {ExitCode}): {Output}", exitCode, output);
-            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
-        }
+            var env = CurrentStandingEnv();
+            env["RABBITMQ_PREFETCH"] = prefetchCount.ToString();
 
-        _rabbitMqPrefetch = prefetchCount;
-        return prefetchCount;
+            var scaleArgs = await BuildPreserveScaleArgsAsync(RabbitMqConsumingServices, ct);
+
+            _logger.LogWarning("Switching RabbitMq__PrefetchCount for {Services} to {PrefetchCount}", string.Join(", ", RabbitMqConsumingServices), prefetchCount);
+            var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. RabbitMqConsumingServices], env, ct);
+            if (exitCode != 0)
+            {
+                _logger.LogWarning("Setting RabbitMQ prefetch failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _rabbitMqPrefetch = prefetchCount;
+            return prefetchCount;
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
     }
 
     public string GetMongoReadPreference() => _mongoReadPreference;
 
     public async Task<string> SetMongoReadPreferenceAsync(string preference, CancellationToken ct)
     {
-        var env = new Dictionary<string, string> { ["MONGO_READ_PREFERENCE"] = preference };
-
-        _logger.LogWarning("Switching traffic-service's Mongo readPreference to {Preference}", preference);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "traffic-service"], env, ct);
-        if (exitCode != 0)
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            _logger.LogWarning("Setting Mongo read preference failed (exit {ExitCode}): {Output}", exitCode, output);
-            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
-        }
+            var env = CurrentStandingEnv();
+            env["MONGO_READ_PREFERENCE"] = preference;
 
-        _mongoReadPreference = preference;
-        return preference;
+            _logger.LogWarning("Switching traffic-service's Mongo readPreference to {Preference}", preference);
+            var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "traffic-service"], env, ct);
+            if (exitCode != 0)
+            {
+                _logger.LogWarning("Setting Mongo read preference failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _mongoReadPreference = preference;
+            return preference;
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
     }
 
     public int GetNpgsqlPoolSize() => _npgsqlPoolSize;
 
     public async Task<int> SetNpgsqlPoolSizeAsync(int poolSize, CancellationToken ct)
     {
-        var env = new Dictionary<string, string> { ["NPGSQL_MAX_POOL_SIZE"] = poolSize.ToString() };
-        var scaleArgs = await BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
-
-        _logger.LogWarning("Switching Npgsql Maximum Pool Size for {Services} to {PoolSize}", string.Join(", ", DbTouchingServices), poolSize);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
-        if (exitCode != 0)
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            _logger.LogWarning("Setting Npgsql pool size failed (exit {ExitCode}): {Output}", exitCode, output);
-            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
-        }
+            var env = CurrentStandingEnv();
+            env["NPGSQL_MAX_POOL_SIZE"] = poolSize.ToString();
+            var scaleArgs = await BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 
-        _npgsqlPoolSize = poolSize;
-        return poolSize;
+            _logger.LogWarning("Switching Npgsql Maximum Pool Size for {Services} to {PoolSize}", string.Join(", ", DbTouchingServices), poolSize);
+            var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
+            if (exitCode != 0)
+            {
+                _logger.LogWarning("Setting Npgsql pool size failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _npgsqlPoolSize = poolSize;
+            return poolSize;
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
     }
 
     public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled);
@@ -1140,40 +1396,55 @@ public class DockerService : IDockerService
     // fails. --no-deps keeps this to exactly the named services, none of which have any volumes.
     public async Task<InfraStatus> SetPgcatEnabledAsync(bool enabled, CancellationToken ct)
     {
-        var env = new Dictionary<string, string>
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            ["DB_HOST"] = enabled ? "pgcat" : "postgres",
-            ["DB_PORT"] = enabled ? "6432" : "5432",
-        };
-        var scaleArgs = await BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
+            var env = CurrentStandingEnv();
+            env["DB_HOST"] = enabled ? "pgcat" : "postgres";
+            env["DB_PORT"] = enabled ? "6432" : "5432";
+            var scaleArgs = await BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 
-        _logger.LogWarning("Switching DB routing for {Services} to {Host} (pgcat enabled: {Enabled})", string.Join(", ", DbTouchingServices), env["DB_HOST"], enabled);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
-        if (exitCode != 0)
-        {
-            _logger.LogWarning("Toggling pgcat failed (exit {ExitCode}): {Output}", exitCode, output);
-            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            _logger.LogWarning("Switching DB routing for {Services} to {Host} (pgcat enabled: {Enabled})", string.Join(", ", DbTouchingServices), env["DB_HOST"], enabled);
+            var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
+            if (exitCode != 0)
+            {
+                _logger.LogWarning("Toggling pgcat failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _pgcatEnabled = enabled;
+            return GetInfraStatus();
         }
-
-        _pgcatEnabled = enabled;
-        return GetInfraStatus();
+        finally
+        {
+            _toggleGate.Release();
+        }
     }
 
     public async Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct)
     {
-        var env = new Dictionary<string, string> { ["CACHE_ENABLED"] = enabled ? "true" : "false" };
-        var scaleArgs = await BuildPreserveScaleArgsAsync(CacheUsingServices, ct);
-
-        _logger.LogWarning("Switching Cache__Enabled for {Services} to {Enabled}", string.Join(", ", CacheUsingServices), enabled);
-        var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CacheUsingServices], env, ct);
-        if (exitCode != 0)
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            _logger.LogWarning("Toggling cache failed (exit {ExitCode}): {Output}", exitCode, output);
-            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
-        }
+            var env = CurrentStandingEnv();
+            env["CACHE_ENABLED"] = enabled ? "true" : "false";
+            var scaleArgs = await BuildPreserveScaleArgsAsync(CacheUsingServices, ct);
 
-        _cacheEnabled = enabled;
-        return GetInfraStatus();
+            _logger.LogWarning("Switching Cache__Enabled for {Services} to {Enabled}", string.Join(", ", CacheUsingServices), enabled);
+            var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CacheUsingServices], env, ct);
+            if (exitCode != 0)
+            {
+                _logger.LogWarning("Toggling cache failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _cacheEnabled = enabled;
+            return GetInfraStatus();
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
     }
 
     public PgcatPoolSettings GetPgcatPoolSettings() => _pgcatPoolSettings;
@@ -1434,6 +1705,16 @@ public class DockerService : IDockerService
             ct);
     }
 
+    // For an unscaled service this returns Docker's only match either way. For a scaled one
+    // (link-api/redirect-api, ScalableServices) there can be several - Docker's ListContainersAsync
+    // order isn't documented/stable, so picking an arbitrary one here used to mean repeated
+    // Stop/Start/Restart/Degrade calls could silently act on a *different* physical container each
+    // time, and diverge from what the frontend displays (ServiceControls/NodePanel show
+    // instances[0], the lowest containerNumber, per useLiveStack's groupByService sort). Ordering by
+    // container-number and taking the lowest makes this deterministic and matches that same
+    // convention, so "the container the UI shows" and "the container this call acts on" are always
+    // the same one - it does not let a caller target a specific replica among several, which is an
+    // accepted limitation, not something this fixes.
     private async Task<ContainerListResponse?> FindAsync(string serviceId, CancellationToken ct)
     {
         var containers = await _client.Containers.ListContainersAsync(new ContainersListParameters
@@ -1449,8 +1730,16 @@ public class DockerService : IDockerService
             },
         }, ct);
 
-        return containers.FirstOrDefault();
+        return SelectPrimary(containers);
     }
+
+    // Extracted from FindAsync so the selection rule itself (lowest container-number wins,
+    // deterministically) is unit-testable without a real/mocked Docker daemon - DockerService talks
+    // to a concrete Docker.DotNet DockerClient with no seam for that anywhere in this codebase.
+    internal static ContainerListResponse? SelectPrimary(IEnumerable<ContainerListResponse> containers) =>
+        containers
+            .OrderBy(c => c.Labels.TryGetValue("com.docker.compose.container-number", out var n) && int.TryParse(n, out var parsed) ? parsed : int.MaxValue)
+            .FirstOrDefault();
 
     private async Task<int> CountReplicasAsync(string serviceId, CancellationToken ct)
     {

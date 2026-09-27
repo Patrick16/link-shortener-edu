@@ -1,4 +1,5 @@
 using Common;
+using Common.Models;
 using Contracts.Events;
 using Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -66,6 +67,36 @@ public class ClickTrackedConsumerTests
         // violation and must not duplicate the row.
         await sut.HandleAsync(@event, CancellationToken.None);
 
+        await using var verify = await factory.CreateDbContextAsync();
+        Assert.Equal(1, await verify.Clicks.CountAsync());
+    }
+
+    [Fact]
+    public async Task HandleAsync_RedeliveredAfterMongoFailure_RetriesMongoWriteInsteadOfSkippingIt()
+    {
+        // Regression: the two writes aren't transactional. If SaveAsync throws (transient Mongo
+        // outage) after the Postgres row already committed, a naive "alreadyStored -> skip
+        // everything" redelivery guard would permanently lose that click's ClickMeta document,
+        // since Postgres already has the row and would short-circuit every future retry too.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var clickMetaStore = new Mock<IClickMetaStore>();
+        clickMetaStore.SetupSequence(x => x.SaveAsync(It.IsAny<ClickMeta>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("mongo unreachable"))
+            .Returns(Task.CompletedTask);
+        var sut = new ClickTrackedConsumer(
+            Mock.Of<IMessageConsumer>(),
+            factory,
+            clickMetaStore.Object,
+            Mock.Of<IUserAgentParser>(),
+            Mock.Of<IGeoIpResolver>(),
+            NullLogger<ClickTrackedConsumer>.Instance);
+        var @event = NewEvent();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.HandleAsync(@event, CancellationToken.None));
+        // Redelivery: same event id: the Postgres row already committed from the first (failed) attempt.
+        await sut.HandleAsync(@event, CancellationToken.None);
+
+        clickMetaStore.Verify(x => x.SaveAsync(It.IsAny<ClickMeta>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(1, await verify.Clicks.CountAsync());
     }

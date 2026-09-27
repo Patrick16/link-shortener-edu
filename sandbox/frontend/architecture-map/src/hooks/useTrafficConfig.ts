@@ -129,12 +129,18 @@ export function useTrafficConfig() {
   }
 
   function loadScenario(saved: CustomScenario) {
-    setSequence(saved.steps)
-    setStopMode(saved.mode)
-    setPoints(saved.points.map((p) => ({ t: p.t, vus: p.vus })))
-    setTotalDuration(saved.totalDurationSeconds)
-    setFlatVus(saved.vus)
-    setIterationsTarget(saved.iterations)
+    // A scenario saved before the steps/mode/vus/iterations fields existed (or before any later
+    // field addition) round-trips through the backend's ScenarioStore with no migration - those
+    // fields deserialize as null/undefined despite what the CustomScenario type claims. Falling
+    // back to the same defaults a brand-new scenario starts with turns "load an old scenario" from
+    // a hard crash (steps undefined -> sequence.length throws) into "loads with today's defaults for
+    // whatever wasn't saved back then".
+    setSequence(saved.steps ?? [])
+    setStopMode(saved.mode ?? 'duration')
+    setPoints((saved.points ?? RAMP_PRESETS[0].points).map((p) => ({ t: p.t, vus: p.vus })))
+    setTotalDuration(saved.totalDurationSeconds ?? RAMP_PRESETS[0].totalDurationSeconds)
+    setFlatVus(saved.vus ?? DEFAULT_FLAT_VUS)
+    setIterationsTarget(saved.iterations ?? DEFAULT_ITERATIONS)
     setDataPoolEnabled(saved.dataPool != null)
     if (saved.dataPool) {
       setDataPoolSourceId(saved.dataPool.sourceId)

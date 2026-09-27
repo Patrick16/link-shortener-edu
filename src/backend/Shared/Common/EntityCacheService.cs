@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace Common;
@@ -9,6 +10,11 @@ public abstract class EntityCacheService<T>(IDistributedCache cache, IConfigurat
 {
     protected readonly IDistributedCache _cache = cache;
     protected static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    // Coalesces concurrent GetOrFetch misses for the same key into a single DB fetch + cache write
+    // (see GetOrFetch). Entries are removed as soon as the fetch they represent completes, so this
+    // never grows past the number of keys currently mid-fetch.
+    private readonly ConcurrentDictionary<string, Lazy<Task<T?>>> _inFlightFetches = new();
 
     // Cache__Enabled=false is the control panel's "disable caching" toggle - checked before ever
     // touching Redis so the demo is an instant, clean bypass (always a cache miss, straight to the
@@ -75,6 +81,34 @@ public abstract class EntityCacheService<T>(IDistributedCache cache, IConfigurat
         var cached = await GetCachedAsync(id, cancellationToken);
         if (cached is not null) return cached;
 
+        var key = Key(id);
+        // Without this, every concurrent caller that misses the cache for the same key runs its own
+        // fetchFromDb() and its own cache write - a burst of requests for a hash that just expired
+        // hits the DB once per request instead of once total. GetOrAdd's own factory can itself be
+        // invoked more than once under contention, so the factory is wrapped in a
+        // Lazy<Task<T?>>(ExecutionAndPublication) to guarantee fetchFromDb runs exactly once even
+        // when multiple threads race into GetOrAdd for the same brand-new key. All joiners share the
+        // first caller's cancellationToken for the fetch+cache write; a caller that cancels while
+        // others are still waiting on the same in-flight fetch will cancel it for them too - an
+        // accepted tradeoff of coalescing, not a bug.
+        var lazyFetch = _inFlightFetches.GetOrAdd(
+            key,
+            _ => new Lazy<Task<T?>>(
+                () => FetchAndCacheAsync(id, fetchFromDb, cancellationToken),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
+        {
+            return await lazyFetch.Value;
+        }
+        finally
+        {
+            _inFlightFetches.TryRemove(key, out _);
+        }
+    }
+
+    private async Task<T?> FetchAndCacheAsync(string id, Func<Task<T?>> fetchFromDb, CancellationToken cancellationToken)
+    {
         var entity = await fetchFromDb();
         if (entity is not null) await CacheAsync(entity, id, cancellationToken);
         return entity;

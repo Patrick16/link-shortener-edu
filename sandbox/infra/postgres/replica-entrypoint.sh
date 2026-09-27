@@ -16,7 +16,23 @@ chmod 600 ~/.pgpass
 
 if [ -z "$(ls -A "$PGDATA" 2>/dev/null)" ]; then
   echo "PGDATA is empty — taking a fresh base backup from the primary..."
-  until pg_basebackup -h postgres -p 5432 -D "$PGDATA" -U replicator -Fp -Xs -P -R; do
+  # -C --slot creates a permanent physical replication slot on the primary and (combined with -R)
+  # writes it into this replica's recovery config as primary_slot_name, so every later streaming
+  # connection uses it too, not just this one-time backup. Without a slot (or a generous
+  # wal_keep_size), the primary is free to recycle WAL this replica hasn't consumed yet the moment
+  # it falls behind - a replica disconnected long enough then can never resume streaming and needs a
+  # manual rebuild of its whole data directory. The slot persists on the primary across restarts of
+  # either side, so this only runs once per replica's lifetime (the "PGDATA is empty" guard above).
+  while true; do
+    # A previous attempt that failed partway through basebackup can leave the slot it already
+    # created on the primary, which would make -C error with "already exists" on the next retry -
+    # drop it first (ignoring failure: it may not exist yet, or the primary may not be reachable at
+    # all) so every retry starts from a clean slate, the same as before -C/--slot made this
+    # necessary.
+    psql -h postgres -p 5432 -U replicator -d postgres -tAc "SELECT pg_drop_replication_slot('${REPLICA_SLOT_NAME}')" >/dev/null 2>&1 || true
+    if pg_basebackup -h postgres -p 5432 -D "$PGDATA" -U replicator -Fp -Xs -P -R -C --slot="${REPLICA_SLOT_NAME}"; then
+      break
+    fi
     echo "Primary not ready yet, retrying base backup in 2s..."
     sleep 2
   done

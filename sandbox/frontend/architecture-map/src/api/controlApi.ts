@@ -15,7 +15,6 @@ import type {
   PostgresConnectionStats,
   RabbitMqPrefetch,
   ReplicationLag,
-  ResourceSample,
   RunSnapshot,
   RunSummary,
   ScaleResult,
@@ -67,8 +66,6 @@ export const controlApi = {
     request<ChaosAction>(`/api/containers/${serviceId}/degrade`, 'POST', chaos),
 
   heal: (serviceId: string) => request<{ stopped: number }>(`/api/containers/${serviceId}/heal`, 'POST'),
-
-  statsHistory: (serviceId: string) => request<ResourceSample[]>(`/api/containers/${serviceId}/stats/history`),
 
   listScalableServices: () => request<string[]>('/api/containers/scalable'),
 
@@ -124,5 +121,5 @@ export const controlApi = {
   listRuns: () => request<RunSummary[]>('/api/runs'),
   getRun: (id: string) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}`),
   deleteRun: (id: string) => send(`/api/runs/${encodeURIComponent(id)}`, 'DELETE'),
-  clearRuns: () => send('/api/runs', 'DELETE'),
+  clearRuns: () => request<{ failedCount: number }>('/api/runs', 'DELETE'),
 }

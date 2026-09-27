@@ -1,5 +1,20 @@
 import type { DataPoolMode, DataSourceDefinition } from '../types/controlApi'
 
+// A number input's value can be a syntactically incomplete string while the user is still typing
+// (a lone "-", clearing the field...) - Number(...) of that is NaN, and Math.max/Math.min propagate
+// NaN through unchanged (no clamping actually applied), so this would otherwise be sent as JSON
+// `null` in the traffic request instead of the friendlier `dataPool.count must be between 1 and
+// 20000` validation message. Returns null (meaning "ignore this keystroke, don't call
+// onCountChange yet") instead of falling back to a default, so a still-in-progress edit doesn't get
+// silently overwritten. Exported as a pure function for direct testing - a native
+// <input type="number">'s own value-sanitization strips most invalid interim strings down to ""
+// before a DOM-driven test's onChange ever sees them (Number("") is 0, not NaN), masking this exact
+// bug in a jsdom/RTL test.
+export function clampDataPoolCount(rawValue: string): number | null {
+  const parsed = Number(rawValue)
+  return Number.isFinite(parsed) ? Math.max(1, Math.min(20_000, parsed)) : null
+}
+
 interface Props {
   disabled: boolean
   sources: DataSourceDefinition[]
@@ -47,7 +62,12 @@ export function DataPoolControls({ disabled, sources, enabled, onEnabledChange, 
               min={1}
               max={20_000}
               value={count}
-              onChange={(e) => onCountChange(Math.max(1, Math.min(20_000, Number(e.target.value))))}
+              onChange={(e) => {
+                const next = clampDataPoolCount(e.target.value)
+                if (next !== null) {
+                  onCountChange(next)
+                }
+              }}
               disabled={disabled}
             />
           </label>

@@ -2,7 +2,7 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class ReplicationLagCapability(IDockerService docker) : IComponentCapability
+public sealed class ReplicationLagCapability(IDockerService docker, ILogger<ReplicationLagCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
@@ -19,8 +19,16 @@ public sealed class ReplicationLagCapability(IDockerService docker) : IComponent
                 return Results.BadRequest(new { error = "delayMs must be between 0 and 60000" });
             }
 
-            var result = await docker.SetReplicationLagAsync(serviceId, request.DelayMs, ct);
-            return result is null ? Results.NotFound() : Results.Ok(result);
+            try
+            {
+                var result = await docker.SetReplicationLagAsync(serviceId, request.DelayMs, ct);
+                return result is null ? Results.NotFound() : Results.Ok(result);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Setting replication lag on {ServiceId} to {DelayMs}ms failed", serviceId, request.DelayMs);
+                return Results.Problem(ex.Message);
+            }
         });
     }
 }

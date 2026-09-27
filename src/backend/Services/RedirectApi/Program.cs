@@ -80,7 +80,7 @@ if (app.Environment.IsDevelopment())
 }
 
 // First in the pipeline so it can catch exceptions thrown by anything downstream.
-app.UseExceptionHandler();
+app.UseApiExceptionHandling();
 
 app.UseHttpsRedirection();
 

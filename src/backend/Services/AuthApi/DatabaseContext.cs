@@ -6,7 +6,7 @@ namespace AuthApi;
 
 // Lives in its own database (users_db, see docker-compose.yml) — no schema qualifier needed,
 // the database itself is the isolation boundary between services.
-public class DatabaseContext(DbContextOptions options) : DbContext(options)
+public class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbContext(options)
 {
     private const string UsersTable = "users";
     private const string RefreshTokensTable = "refresh_tokens";

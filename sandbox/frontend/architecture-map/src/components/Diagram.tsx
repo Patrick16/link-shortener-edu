@@ -5,7 +5,7 @@ import { ServiceNode, type ServiceNodeData } from './ServiceNode'
 import { PinnedMetrics } from './PinnedMetrics'
 import { resolveServiceId } from '../utils/resolveServiceId'
 import { isTrafficFlowEdge } from '../utils/trafficFlow'
-import { computeLayout } from '../utils/layoutGraph'
+import { computeLayout, NODE_HEIGHT, NODE_WIDTH } from '../utils/layoutGraph'
 import type { ArchComponent, ArchitectureData } from '../types/architecture'
 import type { ManagedContainer, ResourceSample } from '../types/controlApi'
 
@@ -61,8 +61,10 @@ export function Diagram({
           position: layout[component.id] ?? { x: 0, y: 0 },
           // Explicit dimensions skip React Flow's async ResizeObserver-based measurement step -
           // a reasonable perf win regardless, and edges need a node's size to compute a path.
-          width: 170,
-          height: 40,
+          // Shared with layoutGraph.ts's own NODE_WIDTH/NODE_HEIGHT, not duplicated - dagre lays
+          // out using the exact same size React Flow renders each node at.
+          width: NODE_WIDTH,
+          height: NODE_HEIGHT,
           data: {
             label: component.name,
             icon: component.icon,

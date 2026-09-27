@@ -23,4 +23,13 @@ public static class Constants
     public const string JwtSigningKeySection = "Jwt:SigningKey";
     public const string JwtIssuerSection = "Jwt:Issuer";
     public const string JwtAudienceSection = "Jwt:Audience";
+
+    // Shared between LinkApi (validates it) and any internal, non-user caller that needs
+    // unscoped/"root" access to an otherwise per-user endpoint - currently control-api's traffic
+    // data-pool preload, which needs a broad sample of real links, not one arbitrary user's own.
+    // Never exposed to the frontend/end users - see InternalApiKeyAuthenticationHandler.
+    public const string InternalApiKeySection = "Internal:ApiKey";
+    public const string InternalApiKeyHeaderName = "X-Internal-Api-Key";
+    public const string InternalApiKeyAuthenticationScheme = "InternalApiKey";
+    public const string InternalClaim = "internal";
 }

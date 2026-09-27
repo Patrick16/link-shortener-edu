@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RabbitMQ.Client;
 
@@ -5,6 +7,8 @@ namespace Infrastructure.Tests;
 
 public class RabbitMqPublisherTests
 {
+    private static readonly ILogger<RabbitMqPublisher> NullLogger = NullLogger<RabbitMqPublisher>.Instance;
+
     private static Mock<IChannel> NewOpenChannelMock()
     {
         var channel = new Mock<IChannel>();
@@ -37,7 +41,7 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
 
@@ -52,12 +56,37 @@ public class RabbitMqPublisherTests
         connection.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("broker unreachable"));
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
 
         fallbackStore.Verify(
             x => x.SaveAsync(It.Is<FallbackMessage>(m => m.Topic == "some.topic"), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task PublishAsync_Failure_LogsWarningWithMessageIdAndTopic()
+    {
+        // F2: a publish failure used to be visible only as an OTel span status, never in plain
+        // application logs - an operator watching logs alone would see nothing but "no events
+        // arriving downstream", indistinguishable from nobody posting links at all.
+        var connection = new Mock<IRabbitMqConnection>();
+        connection.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("broker unreachable"));
+        var fallbackStore = new Mock<IMessageFallbackStore>();
+        var logger = new Mock<ILogger<RabbitMqPublisher>>();
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, logger.Object);
+
+        await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
+
+        logger.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("some.topic")),
+                It.IsAny<InvalidOperationException>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
     }
 
@@ -71,7 +100,7 @@ public class RabbitMqPublisherTests
             .Returns(ValueTask.FromException(new InvalidOperationException("publish failed")));
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
 
@@ -86,7 +115,7 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
 
         await sut.PublishAsync(new { }, "topic.a", CancellationToken.None);
         await sut.PublishAsync(new { }, "topic.b", CancellationToken.None);
@@ -122,7 +151,7 @@ public class RabbitMqPublisherTests
                 return channel.Object;
             });
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
 
         // One more publish than the pool's fixed capacity (16) - if a slot leaked on every
         // failure, the pool would already be fully exhausted well before this many calls.
@@ -149,7 +178,7 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
         var message = new FallbackMessage("msg-1", "some.topic", "{}", DateTime.UtcNow);
 
         var result = await sut.TryRepublishAsync(message, CancellationToken.None);
@@ -164,7 +193,7 @@ public class RabbitMqPublisherTests
         connection.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("still unreachable"));
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
         var message = new FallbackMessage("msg-1", "some.topic", "{}", DateTime.UtcNow);
 
         var result = await sut.TryRepublishAsync(message, CancellationToken.None);
@@ -182,11 +211,54 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
         await sut.PublishAsync(new { }, "some.topic", CancellationToken.None);
 
         await sut.DisposeAsync();
 
+        channel.Verify(c => c.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_ChannelStillRentedOutByInFlightPublish_StillDisposesItExactlyOnce()
+    {
+        // F3 regression: DisposeAsync used to only drain _idleChannels. A channel held by an
+        // in-flight PublishAsync call at shutdown time isn't in that queue yet (it's not released
+        // until BasicPublishAsync returns) - the old DisposeAsync found nothing for it, and once the
+        // in-flight call's own ReleaseChannelAsync ran afterwards, it enqueued the channel into a
+        // queue nothing would ever drain again, leaking it for the rest of the process's life.
+        var channelRented = new TaskCompletionSource();
+        var releasePublish = new TaskCompletionSource();
+        var channel = NewOpenChannelMock();
+        channel.Setup(c => c.BasicPublishAsync<BasicProperties>(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<BasicProperties>(),
+                It.IsAny<ReadOnlyMemory<byte>>(), It.IsAny<CancellationToken>()))
+            .Returns(async () =>
+            {
+                // By the time this runs, RentChannelAsync has already returned the channel to
+                // TryPublishAsync - it's rented out, not idle, exactly the state DisposeAsync used
+                // to be blind to.
+                channelRented.SetResult();
+                await releasePublish.Task;
+            });
+        var connection = NewConnectionReturning(channel.Object);
+        var fallbackStore = new Mock<IMessageFallbackStore>();
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+
+        var publishTask = sut.PublishAsync(new { }, "some.topic", CancellationToken.None);
+        await channelRented.Task;
+
+        // DisposeAsync races the still-in-flight publish's eventual ReleaseChannelAsync call -
+        // exactly the shutdown-with-in-flight-work scenario this fix targets.
+        var disposeTask = sut.DisposeAsync();
+        releasePublish.SetResult();
+
+        await publishTask;
+        await disposeTask;
+
+        // Not Times.AtLeastOnce: whichever of DisposeAsync/ReleaseChannelAsync claims the channel
+        // must be the only one that disposes it - the fix's lock-guarded handoff exists specifically
+        // to prevent the other one from also calling DisposeAsync() on the same channel.
         channel.Verify(c => c.DisposeAsync(), Times.Once);
     }
 }

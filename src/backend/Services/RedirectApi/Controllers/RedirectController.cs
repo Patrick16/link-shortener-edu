@@ -27,7 +27,7 @@ public class RedirectController(
         CancellationToken cancellationToken)
     {
         async Task<Link?> Fetch() =>
-            await _context.Links.FirstOrDefaultAsync(x => x.Hash == hash, cancellationToken);
+            await _context.Links.AsNoTracking().FirstOrDefaultAsync(x => x.Hash == hash, cancellationToken);
 
         var link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, cancellationToken);
         if (link is null)

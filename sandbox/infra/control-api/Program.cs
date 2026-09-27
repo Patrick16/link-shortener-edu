@@ -184,10 +184,14 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
     if (request.Iterations is { } iterations)
     {
         // Iteration-count runs use k6's shared-iterations executor - flat VUs, no ramp, so none of
-        // the Stages/DurationSeconds checks below apply.
-        if (request.Vus < 1)
+        // the Stages/DurationSeconds checks below apply. Upper bound: this is the one
+        // externally-triggerable input that spins up real k6 virtual users against the local
+        // docker-compose stack - with no cap, a typo (or "let's see what happens at 10000 VUs") can
+        // exhaust the host's CPU/memory and make the whole sandbox unresponsive, with nothing server
+        // -side to stop it. 200 matches the bound this endpoint originally shipped with.
+        if (request.Vus is < 1 or > 200)
         {
-            return Results.BadRequest(new { error = "vus must be at least 1 for an iteration-count run" });
+            return Results.BadRequest(new { error = "vus must be between 1 and 200 for an iteration-count run" });
         }
 
         if (iterations is < 1 or > 100_000)
@@ -199,10 +203,12 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
     {
         // With a custom ramp, Vus is just the starting point k6 ramps from - 0 is exactly what a spike
         // profile (or any "ramp up from idle") wants there. Only the flat constant-VUs run needs it to
-        // be at least 1, since there it's the VU count for the entire run.
-        if (request.Vus < 0 || (request.Stages is not { Count: > 0 } && request.Vus < 1))
+        // be at least 1, since there it's the VU count for the entire run. Upper bound applies either
+        // way - see the iteration-count check above for why an unbounded Vus is a real risk, not just
+        // a style nit.
+        if (request.Vus < 0 || request.Vus > 200 || (request.Stages is not { Count: > 0 } && request.Vus < 1))
         {
-            return Results.BadRequest(new { error = "vus must be at least 1 (or at least 0 as a ramp's starting point)" });
+            return Results.BadRequest(new { error = "vus must be between 1 and 200 (or at least 0 as a ramp's starting point)" });
         }
 
         if (request.Stages is { Count: > 0 } stages)
@@ -212,9 +218,9 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
                 return Results.BadRequest(new { error = "each stage's durationSeconds must be at least 1" });
             }
 
-            if (stages.Any(s => s.TargetVus < 0))
+            if (stages.Any(s => s.TargetVus is < 0 or > 200))
             {
-                return Results.BadRequest(new { error = "a stage's targetVus can't be negative" });
+                return Results.BadRequest(new { error = "a stage's targetVus must be between 0 and 200" });
             }
 
             // A custom ramp is user-drawn, so it isn't bound by the flat run's 120s cap - just a
@@ -429,8 +435,8 @@ app.MapGet("/api/runs/{id}", async (string id, IRunHistoryStore store, Cancellat
 
 app.MapDelete("/api/runs", async (IRunHistoryStore store, CancellationToken ct) =>
 {
-    await store.ClearAsync(ct);
-    return Results.Ok();
+    var failedCount = await store.ClearAsync(ct);
+    return Results.Ok(new { failedCount });
 });
 
 app.MapDelete("/api/runs/{id}", async (string id, IRunHistoryStore store, CancellationToken ct) =>

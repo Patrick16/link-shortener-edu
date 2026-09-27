@@ -78,6 +78,48 @@ public class SqliteMessageFallbackStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPendingAsync_CalledAgainImmediately_DoesNotReturnAlreadyClaimedRows()
+    {
+        // The direct regression this store's own race fix targets: with link-api/redirect-api
+        // scaled to N replicas, every replica's RabbitMqRetryWorker points at the same shared file -
+        // two replicas' ticks used to both get the same pending row before either deleted it, both
+        // republish it, and the event gets processed twice downstream (RabbitMqConsumer has no
+        // message-id dedup). Simulates that by calling GetPendingAsync twice in a row against the
+        // same still-unresolved row, standing in for two concurrent replicas' ticks.
+        var sut = NewSut();
+        await sut.SaveAsync(new FallbackMessage("msg-1", "topic", "{}", DateTime.UtcNow), CancellationToken.None);
+
+        var firstClaim = await sut.GetPendingAsync(CancellationToken.None);
+        var secondClaim = await sut.GetPendingAsync(CancellationToken.None);
+
+        Assert.Equal(["msg-1"], firstClaim.Select(m => m.MessageId));
+        Assert.Empty(secondClaim);
+    }
+
+    [Fact]
+    public async Task GetPendingAsync_ClaimIsStale_BecomesClaimableAgain()
+    {
+        // A row whose claim is stale (its replica crashed mid-tick, or a republish call itself hung
+        // past the next tick) must eventually recover on its own, since nothing ever explicitly
+        // "unclaims" a row on failure - it just stays claimed until the stale threshold passes.
+        var sut = NewSut();
+        await sut.SaveAsync(new FallbackMessage("msg-1", "topic", "{}", DateTime.UtcNow), CancellationToken.None);
+        await sut.GetPendingAsync(CancellationToken.None); // claims it
+
+        // Directly backdate the claim past the 2-minute stale threshold rather than waiting for it.
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={_dbPath};Pooling=False");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE FailedMessages SET ClaimedAt = $stale WHERE MessageId = 'msg-1';";
+        command.Parameters.AddWithValue("$stale", DateTime.UtcNow.AddMinutes(-10).ToString("O"));
+        await command.ExecuteNonQueryAsync();
+
+        var reclaimed = await sut.GetPendingAsync(CancellationToken.None);
+
+        Assert.Equal(["msg-1"], reclaimed.Select(m => m.MessageId));
+    }
+
+    [Fact]
     public async Task GetPendingAsync_MoreThanFiveHundredRows_CapsBatchSize()
     {
         // Regression: during a long broker outage under load, this table can grow into the tens or
