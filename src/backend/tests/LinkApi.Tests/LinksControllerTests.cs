@@ -10,6 +10,7 @@ using LinkApi.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace LinkApi.Tests;
@@ -35,7 +36,7 @@ public class LinksControllerTests
         publisher = new Mock<IMessagePublisher>();
         hashGenerator = new Mock<IHashGenerator>();
 
-        var controller = new LinksController(context, cache.Object, publisher.Object, hashGenerator.Object)
+        var controller = new LinksController(context, cache.Object, publisher.Object, hashGenerator.Object, NullLogger<LinksController>.Instance)
         {
             ControllerContext = new ControllerContext
             {

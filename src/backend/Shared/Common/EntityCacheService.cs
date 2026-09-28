@@ -79,7 +79,14 @@ public abstract class EntityCacheService<T>(IDistributedCache cache, IConfigurat
     public async Task<T?> GetOrFetch(string id, Func<Task<T?>> fetchFromDb, CancellationToken cancellationToken)
     {
         var cached = await GetCachedAsync(id, cancellationToken);
-        if (cached is not null) return cached;
+        if (cached is not null)
+        {
+            // Debug, not Information - this runs on every LinkApi/RedirectApi request, same volume
+            // concern as those controllers. Flip to Debug locally to see the cache hit/miss split
+            // that the control panel's cache toggle experiment is all about.
+            _logger.LogDebug("Cache hit for {Key}", Key(id));
+            return cached;
+        }
 
         var key = Key(id);
         // Without this, every concurrent caller that misses the cache for the same key runs its own
@@ -110,6 +117,7 @@ public abstract class EntityCacheService<T>(IDistributedCache cache, IConfigurat
     private async Task<T?> FetchAndCacheAsync(string id, Func<Task<T?>> fetchFromDb, CancellationToken cancellationToken)
     {
         var entity = await fetchFromDb();
+        _logger.LogDebug("Cache miss for {Key}, fetched from DB", Key(id));
         if (entity is not null) await CacheAsync(entity, id, cancellationToken);
         return entity;
     }

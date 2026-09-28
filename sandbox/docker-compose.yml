@@ -9,8 +9,20 @@ x-jwt-signing-key: &jwt-signing-key "dev-only-signing-key-do-not-use-in-producti
 # InternalApiKeyAuthenticationHandler.
 x-internal-api-key: &internal-api-key "dev-only-internal-api-key-do-not-use-in-production-1234567890"
 
+# Caps every container's default json-file log driver so a long-running stack (or a k6 load test
+# hammering LinkApi/RedirectApi for minutes) can't quietly fill the host's disk with log files - the
+# driver still rotates and keeps the most recent output, it just stops growing without bound. Doesn't
+# affect the Aspire Dashboard log viewer or otel-collector - those get logs over OTLP independently of
+# what Docker itself retains on disk (see ServiceDefaults.Extensions.ConfigureLogging).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
+    logging: *default-logging
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: postgres
@@ -47,6 +59,7 @@ services:
   # together. See replica-entrypoint.sh for how each one bootstraps itself via pg_basebackup on
   # first start, then runs as a normal hot-standby thereafter.
   postgres-replica1:
+    logging: *default-logging
     image: postgres:16-alpine
     user: postgres
     environment:
@@ -84,6 +97,7 @@ services:
       retries: 10
 
   postgres-replica2:
+    logging: *default-logging
     image: postgres:16-alpine
     user: postgres
     environment:
@@ -111,6 +125,7 @@ services:
       retries: 10
 
   pgcat:
+    logging: *default-logging
     image: ghcr.io/postgresml/pgcat:latest
     ports:
       - "6432:6432" # exposed for local psql/inspection, same as postgres's own 5432 below
@@ -138,6 +153,7 @@ services:
   # first to discover the current master and auto-reconnects on failover — no app code needed for
   # this, see Shared/Infrastructure/RedisClickCounterService.cs and Shared/Common/EntityCacheService.cs).
   redis-master:
+    logging: *default-logging
     image: redis:7-alpine
     ports:
       - "6379:6379"
@@ -158,6 +174,7 @@ services:
       retries: 10
 
   redis-replica1:
+    logging: *default-logging
     image: redis:7-alpine
     # --min-replicas-* baked in here too, not just master-entrypoint.sh's redis-master paths -
     # Sentinel promotes a replica to master via REPLICAOF NO ONE without setting server-level config,
@@ -173,6 +190,7 @@ services:
       retries: 10
 
   redis-replica2:
+    logging: *default-logging
     image: redis:7-alpine
     # See redis-replica1's comment on --min-replicas-*.
     command: ["redis-server", "--replicaof", "redis-master", "6379", "--min-replicas-to-write", "1", "--min-replicas-max-lag", "10"]
@@ -186,6 +204,7 @@ services:
       retries: 10
 
   redis-sentinel-1:
+    logging: *default-logging
     image: redis:7-alpine
     # Sentinel rewrites its own config file on every state change, so the template gets copied into
     # a writable named volume rather than bind-mounted read-only from the repo.
@@ -238,6 +257,7 @@ services:
       retries: 10
 
   redis-sentinel-2:
+    logging: *default-logging
     image: redis:7-alpine
     entrypoint: ["/bin/sh", "-c"]
     # See the matching comment on redis-sentinel-1 for why this resolves "redis-master" itself
@@ -265,6 +285,7 @@ services:
       retries: 10
 
   redis-sentinel-3:
+    logging: *default-logging
     image: redis:7-alpine
     entrypoint: ["/bin/sh", "-c"]
     # See the matching comment on redis-sentinel-1 for why this resolves "redis-master" itself
@@ -292,6 +313,7 @@ services:
       retries: 10
 
   rabbitmq:
+    logging: *default-logging
     image: rabbitmq:3-management-alpine
     ports:
       - "5672:5672"   # AMQP
@@ -309,6 +331,7 @@ services:
   # no-auth dev posture). mongo-init below runs rs.initiate() once; the members themselves just
   # need --replSet so they know what set they belong to.
   mongo1:
+    logging: *default-logging
     image: mongo:7
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
@@ -322,6 +345,7 @@ services:
       retries: 10
 
   mongo2:
+    logging: *default-logging
     image: mongo:7
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
@@ -335,6 +359,7 @@ services:
       retries: 10
 
   mongo3:
+    logging: *default-logging
     image: mongo:7
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
@@ -351,6 +376,7 @@ services:
   # rs.status() succeeds (and it just logs "already initialized") once the set exists, so a
   # `docker compose up` that recreates this container harmlessly no-ops instead of erroring.
   mongo-init:
+    logging: *default-logging
     image: mongo:7
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
@@ -381,6 +407,7 @@ services:
         condition: service_healthy
 
   mongo-express:
+    logging: *default-logging
     image: mongo-express:latest
     ports:
       - "8085:8081"
@@ -394,6 +421,7 @@ services:
         condition: service_completed_successfully
 
   redisinsight:
+    logging: *default-logging
     image: redis/redisinsight:latest
     ports:
       - "5540:5540"
@@ -407,6 +435,7 @@ services:
     # current master directly is fine — re-add if a failover actually promotes a different node).
 
   pgweb:
+    logging: *default-logging
     image: sosedoff/pgweb:latest
     ports:
       - "8084:8081"
@@ -429,6 +458,7 @@ services:
   # observe. The `:ro` volume mount is a second, filesystem-level backstop in case `-r` is ever
   # dropped or the image's flag behavior changes.
   link-api-fallback-viewer:
+    logging: *default-logging
     image: coleifer/sqlite-web:latest
     command: ["sqlite_web", "-H", "0.0.0.0", "-x", "-r", "/data/rabbitmq-fallback.db"]
     ports:
@@ -439,6 +469,7 @@ services:
       - link-api
 
   redirect-api-fallback-viewer:
+    logging: *default-logging
     image: coleifer/sqlite-web:latest
     command: ["sqlite_web", "-H", "0.0.0.0", "-x", "-r", "/data/rabbitmq-fallback.db"]
     ports:
@@ -449,6 +480,7 @@ services:
       - redirect-api
 
   aspire-dashboard:
+    logging: *default-logging
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
     ports:
       - "18888:18888" # dashboard UI
@@ -463,6 +495,7 @@ services:
   # drill-down, and traces only (re-encoded as OTLP/JSON) to control-api's own ingestion endpoint
   # for automated per-run bottleneck aggregation - see otel-collector-config.yaml.
   otel-collector:
+    logging: *default-logging
     image: otel/opentelemetry-collector:latest
     volumes:
       - ./infra/otel-collector/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
@@ -471,6 +504,7 @@ services:
         condition: service_started
 
   auth-api:
+    logging: *default-logging
     build:
       context: ..
       dockerfile: src/backend/Services/AuthApi/Dockerfile
@@ -511,6 +545,7 @@ services:
       retries: 10
 
   link-api:
+    logging: *default-logging
     build:
       context: ..
       dockerfile: src/backend/Services/LinkApi/Dockerfile
@@ -573,6 +608,7 @@ services:
       retries: 10
 
   redirect-api:
+    logging: *default-logging
     build:
       context: ..
       dockerfile: src/backend/Services/RedirectApi/Dockerfile
@@ -620,6 +656,7 @@ services:
       retries: 10
 
   nginx:
+    logging: *default-logging
     image: nginx:alpine
     ports:
       - "8082:8082" # LinkApi - round-robins across however many link-api replicas exist
@@ -633,6 +670,7 @@ services:
         condition: service_healthy
 
   shortener-service:
+    logging: *default-logging
     build:
       context: ..
       dockerfile: src/backend/Services/ShortenerService/Dockerfile
@@ -669,6 +707,7 @@ services:
       retries: 10
 
   traffic-service:
+    logging: *default-logging
     build:
       context: ..
       dockerfile: src/backend/Services/TrafficService/Dockerfile
@@ -710,6 +749,7 @@ services:
       retries: 10
 
   control-api:
+    logging: *default-logging
     build:
       context: ./infra/control-api
       dockerfile: Dockerfile

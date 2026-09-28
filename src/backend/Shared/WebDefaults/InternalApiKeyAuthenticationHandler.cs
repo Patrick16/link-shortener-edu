@@ -36,6 +36,10 @@ public sealed class InternalApiKeyAuthenticationHandler(
         var configuredKey = configuration[Constants.InternalApiKeySection];
         if (string.IsNullOrEmpty(configuredKey) || provided != configuredKey)
         {
+            // Warning, not Debug - this scheme is only ever meant to be used by control-api, so a
+            // rejected attempt is either a misconfiguration or something worth a second look, not
+            // routine traffic. Never logs the provided key itself.
+            Logger.LogWarning("Rejected internal API key authentication attempt");
             return Task.FromResult(AuthenticateResult.Fail("Invalid internal API key."));
         }
 

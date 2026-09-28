@@ -125,6 +125,10 @@ public sealed class RabbitMqConsumer(
             return;
         }
 
+        // Debug, not Information - one per message, same volume as the publish side. The batch this
+        // message ends up in is what gets an Information-level summary, in FlushBatchAsync below.
+        _logger.LogDebug("Received message {MessageId} ({RoutingKey})", messageId, ea.RoutingKey);
+
         await writer.WriteAsync(new BufferedDelivery<TMessage>(ea.DeliveryTag, messageId, message), cancellationToken)
             .ConfigureAwait(false);
     }
@@ -212,6 +216,10 @@ public sealed class RabbitMqConsumer(
     {
         var items = batch.Select(x => new BatchItem<TMessage>(x.MessageId, x.Message)).ToList();
         var maxDeliveryTag = batch[^1].DeliveryTag;
+
+        // Debug - shows how many individual "Received" log lines just got collapsed into one handler
+        // call, which is the whole point of batching (see RabbitMq:BatchSize/BatchTimeoutMs).
+        _logger.LogDebug("Flushing batch of {Count} message(s) from queue {QueueName}", batch.Count, queueName);
 
         BatchOutcome outcome;
         try

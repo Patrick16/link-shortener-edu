@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace AuthApi.Tests;
@@ -35,7 +36,7 @@ public class AuthControllerTests
         var environment = new Mock<IWebHostEnvironment>();
         environment.Setup(x => x.EnvironmentName).Returns(isDevelopment ? "Development" : "Production");
 
-        return new AuthController(context, tokenGenerator.Object, refreshTokenService.Object, environment.Object)
+        return new AuthController(context, tokenGenerator.Object, refreshTokenService.Object, environment.Object, NullLogger<AuthController>.Instance)
         {
             // Request/Response cookie access needs a real HttpContext - the controller has none by
             // default when constructed directly like this, outside an actual HTTP pipeline.

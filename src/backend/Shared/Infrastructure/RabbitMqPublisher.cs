@@ -94,6 +94,10 @@ public sealed class RabbitMqPublisher(
                 cancellationToken: cancellationToken);
 
             healthy = true;
+            // Debug, not Information - one publish per CreateLink/redirect request, same volume
+            // concern as the controllers that call this. Shows the publish leg of the flow when a
+            // service is flipped to Debug locally.
+            _logger.LogDebug("Published message {MessageId} to topic {Topic}", messageId, topic);
             return true;
         }
         catch (Exception ex)

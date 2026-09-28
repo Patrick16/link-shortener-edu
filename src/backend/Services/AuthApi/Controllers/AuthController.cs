@@ -14,7 +14,8 @@ public class AuthController(
     DatabaseContext context,
     IJwtTokenGenerator tokenGenerator,
     IRefreshTokenService refreshTokenService,
-    IWebHostEnvironment environment) : Controller
+    IWebHostEnvironment environment,
+    ILogger<AuthController> logger) : Controller
 {
     private static readonly PasswordHasher<User> PasswordHasher = new();
     private const string RefreshTokenCookieName = "refreshToken";
@@ -23,6 +24,7 @@ public class AuthController(
     private readonly IJwtTokenGenerator _tokenGenerator = tokenGenerator;
     private readonly IRefreshTokenService _refreshTokenService = refreshTokenService;
     private readonly IWebHostEnvironment _environment = environment;
+    private readonly ILogger<AuthController> _logger = logger;
 
     [HttpPost("register")]
     public async Task<ActionResult<AuthResponse>> Register(
@@ -35,6 +37,9 @@ public class AuthController(
         var emailTaken = await _context.Users.AnyAsync(x => x.Email == normalizedEmail, cancellationToken);
         if (emailTaken)
         {
+            // Debug, not Warning - a duplicate registration attempt is an everyday user mistake, not
+            // a system concern. Never logging the email itself here or below (PII).
+            _logger.LogDebug("Registration rejected: email already registered");
             return EmailAlreadyRegistered();
         }
 
@@ -59,11 +64,13 @@ public class AuthController(
             // can both pass the check before either commits. The unique index on Email (DatabaseContext)
             // then rejects the loser here instead of at the check, so translate that into the same 409
             // the check normally returns rather than letting it surface as an unhandled 500.
+            _logger.LogDebug("Registration rejected: email already registered (race with a concurrent request)");
             return EmailAlreadyRegistered();
         }
 
         await IssueRefreshCookieAsync(user.Id, cancellationToken);
         var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
+        _logger.LogInformation("Registered user {UserId}", user.Id);
         return new AuthResponse(token, expiresAt);
     }
 
@@ -77,20 +84,24 @@ public class AuthController(
         var normalizedEmail = NormalizeEmail(request.Email);
         var user = await _context.Users.FirstOrDefaultAsync(x => x.Email == normalizedEmail, cancellationToken);
         // Same "invalid email or password" response whether the email doesn't exist or the password
-        // is wrong — telling those apart lets an attacker enumerate registered emails.
+        // is wrong — telling those apart lets an attacker enumerate registered emails. Same reasoning
+        // applies to the log line below: it never includes the email either, for the same reason.
         if (user is null)
         {
+            _logger.LogDebug("Login rejected: unknown email");
             return InvalidCredentials();
         }
 
         var result = PasswordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password);
         if (result == PasswordVerificationResult.Failed)
         {
+            _logger.LogDebug("Login rejected for user {UserId}: wrong password", user.Id);
             return InvalidCredentials();
         }
 
         await IssueRefreshCookieAsync(user.Id, cancellationToken);
         var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
+        _logger.LogInformation("User {UserId} logged in", user.Id);
         return new AuthResponse(token, expiresAt);
     }
 

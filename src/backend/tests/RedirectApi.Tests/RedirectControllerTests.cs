@@ -5,6 +5,7 @@ using Infrastructure;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RedirectApi;
 using RedirectApi.Controllers;
@@ -36,7 +37,7 @@ public class RedirectControllerTests
         httpContext.Request.Host = new HostString("short.example");
         httpContext.Request.Path = "/abc12345";
 
-        return new RedirectController(context, cache.Object, publisher.Object, clickCounter.Object)
+        return new RedirectController(context, cache.Object, publisher.Object, clickCounter.Object, NullLogger<RedirectController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext },
         };

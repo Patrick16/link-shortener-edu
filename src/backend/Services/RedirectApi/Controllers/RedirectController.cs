@@ -14,12 +14,14 @@ public class RedirectController(
     DatabaseContext context,
     IEntityCacheService<Link> cache,
     IMessagePublisher publisher,
-    IClickCounterService clickCounter) : Controller
+    IClickCounterService clickCounter,
+    ILogger<RedirectController> logger) : Controller
 {
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _cache = cache;
     private readonly IMessagePublisher _publisher = publisher;
     private readonly IClickCounterService _clickCounter = clickCounter;
+    private readonly ILogger<RedirectController> _logger = logger;
 
     [HttpGet("{hash}")]
     public async Task<IActionResult> RedirectToOrigin(
@@ -32,6 +34,9 @@ public class RedirectController(
         var link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, cancellationToken);
         if (link is null)
         {
+            // Debug, not Warning - an unknown hash is an everyday user/bot mistake (typo, expired
+            // link, scanner probing), not a system anomaly worth surfacing by default.
+            _logger.LogDebug("Redirect miss for unknown hash {Hash}", hash);
             return NotFound();
         }
 
@@ -54,6 +59,11 @@ public class RedirectController(
         // Same pattern as LinkApi: published (or SQLite-fallback-queued) before responding, so a
         // click is never silently dropped just because the redirect finished first.
         await _publisher.PublishAsync(clickEvent, Topics.ClickTracked, cancellationToken);
+
+        // Debug, not Information - this is the hottest path in the whole system under a load test
+        // (every single click). Flip RedirectApi to Debug locally to watch redirect -> publish ->
+        // TrafficService/ShortenerService-consume step by step.
+        _logger.LogDebug("Redirecting {Hash} -> {OriginalLink}, click {ClickId} published", hash, link.OriginalLink, clickEvent.Id);
 
         // 302 — a short link's target can change (or the link could be deleted), so this must
         // never be cached as permanent by the browser.
