@@ -1509,6 +1509,30 @@ button:disabled {
   margin-top: 16px;
 }
 
+.report-export-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.report-export-button {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.report-export-button:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
 .stat-tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));

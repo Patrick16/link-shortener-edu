@@ -1,5 +1,6 @@
 import { BottleneckPanel } from './BottleneckPanel'
-import type { BottleneckVerdict, TraceHopStats, TrafficReport } from '../types/controlApi'
+import { buildReportHtml, buildReportMarkdown, downloadTextFile, reportExportFilename } from '../utils/exportReport'
+import type { BottleneckVerdict, RunSnapshot, TraceHopStats, TrafficReport } from '../types/controlApi'
 
 const LATENCY_ROWS: Array<{ key: 'avg' | 'med' | 'p90' | 'p95' | 'max'; label: string }> = [
   { key: 'avg', label: 'avg' },
@@ -16,16 +17,37 @@ interface Props {
   // before this feature existed has neither at all.
   verdict?: BottleneckVerdict | null
   traceHops?: TraceHopStats[] | null
+  // Only passed from RunHistoryPanel's detail view, which already has the full saved run - lets
+  // the exported report also include the system configuration the run happened under, instead of
+  // just the k6 result. TrafficResultPanel's "just finished" view has no snapshot yet, so its
+  // export is report/verdict/traceHops only.
+  snapshot?: RunSnapshot | null
 }
 
 // Pure presentation over one TrafficReport - shared by the "just finished" view (TrafficResultPanel)
 // and the "looking at a past run" view (RunHistoryPanel), so the two don't drift into rendering the
 // same numbers differently.
-export function TrafficReportView({ report, verdict, traceHops }: Props) {
+export function TrafficReportView({ report, verdict, traceHops, snapshot }: Props) {
   const maxLatency = report.httpReqDuration ? Math.max(...LATENCY_ROWS.map((r) => report.httpReqDuration![r.key])) : 0
+
+  function exportAs(format: 'md' | 'html') {
+    const input = { report, verdict, traceHops, snapshot }
+    const content = format === 'md' ? buildReportMarkdown(input) : buildReportHtml(input)
+    const mimeType = format === 'md' ? 'text/markdown' : 'text/html'
+    downloadTextFile(reportExportFilename(input, format), content, mimeType)
+  }
 
   return (
     <div className="traffic-report">
+      <div className="report-export-actions">
+        <button type="button" className="report-export-button" onClick={() => exportAs('md')}>
+          Export .md
+        </button>
+        <button type="button" className="report-export-button" onClick={() => exportAs('html')}>
+          Export .html
+        </button>
+      </div>
+
       <div className="stat-tiles">
         <div className="stat-tile">
           <span className="stat-tile-value">{report.httpRequests}</span>
