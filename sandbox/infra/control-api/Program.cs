@@ -459,4 +459,16 @@ app.MapDelete("/api/runs", async (IRunHistoryStore store, CancellationToken ct) 
 app.MapDelete("/api/runs/{id}", async (string id, IRunHistoryStore store, CancellationToken ct) =>
     await store.DeleteAsync(id, ct) ? Results.Ok() : Results.NotFound());
 
+app.MapPost("/api/runs/{id}/name", async (string id, RenameRunRequest request, IRunHistoryStore store, CancellationToken ct) =>
+{
+    var scenario = request.Scenario?.Trim();
+    if (string.IsNullOrEmpty(scenario))
+    {
+        return Results.BadRequest(new { error = "scenario name cannot be empty" });
+    }
+
+    var summary = await store.RenameAsync(id, scenario, ct);
+    return summary is null ? Results.NotFound() : Results.Ok(summary);
+});
+
 app.Run();

@@ -161,6 +161,49 @@ public class RunHistoryStore : IRunHistoryStore
         }
     }
 
+    // Read-modify-write of one run's Request.Scenario - takes the same _lock as every other method
+    // here so it can't race SaveAsync's retention cleanup or a concurrent DeleteAsync/ClearAsync
+    // (same TOCTOU concern GetAsync's own comment explains).
+    public async Task<RunSummary?> RenameAsync(string id, string scenario, CancellationToken ct)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var path = PathFor(id);
+            if (path is null || !File.Exists(path))
+            {
+                return null;
+            }
+
+            RunSnapshot snapshot;
+            await using (var readStream = File.OpenRead(path))
+            {
+                snapshot = await JsonSerializer.DeserializeAsync<RunSnapshot>(readStream, JsonOptions, ct)
+                    ?? throw new InvalidOperationException($"Run file for '{id}' deserialized to null.");
+            }
+
+            var renamed = snapshot with { Request = snapshot.Request with { Scenario = scenario } };
+
+            await using (var writeStream = File.Create(path))
+            {
+                await JsonSerializer.SerializeAsync(writeStream, renamed, JsonOptions, ct);
+            }
+
+            return new RunSummary(
+                renamed.Id,
+                renamed.Timestamp,
+                renamed.Request.Scenario,
+                renamed.Report.HttpRequests,
+                renamed.Report.FailedRequests,
+                renamed.Report.ExitCode,
+                renamed.Report.HttpRequestRate);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
     // Returns how many files it failed to delete - a single bad file (permissions, an unexpected
     // I/O error) used to abort the whole loop, leaving everything not yet reached still on disk
     // while everything before it was already gone, and surfaced as an unhandled 500 instead of a

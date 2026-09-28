@@ -24,6 +24,8 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
   const [comparing, setComparing] = useState(false)
   const [deleteFailedCount, setDeleteFailedCount] = useState(0)
   const [clearError, setClearError] = useState<string | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameError, setRenameError] = useState<string | null>(null)
 
   // Bumped every time a clear actually completes, so a refresh() started before it (e.g. the
   // lastSavedRunId effect firing right as the user clicks "Clear history") can tell it's now stale
@@ -100,6 +102,27 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
     }
   }
 
+  // Renames just the run's own label (Request.Scenario) - the k6 report itself, the config it ran
+  // under, and every other field are untouched server-side (see RunHistoryStore.RenameAsync).
+  async function renameRun(id: string, currentName: string) {
+    const next = window.prompt('Rename this run', currentName)
+    if (next === null) return
+    const trimmed = next.trim()
+    if (!trimmed || trimmed === currentName) return
+
+    setRenamingId(id)
+    setRenameError(null)
+    try {
+      const summary = await controlApi.renameRun(id, trimmed)
+      setRuns((prev) => prev.map((r) => (r.id === id ? summary : r)))
+      setSelected((prev) => (prev && prev.id === id ? { ...prev, request: { ...prev.request, scenario: trimmed } } : prev))
+    } catch {
+      setRenameError('Failed to rename the run - see the console for details.')
+    } finally {
+      setRenamingId(null)
+    }
+  }
+
   function toggleChecked(id: string) {
     setChecked((prev) => {
       const next = new Set(prev)
@@ -145,7 +168,18 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
             Reuse config
           </button>
         </div>
-        <h3 className="run-history-detail-title">{selected.request.scenario}</h3>
+        <div className="run-history-detail-title-row">
+          <h3 className="run-history-detail-title">{selected.request.scenario}</h3>
+          <button
+            className="run-history-rename"
+            onClick={() => renameRun(selected.id, selected.request.scenario)}
+            disabled={renamingId === selected.id}
+            title="Rename this run"
+          >
+            Rename
+          </button>
+        </div>
+        {renameError && <p className="service-card-error">{renameError}</p>}
         <p className="run-history-detail-timestamp">{formatTimestamp(selected.timestamp)}</p>
 
         <div className="run-history-detail-section">
@@ -228,6 +262,8 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
         </div>
       )}
 
+      {renameError && <p className="service-card-error">{renameError}</p>}
+
       {runs.length === 0 && <p className="run-history-empty">No runs yet - completed runs will show up here.</p>}
       <ul className="run-history-list">
         {runs.map((run) => (
@@ -246,6 +282,15 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
                 <span className="run-history-item-rps">{run.httpRequestRate.toFixed(1)} rps</span>
                 {run.failedRequests > 0 && <span className="run-history-item-failed"> · {run.failedRequests} failed</span>}
               </span>
+            </button>
+            <button
+              className="run-history-rename"
+              onClick={() => renameRun(run.id, run.scenario)}
+              disabled={renamingId === run.id}
+              title="Rename this run"
+              aria-label={`Rename run ${run.scenario}`}
+            >
+              Rename
             </button>
           </li>
         ))}

@@ -122,4 +122,6 @@ export const controlApi = {
   getRun: (id: string) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}`),
   deleteRun: (id: string) => send(`/api/runs/${encodeURIComponent(id)}`, 'DELETE'),
   clearRuns: () => request<{ failedCount: number }>('/api/runs', 'DELETE'),
+  renameRun: (id: string, scenario: string) =>
+    request<RunSummary>(`/api/runs/${encodeURIComponent(id)}/name`, 'POST', { scenario }),
 }

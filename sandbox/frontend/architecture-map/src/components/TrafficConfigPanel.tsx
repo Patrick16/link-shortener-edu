@@ -1,4 +1,4 @@
-import { RAMP_PRESETS, type TrafficConfigState } from '../hooks/useTrafficConfig'
+import { defaultScenarioName, RAMP_PRESETS, type TrafficConfigState } from '../hooks/useTrafficConfig'
 import { StageGraphEditor } from './StageGraphEditor'
 import { EndpointSequenceBuilder } from './EndpointSequenceBuilder'
 import { DataPoolControls } from './DataPoolControls'
@@ -22,7 +22,7 @@ export function TrafficConfigPanel({ config, disabled, running, onRun }: Props) 
   return (
     <div className="traffic-config-panel">
       <button className="run-traffic-button" onClick={onRun} disabled={disabled || !config.canRun}>
-        {running ? `Running ${config.scenarioName.trim() || 'flow'}...` : 'Run traffic'}
+        {running ? `Running ${config.scenarioName.trim() || defaultScenarioName(config.sequence)}...` : 'Run traffic'}
       </button>
 
       <h3 className="traffic-panel-subheading">What to call</h3>

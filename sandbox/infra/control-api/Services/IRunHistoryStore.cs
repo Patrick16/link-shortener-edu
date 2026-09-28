@@ -17,4 +17,8 @@ public interface IRunHistoryStore
     // how many files it failed to delete (0 means every run was cleared) instead of throwing on the
     // first failure and leaving the rest undeleted.
     Task<int> ClearAsync(CancellationToken ct);
+
+    // Overwrites just Request.Scenario on an already-saved run - the only field the history list
+    // identifies a run by. Returns the updated summary, or null if no such run exists.
+    Task<RunSummary?> RenameAsync(string id, string scenario, CancellationToken ct);
 }

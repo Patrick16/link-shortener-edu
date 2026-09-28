@@ -238,6 +238,46 @@ public class RunHistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task RenameAsync_KnownId_UpdatesScenarioOnBothSummaryAndFullSnapshot()
+    {
+        var sut = NewSut();
+        await sut.SaveAsync(NewSnapshot("run-1"), CancellationToken.None);
+
+        var summary = await sut.RenameAsync("run-1", "checkout spike", CancellationToken.None);
+
+        Assert.NotNull(summary);
+        Assert.Equal("checkout spike", summary!.Scenario);
+        var reloaded = await sut.GetAsync("run-1", CancellationToken.None);
+        Assert.Equal("checkout spike", reloaded!.Request.Scenario);
+        // Only Request.Scenario changes - the rest of the snapshot (including the k6 report's own
+        // Scenario field) is left exactly as it was.
+        Assert.Equal("smoke-test", reloaded.Report.Scenario);
+    }
+
+    [Fact]
+    public async Task RenameAsync_UnknownId_ReturnsNull()
+    {
+        var sut = NewSut();
+
+        var summary = await sut.RenameAsync("does-not-exist", "new-name", CancellationToken.None);
+
+        Assert.Null(summary);
+    }
+
+    [Theory]
+    [InlineData("../../etc/passwd")]
+    [InlineData("../custom-scenarios")]
+    [InlineData("run.1")]
+    public async Task RenameAsync_PathTraversalId_ReturnsNullWithoutTouchingTheFilesystem(string id)
+    {
+        var sut = NewSut();
+
+        var summary = await sut.RenameAsync(id, "new-name", CancellationToken.None);
+
+        Assert.Null(summary);
+    }
+
+    [Fact]
     public async Task SaveAsync_MoreThanTwoHundredRuns_PrunesOldestBeyondRetentionLimit()
     {
         var sut = NewSut();

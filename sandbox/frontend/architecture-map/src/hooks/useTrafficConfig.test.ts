@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { controlApi } from '../api/controlApi'
 import type { CustomScenario, EndpointDefinition } from '../types/controlApi'
-import { pointsToStages, RAMP_PRESETS, useTrafficConfig } from './useTrafficConfig'
+import { defaultScenarioName, pointsToStages, RAMP_PRESETS, useTrafficConfig } from './useTrafficConfig'
 
 vi.mock('../api/controlApi', () => ({
   controlApi: { listEndpoints: vi.fn(), listDataSources: vi.fn() },
@@ -28,6 +28,27 @@ describe('pointsToStages', () => {
 
   it('returns no stages for an empty list', () => {
     expect(pointsToStages([])).toEqual([])
+  })
+})
+
+describe('defaultScenarioName', () => {
+  it('falls back to "flow" for an empty sequence', () => {
+    expect(defaultScenarioName([])).toBe('flow')
+  })
+
+  it('joins endpoint ids with an arrow for a short sequence', () => {
+    const steps = [
+      { endpointId: 'create-link', pauseAfterSeconds: 0 },
+      { endpointId: 'resolve-link', pauseAfterSeconds: 0 },
+    ]
+
+    expect(defaultScenarioName(steps)).toBe('create-link -> resolve-link')
+  })
+
+  it('truncates a long sequence to the first 3 ids plus a count', () => {
+    const steps = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ endpointId: id, pauseAfterSeconds: 0 }))
+
+    expect(defaultScenarioName(steps)).toBe('a -> b -> c +2')
   })
 })
 
@@ -120,10 +141,17 @@ describe('useTrafficConfig', () => {
     expect(request.stages).toBeUndefined()
   })
 
-  it('buildRequest defaults the scenario name to "flow" when left blank', () => {
+  it('buildRequest defaults the scenario name to "flow" when left blank with no sequence', () => {
     const { result } = renderHook(() => useTrafficConfig())
 
     expect(result.current.buildRequest().scenario).toBe('flow')
+  })
+
+  it('buildRequest defaults the scenario name to the endpoint sequence when left blank', () => {
+    const { result } = renderHook(() => useTrafficConfig())
+    act(() => result.current.setSequence([{ endpointId: 'create-link', pauseAfterSeconds: 0 }]))
+
+    expect(result.current.buildRequest().scenario).toBe('create-link')
   })
 
   it('loadScenario applies every field from a saved custom scenario', () => {

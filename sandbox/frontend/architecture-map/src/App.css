@@ -2019,9 +2019,37 @@ button:disabled {
   filter: brightness(1.1);
 }
 
+.run-history-detail-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
 .run-history-detail-title {
   font-size: 16px;
   margin: 0 0 2px;
+}
+
+.run-history-rename {
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.run-history-rename:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.run-history-rename:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .run-history-detail-timestamp {

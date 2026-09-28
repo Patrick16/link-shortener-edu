@@ -63,6 +63,16 @@ export const RAMP_PRESETS: RampPreset[] = [
   },
 ]
 
+// Falls back to naming the run after its own endpoint sequence rather than a fixed "flow" for
+// every unnamed run - otherwise every ad-hoc run left unnamed (typing a name is only needed to
+// *save* a scenario, never to run one) ends up sharing the exact same label in run history, with
+// no way to tell them apart until you open each one.
+export function defaultScenarioName(steps: FlowStep[]): string {
+  if (steps.length === 0) return 'flow'
+  const ids = steps.map((s) => s.endpointId)
+  return ids.length <= 3 ? ids.join(' -> ') : `${ids.slice(0, 3).join(' -> ')} +${ids.length - 3}`
+}
+
 export function pointsToStages(points: StagePoint[]): TrafficStage[] {
   const stages: TrafficStage[] = []
   for (let i = 1; i < points.length; i++) {
@@ -118,7 +128,7 @@ export function useTrafficConfig() {
 
   function buildRequest(): TrafficRequest {
     return {
-      scenario: scenarioName.trim() || 'flow',
+      scenario: scenarioName.trim() || defaultScenarioName(sequence),
       vus: stopMode === 'iterations' ? flatVus : (points[0]?.vus ?? 0),
       durationSeconds: totalDuration,
       steps: sequence,
