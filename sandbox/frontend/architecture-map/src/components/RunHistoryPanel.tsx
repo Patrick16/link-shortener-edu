@@ -10,6 +10,21 @@ interface Props {
   onReuseRun: (snapshot: RunSnapshot) => void
 }
 
+// Icon-only rename affordance (a text "Rename" button next to every run name/row was too heavy) -
+// inherits color from the button via currentColor so it follows the same hover/disabled styling.
+function PencilIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path
+        d="M11.3 1.7a1.5 1.5 0 0 1 2.12 0l.88.88a1.5 1.5 0 0 1 0 2.12l-8 8-3.5.88.88-3.5 8-8Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
 // Right sidebar: every past run, newest first - each one a full snapshot of both the report AND
 // the system configuration it ran under (infra toggles, replica counts, connection counts at the
 // time), so "why did this run behave differently from that one" has an actual answer later instead
@@ -175,8 +190,9 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
             onClick={() => renameRun(selected.id, selected.request.scenario)}
             disabled={renamingId === selected.id}
             title="Rename this run"
+            aria-label="Rename this run"
           >
-            Rename
+            <PencilIcon />
           </button>
         </div>
         {renameError && <p className="service-card-error">{renameError}</p>}
@@ -290,7 +306,7 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
               title="Rename this run"
               aria-label={`Rename run ${run.scenario}`}
             >
-              Rename
+              <PencilIcon />
             </button>
           </li>
         ))}

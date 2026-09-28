@@ -2021,8 +2021,8 @@ button:disabled {
 
 .run-history-detail-title-row {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
 }
 
 .run-history-detail-title {
@@ -2032,19 +2032,23 @@ button:disabled {
 
 .run-history-rename {
   flex-shrink: 0;
-  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--text-h);
-  border-radius: 6px;
-  padding: 3px 10px;
-  font-size: 12px;
+  color: var(--text);
+  border-radius: 5px;
+  padding: 0;
   cursor: pointer;
-  white-space: nowrap;
 }
 
 .run-history-rename:hover:not(:disabled) {
   border-color: var(--accent-border);
   background: var(--accent-bg);
+  color: var(--accent);
 }
 
 .run-history-rename:disabled {
