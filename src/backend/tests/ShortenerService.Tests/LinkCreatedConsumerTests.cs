@@ -27,16 +27,19 @@ public class LinkCreatedConsumerTests
         UserId = null,
     };
 
+    private static List<BatchItem<LinkCreatedEvent>> NewBatch(params LinkCreatedEvent[] events) =>
+        events.Select(e => new BatchItem<LinkCreatedEvent>(Guid.NewGuid().ToString(), e)).ToList();
+
     private static LinkCreatedConsumer NewSut(IDbContextFactory<DatabaseContext> factory) =>
         new(Mock.Of<IMessageConsumer>(), factory, NullLogger<LinkCreatedConsumer>.Instance);
 
     [Fact]
-    public async Task HandleAsync_NewLink_PersistsToDatabase()
+    public async Task HandleBatchAsync_NewLink_PersistsToDatabase()
     {
         var factory = NewFactory(Guid.NewGuid().ToString());
         var sut = NewSut(factory);
 
-        await sut.HandleAsync(NewEvent(), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent()), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         var stored = await verify.Links.SingleAsync();
@@ -45,29 +48,41 @@ public class LinkCreatedConsumerTests
     }
 
     [Fact]
-    public async Task HandleAsync_RedeliveredMessage_IsSkippedWithoutError()
+    public async Task HandleBatchAsync_DuplicateHashWithinOneBatch_PersistsOnce()
     {
         var factory = NewFactory(Guid.NewGuid().ToString());
         var sut = NewSut(factory);
         var @event = NewEvent();
-        await sut.HandleAsync(@event, CancellationToken.None);
 
-        // Same hash arrives again (e.g. after a broker requeue) - must not throw a unique-key
-        // violation and must not duplicate the row.
-        await sut.HandleAsync(@event, CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(@event, @event with { }), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(1, await verify.Links.CountAsync());
     }
 
     [Fact]
-    public async Task HandleAsync_DifferentHashes_PersistsBoth()
+    public async Task HandleBatchAsync_RedeliveredInALaterBatch_IsSkippedWithoutError()
+    {
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var sut = NewSut(factory);
+        var @event = NewEvent();
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+
+        // Same hash arrives again in a separate batch (e.g. after a broker requeue) - must not throw
+        // a unique-key violation and must not duplicate the row.
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+
+        await using var verify = await factory.CreateDbContextAsync();
+        Assert.Equal(1, await verify.Links.CountAsync());
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_DifferentHashes_PersistsBoth()
     {
         var factory = NewFactory(Guid.NewGuid().ToString());
         var sut = NewSut(factory);
 
-        await sut.HandleAsync(NewEvent("hash0001"), CancellationToken.None);
-        await sut.HandleAsync(NewEvent("hash0002"), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent("hash0001"), NewEvent("hash0002")), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(2, await verify.Links.CountAsync());

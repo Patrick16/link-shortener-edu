@@ -6,15 +6,15 @@ using Microsoft.EntityFrameworkCore;
 
 namespace TrafficService;
 
-// Consumes ClickTrackedEvent and persists it to Postgres Clicks (the core click record) and a
-// ClickMeta document in Mongo (browser/OS/device/geo — schema-less, grows independently of the
-// core record). The two writes aren't transactional with each other, so redelivery has to handle
-// each independently: the event carries its own Id (generated once by RedirectApi), so a message
-// whose Id is already in Postgres skips only the Postgres insert (avoiding the primary-key
-// violation) but still goes on to attempt the Mongo write every time - that write is itself
-// idempotent (upsert by Id, see MongoClickMetaStore), so retrying it on redelivery is always safe,
-// and skipping it just because Postgres already has the row would otherwise mean any redelivery
-// caused by a transient Mongo failure permanently loses that click's metadata.
+// Consumes batches of ClickTrackedEvent and persists them to Postgres Clicks (the core click
+// record) and ClickMeta documents in Mongo (browser/OS/device/geo — schema-less, grows
+// independently of the core record). The two writes aren't transactional with each other, so
+// redelivery has to handle each independently: every event carries its own Id (generated once by
+// RedirectApi), so a batch containing an already-persisted Id skips only that Postgres insert
+// (avoiding the primary-key violation) but still goes on to attempt every click's Mongo write - that
+// write is itself idempotent (upsert by Id, see MongoClickMetaStore), so retrying it is always safe,
+// and skipping it just because Postgres already has the row would otherwise mean a redelivery caused
+// by a transient Mongo failure permanently loses that click's metadata.
 public sealed class ClickTrackedConsumer(
     IMessageConsumer consumer,
     IDbContextFactory<DatabaseContext> dbContextFactory,
@@ -33,43 +33,61 @@ public sealed class ClickTrackedConsumer(
     private readonly ILogger<ClickTrackedConsumer> _logger = logger;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        _consumer.ConsumeAsync<ClickTrackedEvent>(QueueName, Topics.ClickTracked, HandleAsync, stoppingToken);
+        _consumer.ConsumeBatchAsync<ClickTrackedEvent>(QueueName, Topics.ClickTracked, HandleBatchAsync, stoppingToken);
 
-    internal async Task HandleAsync(ClickTrackedEvent @event, CancellationToken cancellationToken)
+    internal async Task<BatchOutcome> HandleBatchAsync(
+        IReadOnlyList<BatchItem<ClickTrackedEvent>> batch, CancellationToken cancellationToken)
     {
         await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var alreadyStored = await context.Clicks.AnyAsync(x => x.Id == @event.Id, cancellationToken);
-        if (alreadyStored)
+        // The same click Id can appear twice in one batch if a redelivery lands alongside a fresher
+        // copy of itself - keep the last occurrence, same as "process it once" for any other duplicate.
+        var distinctByClickId = batch
+            .Select(x => x.Payload)
+            .GroupBy(x => x.Id)
+            .Select(g => g.Last())
+            .ToList();
+
+        var ids = distinctByClickId.Select(x => x.Id).ToList();
+        var alreadyStored = await context.Clicks
+            .Where(x => ids.Contains(x.Id))
+            .Select(x => x.Id)
+            .ToHashSetAsync(cancellationToken);
+
+        var newClicks = distinctByClickId.Where(x => !alreadyStored.Contains(x.Id)).ToList();
+        context.Clicks.AddRange(newClicks.Select(e => new Click(e.Id, e.ClickedAt, e.InboundLink, e.OutboundLink, e.Hash)));
+        await context.SaveChangesAsync(cancellationToken);
+
+        if (alreadyStored.Count > 0)
         {
             _logger.LogInformation(
-                "Click {ClickId} is already persisted in Postgres - skipping the insert, but still " +
-                "re-attempting the Mongo ClickMeta write in case an earlier attempt failed", @event.Id);
+                "{Count} click(s) in this batch were already persisted in Postgres - skipped their inserts, " +
+                "but still re-attempting the Mongo ClickMeta write for them in case an earlier attempt failed",
+                alreadyStored.Count);
         }
-        else
+
+        var metas = new List<ClickMeta>(distinctByClickId.Count);
+        foreach (var e in distinctByClickId)
         {
-            context.Clicks.Add(new Click(@event.Id, @event.ClickedAt, @event.InboundLink, @event.OutboundLink, @event.Hash));
-            await context.SaveChangesAsync(cancellationToken);
-        }
-
-        var parsedUserAgent = _userAgentParser.Parse(@event.UserAgent);
-        var geo = await _geoIpResolver.ResolveAsync(@event.IpAddress, cancellationToken);
-
-        await _clickMetaStore.SaveAsync(
-            new ClickMeta(
-                @event.Id,
-                @event.Hash,
-                @event.ClickedAt,
-                @event.UserAgent,
-                @event.Referrer,
-                @event.IpAddress,
+            var parsedUserAgent = _userAgentParser.Parse(e.UserAgent);
+            var geo = await _geoIpResolver.ResolveAsync(e.IpAddress, cancellationToken);
+            metas.Add(new ClickMeta(
+                e.Id,
+                e.Hash,
+                e.ClickedAt,
+                e.UserAgent,
+                e.Referrer,
+                e.IpAddress,
                 parsedUserAgent.Browser,
                 parsedUserAgent.Os,
                 parsedUserAgent.DeviceType,
                 geo.Country,
-                geo.City),
-            cancellationToken);
+                geo.City));
+        }
 
-        _logger.LogInformation("Persisted click {ClickId} for hash {Hash}", @event.Id, @event.Hash);
+        await _clickMetaStore.SaveManyAsync(metas, cancellationToken);
+
+        _logger.LogInformation("Persisted {Count} click(s) from this batch", distinctByClickId.Count);
+        return BatchOutcome.Success;
     }
 }

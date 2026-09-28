@@ -5,9 +5,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ShortenerService;
 
-// Consumes LinkCreatedEvent (LinkApi already generated the hash) and persists it to Postgres Links.
-// Redelivery-safe: a message whose hash is already stored is treated as already processed and skipped,
-// rather than failing on the unique-key violation.
+// Consumes batches of LinkCreatedEvent (LinkApi already generated the hash) and persists them to
+// Postgres Links. Redelivery-safe: a hash already stored is treated as already processed and
+// skipped, rather than failing the whole batch on a unique-key violation.
 public sealed class LinkCreatedConsumer(
     IMessageConsumer consumer,
     IDbContextFactory<DatabaseContext> dbContextFactory,
@@ -20,22 +20,38 @@ public sealed class LinkCreatedConsumer(
     private readonly ILogger<LinkCreatedConsumer> _logger = logger;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        _consumer.ConsumeAsync<LinkCreatedEvent>(QueueName, Topics.LinkCreated, HandleAsync, stoppingToken);
+        _consumer.ConsumeBatchAsync<LinkCreatedEvent>(QueueName, Topics.LinkCreated, HandleBatchAsync, stoppingToken);
 
-    internal async Task HandleAsync(LinkCreatedEvent @event, CancellationToken cancellationToken)
+    internal async Task<BatchOutcome> HandleBatchAsync(
+        IReadOnlyList<BatchItem<LinkCreatedEvent>> batch, CancellationToken cancellationToken)
     {
         await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        var alreadyStored = await context.Links.AnyAsync(x => x.Hash == @event.Hash, cancellationToken);
-        if (alreadyStored)
-        {
-            _logger.LogInformation("Link {Hash} is already persisted, skipping redelivered message", @event.Hash);
-            return;
-        }
+        // Same hash can appear twice in one batch if a redelivery lands alongside a fresher copy of
+        // itself - keep the last occurrence.
+        var distinctByHash = batch
+            .Select(x => x.Payload)
+            .GroupBy(x => x.Hash)
+            .Select(g => g.Last())
+            .ToList();
 
-        context.Links.Add(new Link(@event.Hash, @event.OriginalLink, @event.ShortenLink, @event.CreatedAt, @event.UserId));
+        var hashes = distinctByHash.Select(x => x.Hash).ToList();
+        var alreadyStored = await context.Links
+            .Where(x => hashes.Contains(x.Hash))
+            .Select(x => x.Hash)
+            .ToHashSetAsync(cancellationToken);
+
+        var newLinks = distinctByHash.Where(x => !alreadyStored.Contains(x.Hash)).ToList();
+        context.Links.AddRange(newLinks.Select(e => new Link(e.Hash, e.OriginalLink, e.ShortenLink, e.CreatedAt, e.UserId)));
         await context.SaveChangesAsync(cancellationToken);
 
-        _logger.LogInformation("Persisted link {Hash}", @event.Hash);
+        if (alreadyStored.Count > 0)
+        {
+            _logger.LogInformation(
+                "{Count} link(s) in this batch were already persisted, skipping their inserts", alreadyStored.Count);
+        }
+
+        _logger.LogInformation("Persisted {Count} new link(s) from this batch", newLinks.Count);
+        return BatchOutcome.Success;
     }
 }

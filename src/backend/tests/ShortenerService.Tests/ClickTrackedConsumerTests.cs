@@ -9,8 +9,8 @@ using ShortenerService;
 
 namespace ShortenerService.Tests;
 
-// SQLite in-memory, not EF Core's InMemory provider: HandleAsync uses ExecuteUpdateAsync (a single
-// atomic "UPDATE ... SET ClickCount = ClickCount + 1"), which InMemory doesn't support at all
+// SQLite in-memory, not EF Core's InMemory provider: HandleBatchAsync uses ExecuteUpdateAsync (a
+// single atomic "UPDATE ... SET ClickCount = ClickCount + n"), which InMemory doesn't support at all
 // (it only translates LINQ against SQL-backed providers). Each test opens its own private
 // ":memory:" connection - SQLite tears the database down once the last connection to it closes, so
 // the connection has to stay open for the test's whole lifetime, not just schema creation.
@@ -47,11 +47,14 @@ public sealed class ClickTrackedConsumerTests : IDisposable
         Referrer = "",
     };
 
+    private static List<BatchItem<ClickTrackedEvent>> NewBatch(params ClickTrackedEvent[] events) =>
+        events.Select(e => new BatchItem<ClickTrackedEvent>(Guid.NewGuid().ToString(), e)).ToList();
+
     private static ClickTrackedConsumer NewSut(IDbContextFactory<DatabaseContext> factory) =>
         new(Mock.Of<IMessageConsumer>(), factory, NullLogger<ClickTrackedConsumer>.Instance);
 
     [Fact]
-    public async Task HandleAsync_KnownHash_IncrementsClickCount()
+    public async Task HandleBatchAsync_KnownHash_IncrementsClickCount()
     {
         var factory = NewFactory();
         await using (var seed = await factory.CreateDbContextAsync())
@@ -61,7 +64,7 @@ public sealed class ClickTrackedConsumerTests : IDisposable
         }
         var sut = NewSut(factory);
 
-        await sut.HandleAsync(NewEvent(), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent()), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         var stored = await verify.Links.SingleAsync();
@@ -69,7 +72,7 @@ public sealed class ClickTrackedConsumerTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleAsync_MultipleEvents_AccumulatesCount()
+    public async Task HandleBatchAsync_MultipleEventsSameHashInOneBatch_AccumulatesCountInOneUpdate()
     {
         var factory = NewFactory();
         await using (var seed = await factory.CreateDbContextAsync())
@@ -79,9 +82,7 @@ public sealed class ClickTrackedConsumerTests : IDisposable
         }
         var sut = NewSut(factory);
 
-        await sut.HandleAsync(NewEvent(), CancellationToken.None);
-        await sut.HandleAsync(NewEvent(), CancellationToken.None);
-        await sut.HandleAsync(NewEvent(), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent(), NewEvent(), NewEvent()), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         var stored = await verify.Links.SingleAsync();
@@ -89,18 +90,39 @@ public sealed class ClickTrackedConsumerTests : IDisposable
     }
 
     [Fact]
-    public async Task HandleAsync_UnknownHash_DoesNotThrow()
+    public async Task HandleBatchAsync_MultipleBatches_AccumulatesCount()
+    {
+        var factory = NewFactory();
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null));
+            await seed.SaveChangesAsync();
+        }
+        var sut = NewSut(factory);
+
+        await sut.HandleBatchAsync(NewBatch(NewEvent()), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent()), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent()), CancellationToken.None);
+
+        await using var verify = await factory.CreateDbContextAsync();
+        var stored = await verify.Links.SingleAsync();
+        Assert.Equal(3, stored.ClickCount);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_UnknownHash_DoesNotThrow()
     {
         var factory = NewFactory();
         var sut = NewSut(factory);
 
-        var exception = await Record.ExceptionAsync(() => sut.HandleAsync(NewEvent("never-created"), CancellationToken.None));
+        var exception = await Record.ExceptionAsync(
+            () => sut.HandleBatchAsync(NewBatch(NewEvent("never-created")), CancellationToken.None));
 
         Assert.Null(exception);
     }
 
     [Fact]
-    public async Task HandleAsync_DifferentHashes_OnlyIncrementsTheMatchingLink()
+    public async Task HandleBatchAsync_DifferentHashes_OnlyIncrementsTheMatchingLink()
     {
         var factory = NewFactory();
         await using (var seed = await factory.CreateDbContextAsync())
@@ -111,7 +133,7 @@ public sealed class ClickTrackedConsumerTests : IDisposable
         }
         var sut = NewSut(factory);
 
-        await sut.HandleAsync(NewEvent("hash0001"), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent("hash0001")), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(1, (await verify.Links.SingleAsync(x => x.Hash == "hash0001")).ClickCount);

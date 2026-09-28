@@ -645,6 +645,10 @@ services:
       # Consumer QoS (unacked deliveries in flight) - read once at consumer startup, so changing it
       # needs a recreate, not a live toggle. See RabbitMqConsumer's own _prefetchCount field.
       RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
+      # How many deliveries RabbitMqConsumer buffers before flushing one bulk DB write, and how long
+      # a partial batch waits before flushing anyway - see its _batchSize/_batchTimeout fields.
+      RabbitMq__BatchSize: "${RABBITMQ_BATCH_SIZE:-100}"
+      RabbitMq__BatchTimeoutMs: "${RABBITMQ_BATCH_TIMEOUT_MS:-500}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
       # runs (as short as 1s) even last, which left the bottleneck advisor systematically
@@ -682,6 +686,8 @@ services:
       # just takes whatever connection string it's given.
       ConnectionStrings__Mongo: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/clicks_meta_db?replicaSet=rs0&readPreference=${MONGO_READ_PREFERENCE:-primary}"
       RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
+      RabbitMq__BatchSize: "${RABBITMQ_BATCH_SIZE:-100}"
+      RabbitMq__BatchTimeoutMs: "${RABBITMQ_BATCH_TIMEOUT_MS:-500}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
       # runs (as short as 1s) even last, which left the bottleneck advisor systematically

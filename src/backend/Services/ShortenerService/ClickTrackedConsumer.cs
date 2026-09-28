@@ -4,9 +4,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ShortenerService;
 
-// Consumes ClickTrackedEvent and increments Links.ClickCount for the matching hash. This is a
-// display counter, not the audit trail (TrafficService's own Clicks table, keyed by event Id, is
-// the exactly-once source of truth for that) - on the rare redelivery after a consumer
+// Consumes batches of ClickTrackedEvent and increments Links.ClickCount for each matching hash.
+// This is a display counter, not the audit trail (TrafficService's own Clicks table, keyed by event
+// Id, is the exactly-once source of truth for that) - on the rare redelivery after a consumer
 // crash/nack, this counter can drift a click or two high. Not worth an idempotency table for a
 // number that only needs to be approximately right.
 public sealed class ClickTrackedConsumer(
@@ -21,33 +21,39 @@ public sealed class ClickTrackedConsumer(
     private readonly ILogger<ClickTrackedConsumer> _logger = logger;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
-        _consumer.ConsumeAsync<ClickTrackedEvent>(QueueName, Topics.ClickTracked, HandleAsync, stoppingToken);
+        _consumer.ConsumeBatchAsync<ClickTrackedEvent>(QueueName, Topics.ClickTracked, HandleBatchAsync, stoppingToken);
 
-    internal async Task HandleAsync(ClickTrackedEvent @event, CancellationToken cancellationToken)
+    internal async Task<BatchOutcome> HandleBatchAsync(
+        IReadOnlyList<BatchItem<ClickTrackedEvent>> batch, CancellationToken cancellationToken)
     {
         await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        // A single atomic "UPDATE ... SET ClickCount = ClickCount + 1" instead of a read-then-write
-        // through the change tracker - this used to be read-then-write specifically because Link is
-        // an immutable record with no public setter, but that shape raced for real once this
-        // consumer became scalable to multiple replicas (control-api can now run several): two
-        // replicas incrementing the same hot hash could both read the same starting value and one
-        // increment would be lost. Verified live - scaling this consumer 1->4 replicas under
-        // repeated-same-hash load made throughput go *down* (row-lock contention on the read-then-
-        // write pattern), not up. ExecuteUpdateAsync fixes both the race and the extra round trip.
-        var updated = await context.Links
-            .Where(x => x.Hash == @event.Hash)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.ClickCount, x => x.ClickCount + 1), cancellationToken);
+        // One atomic "UPDATE ... SET ClickCount = ClickCount + n" per distinct hash in the batch
+        // instead of one per message - collapses a "hot hash" burst down to a single round trip per
+        // hash. Still a plain ExecuteUpdateAsync (not a read-then-write), so concurrent replicas
+        // updating the same hash still can't lose an increment to a race - see the git history for
+        // why that matters here.
+        var countsByHash = batch
+            .Select(x => x.Payload.Hash)
+            .GroupBy(x => x)
+            .ToDictionary(g => g.Key, g => g.Count());
 
-        if (updated == 0)
+        foreach (var (hash, count) in countsByHash)
         {
-            // LinkCreatedEvent for this hash may not have been consumed yet (ordering across
-            // queues isn't guaranteed), or the hash is simply unknown. Either way there's no row
-            // to increment - log and move on rather than failing/requeueing forever.
-            _logger.LogWarning("No link found for hash {Hash}, click count not incremented", @event.Hash);
-            return;
+            var updated = await context.Links
+                .Where(x => x.Hash == hash)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.ClickCount, x => x.ClickCount + count), cancellationToken);
+
+            if (updated == 0)
+            {
+                // LinkCreatedEvent for this hash may not have been consumed yet (ordering across
+                // queues isn't guaranteed), or the hash is simply unknown. Either way there's no row
+                // to increment - log and move on rather than failing the whole batch.
+                _logger.LogWarning("No link found for hash {Hash}, click count not incremented", hash);
+            }
         }
 
-        _logger.LogInformation("Incremented click count for hash {Hash}", @event.Hash);
+        _logger.LogInformation("Applied click-count updates for {Count} distinct hash(es) from this batch", countsByHash.Count);
+        return BatchOutcome.Success;
     }
 }

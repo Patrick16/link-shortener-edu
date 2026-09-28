@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
@@ -17,13 +18,11 @@ public sealed class RabbitMqConsumer(
     private static readonly TimeSpan InitialRetryDelay = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
-    // A permanently-failing message (bad JSON, a handler that always throws for this payload) must
-    // not be nacked-with-requeue forever: RabbitMQ redelivers it immediately, so that's a hot loop
-    // pinning the consumer's CPU and re-running the same failing DB round trip at full speed with the
-    // queue never draining. After this many attempts the message is dropped (nacked without requeue)
-    // instead - there's no dead-letter exchange configured on these queues, so "dropped" really does
-    // mean gone, which is an accepted tradeoff for this learning project over building out a DLQ and
-    // something to drain it.
+    // A message that keeps failing across repeated batches (a handler bug, or the database being
+    // down long enough to exhaust this consumer's patience) must not be nacked-with-requeue forever -
+    // RabbitMQ redelivers immediately, which would hot-loop the same failing round trip at full speed
+    // with the queue never draining. After this many attempts the message is dead-lettered to
+    // "{queueName}.dead" instead of being retried again - see HandleBatchFailureAsync.
     private const int MaxDeliveryAttempts = 5;
     private static readonly TimeSpan InitialHandlerRetryDelay = TimeSpan.FromMilliseconds(200);
     private static readonly TimeSpan MaxHandlerRetryDelay = TimeSpan.FromSeconds(2);
@@ -33,7 +32,7 @@ public sealed class RabbitMqConsumer(
 
     // Keyed by the publisher-assigned MessageId (stable across redeliveries of the same logical
     // message, unlike DeliveryTag which changes every redelivery). Entries are removed as soon as a
-    // message is acked or given up on, so this only ever holds messages currently mid-retry - it
+    // message is acked or dead-lettered, so this only ever holds messages currently mid-retry - it
     // resets on process restart, which just means a message gets a fresh set of attempts after a
     // restart rather than picking up its old count; acceptable here since the point is bounding a
     // single consumer's hot loop, not a durable retry ledger.
@@ -45,10 +44,17 @@ public sealed class RabbitMqConsumer(
     // RabbitMq__PrefetchCount in docker-compose.yml.
     private readonly ushort _prefetchCount = configuration.GetValue<ushort?>("RabbitMq:PrefetchCount") ?? 10;
 
-    public async Task ConsumeAsync<TMessage>(
+    // How many deliveries accumulate before a batch is flushed to the handler, and how long a
+    // partial batch is allowed to sit before flushing anyway. The two knobs trade DB-round-trip
+    // savings (bigger/slower) against per-message latency (smaller/faster).
+    private readonly int _batchSize = configuration.GetValue<int?>("RabbitMq:BatchSize") ?? 100;
+    private readonly TimeSpan _batchTimeout =
+        TimeSpan.FromMilliseconds(configuration.GetValue<int?>("RabbitMq:BatchTimeoutMs") ?? 500);
+
+    public async Task ConsumeBatchAsync<TMessage>(
         string queueName,
         string routingKey,
-        Func<TMessage, CancellationToken, Task> handler,
+        Func<IReadOnlyList<BatchItem<TMessage>>, CancellationToken, Task<BatchOutcome>> handler,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(queueName);
@@ -61,82 +67,278 @@ public sealed class RabbitMqConsumer(
         var channel = await SetUpChannelWithRetryAsync(queueName, routingKey, cancellationToken).ConfigureAwait(false);
         await using (channel.ConfigureAwait(false))
         {
+            var deadQueueName = DeadQueueName(queueName);
+
+            // Bounded specifically so it applies real backpressure: once _batchSize deliveries are
+            // sitting here waiting for the next flush, ReceiveDeliveryAsync's WriteAsync below blocks,
+            // which in turn stalls RabbitMQ's own push once the prefetch window is also exhausted.
+            var buffer = Channel.CreateBounded<BufferedDelivery<TMessage>>(
+                new BoundedChannelOptions(_batchSize) { FullMode = BoundedChannelFullMode.Wait });
+
             var consumer = new AsyncEventingBasicConsumer(channel);
-            consumer.ReceivedAsync += (_1, ea) => HandleDeliveryAsync(channel, queueName, routingKey, ea, handler, cancellationToken);
+            consumer.ReceivedAsync += (_, ea) =>
+                ReceiveDeliveryAsync(channel, deadQueueName, buffer.Writer, ea, cancellationToken);
 
             await channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken);
 
-            // Keep the channel (and this call) alive until the caller cancels.
-            var stopped = new TaskCompletionSource();
-            await using var registration = cancellationToken.Register(() => stopped.TrySetResult());
-            await stopped.Task.ConfigureAwait(false);
+            // Runs (and keeps this call alive) until the caller cancels.
+            await RunFlushLoopAsync(channel, queueName, deadQueueName, buffer.Reader, handler, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
-    internal async Task HandleDeliveryAsync<TMessage>(
+    internal async Task ReceiveDeliveryAsync<TMessage>(
         IChannel channel,
-        string queueName,
-        string routingKey,
+        string deadQueueName,
+        ChannelWriter<BufferedDelivery<TMessage>> writer,
         BasicDeliverEventArgs ea,
-        Func<TMessage, CancellationToken, Task> handler,
         CancellationToken cancellationToken)
     {
-        using var activity = StartConsumerActivity(routingKey, ea);
+        using var activity = StartConsumerActivity(ea);
         var messageId = ea.BasicProperties.MessageId ?? ea.DeliveryTag.ToString();
+
+        // Snapshotted before any await - RabbitMQ.Client may reuse ea.Body's underlying buffer once
+        // this handler yields, so anything read from it has to happen synchronously up front.
+        var rawBody = ea.Body.ToArray();
+
+        TMessage? message;
         try
         {
-            var json = Encoding.UTF8.GetString(ea.Body.Span);
-            var message = JsonSerializer.Deserialize<TMessage>(json);
-            if (message is not null)
-            {
-                await handler(message, cancellationToken);
-            }
-
-            await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, cancellationToken);
-            _deliveryAttempts.TryRemove(messageId, out _);
+            message = JsonSerializer.Deserialize<TMessage>(Encoding.UTF8.GetString(rawBody));
         }
         catch (Exception ex)
         {
             activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
-            var attempts = _deliveryAttempts.AddOrUpdate(messageId, 1, (_, count) => count + 1);
-            if (attempts >= MaxDeliveryAttempts)
-            {
-                _deliveryAttempts.TryRemove(messageId, out _);
-                _logger.LogError(
-                    ex,
-                    "Handler failed for message {MessageId} on queue {QueueName} after {Attempts} attempts - dropping it instead of requeuing forever",
-                    messageId,
-                    queueName,
-                    attempts);
-                await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: false, cancellationToken);
-                return;
-            }
+            message = default;
+        }
 
+        if (message is null)
+        {
             _logger.LogWarning(
-                ex,
-                "Handler failed for message {MessageId} on queue {QueueName} (attempt {Attempt}/{MaxAttempts}), nacking for requeue",
+                "Message {MessageId} could not be deserialized to {MessageType} - dead-lettering it to {DeadQueueName}",
                 messageId,
-                queueName,
-                attempts,
-                MaxDeliveryAttempts);
+                typeof(TMessage).Name,
+                deadQueueName);
+            await PublishDeadLetterAsync(channel, deadQueueName, rawBody, messageId, "deserialize-failed", cancellationToken)
+                .ConfigureAwait(false);
+            await channel.BasicAckAsync(ea.DeliveryTag, multiple: false, cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
-            // A brief, attempt-scaled delay before requeueing so a permanently-failing message spins
-            // at a few retries per second instead of pinning the CPU with immediate redelivery - short
-            // enough not to meaningfully slow down recovery from a genuinely transient failure (a
-            // momentary DB blip resolves well within MaxHandlerRetryDelay).
-            var delay = TimeSpan.FromMilliseconds(
-                Math.Min(InitialHandlerRetryDelay.TotalMilliseconds * attempts, MaxHandlerRetryDelay.TotalMilliseconds));
-            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        await writer.WriteAsync(new BufferedDelivery<TMessage>(ea.DeliveryTag, messageId, message), cancellationToken)
+            .ConfigureAwait(false);
+    }
 
-            await channel.BasicNackAsync(ea.DeliveryTag, multiple: false, requeue: true, cancellationToken);
+    private async Task RunFlushLoopAsync<TMessage>(
+        IChannel channel,
+        string queueName,
+        string deadQueueName,
+        ChannelReader<BufferedDelivery<TMessage>> reader,
+        Func<IReadOnlyList<BatchItem<TMessage>>, CancellationToken, Task<BatchOutcome>> handler,
+        CancellationToken cancellationToken)
+    {
+        var batch = new List<BufferedDelivery<TMessage>>(_batchSize);
+        try
+        {
+            while (true)
+            {
+                if (!await FillBatchAsync(reader, batch, cancellationToken).ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                await FlushBatchAsync(channel, queueName, deadQueueName, batch, handler, cancellationToken)
+                    .ConfigureAwait(false);
+                batch.Clear();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal shutdown. Anything still sitting in `batch` here was never acked, so RabbitMQ
+            // will simply redeliver it once a consumer picks the queue back up again.
         }
     }
+
+    // Blocks for the first delivery (no point starting a timeout window over an empty batch), then
+    // keeps draining the buffer until _batchSize is reached or _batchTimeout elapses since that first
+    // item arrived - whichever comes first. Returns false only once the buffer itself is completed
+    // (doesn't happen in normal operation; ConsumeBatchAsync never completes the writer).
+    internal async Task<bool> FillBatchAsync<TMessage>(
+        ChannelReader<BufferedDelivery<TMessage>> reader,
+        List<BufferedDelivery<TMessage>> batch,
+        CancellationToken cancellationToken)
+    {
+        if (!await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        using var timeoutCts = new CancellationTokenSource(_batchTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
+
+        while (batch.Count < _batchSize)
+        {
+            if (reader.TryRead(out var item))
+            {
+                batch.Add(item);
+                continue;
+            }
+
+            try
+            {
+                if (!await reader.WaitToReadAsync(linked.Token).ConfigureAwait(false))
+                {
+                    break;
+                }
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // The per-batch timeout (not the caller's cancellation) elapsed with at least one
+                // item already buffered - flush the partial batch instead of waiting for more.
+                break;
+            }
+        }
+
+        return true;
+    }
+
+    internal async Task FlushBatchAsync<TMessage>(
+        IChannel channel,
+        string queueName,
+        string deadQueueName,
+        List<BufferedDelivery<TMessage>> batch,
+        Func<IReadOnlyList<BatchItem<TMessage>>, CancellationToken, Task<BatchOutcome>> handler,
+        CancellationToken cancellationToken)
+    {
+        var items = batch.Select(x => new BatchItem<TMessage>(x.MessageId, x.Message)).ToList();
+        var maxDeliveryTag = batch[^1].DeliveryTag;
+
+        BatchOutcome outcome;
+        try
+        {
+            outcome = await handler(items, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                ex, "Batch handler failed for {Count} message(s) on queue {QueueName}", batch.Count, queueName);
+            await HandleBatchFailureAsync(channel, deadQueueName, batch, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var poisonIds = new HashSet<string>(outcome.PoisonMessageIds);
+        foreach (var delivery in batch)
+        {
+            _deliveryAttempts.TryRemove(delivery.MessageId, out _);
+            if (poisonIds.Contains(delivery.MessageId))
+            {
+                await PublishDeadLetterAsync(
+                        channel,
+                        deadQueueName,
+                        JsonSerializer.SerializeToUtf8Bytes(delivery.Message),
+                        delivery.MessageId,
+                        "business-rejected",
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        // One ack for the whole batch: everything in it is now accounted for, either persisted by the
+        // handler or safely relocated to the dead queue above.
+        await channel.BasicAckAsync(maxDeliveryTag, multiple: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    // The handler threw - a batch-wide, presumably transient failure (e.g. the database is down),
+    // not something specific to any one message in it. Every message in the batch gets its own
+    // attempt count bumped (same ledger single-message retries used to use) and is either requeued
+    // for another try or, once it has been retried too many times across however many batches it's
+    // landed in, dead-lettered instead of retried forever.
+    private async Task HandleBatchFailureAsync<TMessage>(
+        IChannel channel,
+        string deadQueueName,
+        List<BufferedDelivery<TMessage>> batch,
+        CancellationToken cancellationToken)
+    {
+        var giveUp = new List<BufferedDelivery<TMessage>>();
+        var retry = new List<BufferedDelivery<TMessage>>();
+
+        foreach (var delivery in batch)
+        {
+            var attempts = _deliveryAttempts.AddOrUpdate(delivery.MessageId, 1, (_, count) => count + 1);
+            (attempts >= MaxDeliveryAttempts ? giveUp : retry).Add(delivery);
+        }
+
+        foreach (var delivery in giveUp)
+        {
+            _logger.LogError(
+                "Message {MessageId} failed after {Attempts} attempts as part of a batch - dead-lettering it instead of retrying forever",
+                delivery.MessageId,
+                MaxDeliveryAttempts);
+            _deliveryAttempts.TryRemove(delivery.MessageId, out _);
+            await PublishDeadLetterAsync(
+                    channel,
+                    deadQueueName,
+                    JsonSerializer.SerializeToUtf8Bytes(delivery.Message),
+                    delivery.MessageId,
+                    "retries-exhausted",
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await channel.BasicAckAsync(delivery.DeliveryTag, multiple: false, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (retry.Count > 0)
+        {
+            // A brief, attempt-scaled delay before requeueing so a batch that keeps failing spins at a
+            // few retries per second instead of pinning the CPU with immediate redelivery - sized off
+            // the worst (highest) attempt count in this group so a message on its 4th try doesn't get
+            // the 1st try's short delay.
+            var worstAttempts = retry.Max(d => _deliveryAttempts.GetValueOrDefault(d.MessageId, 1));
+            var delay = TimeSpan.FromMilliseconds(
+                Math.Min(InitialHandlerRetryDelay.TotalMilliseconds * worstAttempts, MaxHandlerRetryDelay.TotalMilliseconds));
+            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+
+            foreach (var delivery in retry)
+            {
+                await channel.BasicNackAsync(delivery.DeliveryTag, multiple: false, requeue: true, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static async Task PublishDeadLetterAsync(
+        IChannel channel,
+        string deadQueueName,
+        ReadOnlyMemory<byte> body,
+        string? messageId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        var properties = new BasicProperties
+        {
+            MessageId = messageId,
+            Headers = new Dictionary<string, object?> { ["x-dead-reason"] = reason },
+        };
+
+        // No exchange/binding needed - the dead queue is published to directly by name via the
+        // default (nameless) exchange, which routes to a queue whose name matches the routing key.
+        await channel.BasicPublishAsync(
+                exchange: "",
+                routingKey: deadQueueName,
+                mandatory: false,
+                basicProperties: properties,
+                body: body,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static string DeadQueueName(string queueName) => $"{queueName}.dead";
 
     internal async Task<IChannel> SetUpChannelWithRetryAsync(
         string queueName,
         string routingKey,
         CancellationToken cancellationToken)
     {
+        var deadQueueName = DeadQueueName(queueName);
         var delay = InitialRetryDelay;
         while (true)
         {
@@ -162,6 +364,16 @@ public sealed class RabbitMqConsumer(
                     queueName,
                     MessagingConstants.EventsExchange,
                     routingKey,
+                    cancellationToken: cancellationToken);
+
+                // No exchange/binding needed for this one - dead letters are published straight to it
+                // by name via the default exchange (see PublishDeadLetterAsync), so declaring it is
+                // enough.
+                await channel.QueueDeclareAsync(
+                    deadQueueName,
+                    durable: true,
+                    exclusive: false,
+                    autoDelete: false,
                     cancellationToken: cancellationToken);
 
                 await channel.BasicQosAsync(0, prefetchCount: _prefetchCount, global: false, cancellationToken: cancellationToken);
@@ -190,16 +402,16 @@ public sealed class RabbitMqConsumer(
         }
     }
 
-    private static Activity? StartConsumerActivity(string routingKey, BasicDeliverEventArgs ea)
+    private static Activity? StartConsumerActivity(BasicDeliverEventArgs ea)
     {
         var parentContext = TryExtractParentContext(ea.BasicProperties);
         var activity = parentContext is { } context
-            ? MessagingActivitySource.Instance.StartActivity($"{routingKey} consume", ActivityKind.Consumer, context)
-            : MessagingActivitySource.Instance.StartActivity($"{routingKey} consume", ActivityKind.Consumer);
+            ? MessagingActivitySource.Instance.StartActivity($"{ea.RoutingKey} consume", ActivityKind.Consumer, context)
+            : MessagingActivitySource.Instance.StartActivity($"{ea.RoutingKey} consume", ActivityKind.Consumer);
 
         activity?.SetTag("messaging.system", "rabbitmq");
         activity?.SetTag("messaging.destination.name", MessagingConstants.EventsExchange);
-        activity?.SetTag("messaging.rabbitmq.routing_key", routingKey);
+        activity?.SetTag("messaging.rabbitmq.routing_key", ea.RoutingKey);
         activity?.SetTag("messaging.message.id", ea.BasicProperties.MessageId);
         return activity;
     }
@@ -218,3 +430,8 @@ public sealed class RabbitMqConsumer(
         return null;
     }
 }
+
+// A deserialized delivery sitting in RabbitMqConsumer's internal buffer, waiting for its batch to
+// flush. Keeps the DeliveryTag (needed for ack/nack/dead-letter) alongside the payload that
+// BatchItem<TMessage> exposes to handlers - handlers never see delivery tags at all.
+internal sealed record BufferedDelivery<TMessage>(ulong DeliveryTag, string MessageId, TMessage Message);

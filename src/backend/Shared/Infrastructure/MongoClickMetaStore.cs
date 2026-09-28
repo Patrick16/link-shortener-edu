@@ -22,15 +22,22 @@ public sealed class MongoClickMetaStore : IClickMetaStore
         _collection = _database.GetCollection<ClickMeta>(CollectionName);
     }
 
-    public Task SaveAsync(ClickMeta meta, CancellationToken cancellationToken = default) =>
-        // Upsert by Id rather than Insert: redelivery-safe on its own, independent of the
-        // "already stored in Postgres" check in ClickTrackedConsumer (defense in depth — the two
-        // writes aren't transactional with each other).
-        _collection.ReplaceOneAsync(
-            x => x.Id == meta.Id,
-            meta,
-            new ReplaceOptions { IsUpsert = true },
-            cancellationToken);
+    public Task SaveManyAsync(IReadOnlyCollection<ClickMeta> metas, CancellationToken cancellationToken = default)
+    {
+        if (metas.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        // One bulk round trip instead of one upsert per click. Each entry is still its own
+        // independent upsert by Id - redelivery-safe on its own, independent of the "already stored
+        // in Postgres" check in ClickTrackedConsumer (defense in depth — the two writes aren't
+        // transactional with each other).
+        var writes = metas.Select(meta =>
+            new ReplaceOneModel<ClickMeta>(Builders<ClickMeta>.Filter.Eq(x => x.Id, meta.Id), meta) { IsUpsert = true });
+
+        return _collection.BulkWriteAsync(writes, cancellationToken: cancellationToken);
+    }
 
     public async Task<bool> PingAsync(CancellationToken cancellationToken = default)
     {

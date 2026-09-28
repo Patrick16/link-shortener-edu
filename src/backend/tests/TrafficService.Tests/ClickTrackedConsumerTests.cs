@@ -31,6 +31,9 @@ public class ClickTrackedConsumerTests
         Referrer = "",
     };
 
+    private static List<BatchItem<ClickTrackedEvent>> NewBatch(params ClickTrackedEvent[] events) =>
+        events.Select(e => new BatchItem<ClickTrackedEvent>(Guid.NewGuid().ToString(), e)).ToList();
+
     private static ClickTrackedConsumer NewSut(IDbContextFactory<DatabaseContext> factory) =>
         new(
             Mock.Of<IMessageConsumer>(),
@@ -41,13 +44,13 @@ public class ClickTrackedConsumerTests
             NullLogger<ClickTrackedConsumer>.Instance);
 
     [Fact]
-    public async Task HandleAsync_NewClick_PersistsToDatabase()
+    public async Task HandleBatchAsync_NewClick_PersistsToDatabase()
     {
         var factory = NewFactory(Guid.NewGuid().ToString());
         var sut = NewSut(factory);
         var @event = NewEvent();
 
-        await sut.HandleAsync(@event, CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         var stored = await verify.Clicks.SingleAsync();
@@ -56,31 +59,46 @@ public class ClickTrackedConsumerTests
     }
 
     [Fact]
-    public async Task HandleAsync_RedeliveredMessage_IsSkippedWithoutError()
+    public async Task HandleBatchAsync_DuplicateIdWithinOneBatch_PersistsOnce()
     {
+        // Two deliveries for the same click Id can land in the same batch (e.g. a requeue racing a
+        // fresh delivery) - must dedupe within the batch, not just across separate batches.
         var factory = NewFactory(Guid.NewGuid().ToString());
         var sut = NewSut(factory);
         var @event = NewEvent();
-        await sut.HandleAsync(@event, CancellationToken.None);
 
-        // Same Id arrives again (e.g. after a broker requeue) - must not throw a primary-key
-        // violation and must not duplicate the row.
-        await sut.HandleAsync(@event, CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(@event, @event with { }), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(1, await verify.Clicks.CountAsync());
     }
 
     [Fact]
-    public async Task HandleAsync_RedeliveredAfterMongoFailure_RetriesMongoWriteInsteadOfSkippingIt()
+    public async Task HandleBatchAsync_RedeliveredInALaterBatch_IsSkippedWithoutError()
     {
-        // Regression: the two writes aren't transactional. If SaveAsync throws (transient Mongo
-        // outage) after the Postgres row already committed, a naive "alreadyStored -> skip
-        // everything" redelivery guard would permanently lose that click's ClickMeta document,
-        // since Postgres already has the row and would short-circuit every future retry too.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var sut = NewSut(factory);
+        var @event = NewEvent();
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+
+        // Same Id arrives again in an entirely separate batch (e.g. after a broker requeue) - must
+        // not throw a primary-key violation and must not duplicate the row.
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+
+        await using var verify = await factory.CreateDbContextAsync();
+        Assert.Equal(1, await verify.Clicks.CountAsync());
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_RedeliveredAfterMongoFailure_RetriesMongoWriteInsteadOfSkippingIt()
+    {
+        // Regression: the two writes aren't transactional. If SaveManyAsync throws (transient Mongo
+        // outage) after the Postgres rows already committed, a naive "alreadyStored -> skip
+        // everything" redelivery guard would permanently lose that click's ClickMeta document, since
+        // Postgres already has the row and would short-circuit every future retry too.
         var factory = NewFactory(Guid.NewGuid().ToString());
         var clickMetaStore = new Mock<IClickMetaStore>();
-        clickMetaStore.SetupSequence(x => x.SaveAsync(It.IsAny<ClickMeta>(), It.IsAny<CancellationToken>()))
+        clickMetaStore.SetupSequence(x => x.SaveManyAsync(It.IsAny<IReadOnlyCollection<ClickMeta>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("mongo unreachable"))
             .Returns(Task.CompletedTask);
         var sut = new ClickTrackedConsumer(
@@ -91,24 +109,26 @@ public class ClickTrackedConsumerTests
             Mock.Of<IGeoIpResolver>(),
             NullLogger<ClickTrackedConsumer>.Instance);
         var @event = NewEvent();
+        var batch = NewBatch(@event);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.HandleAsync(@event, CancellationToken.None));
-        // Redelivery: same event id: the Postgres row already committed from the first (failed) attempt.
-        await sut.HandleAsync(@event, CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => sut.HandleBatchAsync(batch, CancellationToken.None));
+        // Redelivery: same batch content, same event id - the Postgres row already committed from the
+        // first (failed) attempt.
+        await sut.HandleBatchAsync(batch, CancellationToken.None);
 
-        clickMetaStore.Verify(x => x.SaveAsync(It.IsAny<ClickMeta>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
+        clickMetaStore.Verify(
+            x => x.SaveManyAsync(It.IsAny<IReadOnlyCollection<ClickMeta>>(), It.IsAny<CancellationToken>()), Times.Exactly(2));
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(1, await verify.Clicks.CountAsync());
     }
 
     [Fact]
-    public async Task HandleAsync_DifferentIds_PersistsBoth()
+    public async Task HandleBatchAsync_DifferentIds_PersistsBoth()
     {
         var factory = NewFactory(Guid.NewGuid().ToString());
         var sut = NewSut(factory);
 
-        await sut.HandleAsync(NewEvent(), CancellationToken.None);
-        await sut.HandleAsync(NewEvent(), CancellationToken.None);
+        await sut.HandleBatchAsync(NewBatch(NewEvent(), NewEvent()), CancellationToken.None);
 
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(2, await verify.Clicks.CountAsync());
