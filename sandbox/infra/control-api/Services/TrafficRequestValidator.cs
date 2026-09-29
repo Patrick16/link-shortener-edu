@@ -56,15 +56,14 @@ public static class TrafficRequestValidator
     }
 
     // Iteration-count runs use k6's shared-iterations executor - flat VUs, no ramp, so none of the
-    // Stages/DurationSeconds checks in ValidateRampOrDurationRun apply. Upper bound: with no cap, a
-    // typo (or "let's see what happens at 10000 VUs") can exhaust the host's CPU/memory and make the
-    // whole sandbox unresponsive, with nothing server-side to stop it. 200 matches the bound this
-    // endpoint originally shipped with.
+    // Stages/DurationSeconds checks in ValidateRampOrDurationRun apply. Vus has no upper bound (the
+    // original 200 cap was lifted on purpose for high-load experiments) - a typo can exhaust the
+    // host's CPU/memory, so be deliberate with the number.
     private static string? ValidateIterationRun(TrafficRequest request, int iterations)
     {
-        if (request.Vus is < 1 or > 200)
+        if (request.Vus < 1)
         {
-            return "vus must be between 1 and 200 for an iteration-count run";
+            return "vus must be at least 1 for an iteration-count run";
         }
 
         if (iterations is < 1 or > 100_000)
@@ -80,10 +79,10 @@ public static class TrafficRequestValidator
         // With a custom ramp, Vus is just the starting point k6 ramps from - 0 is exactly what a spike
         // profile (or any "ramp up from idle") wants there. Only the flat constant-VUs run needs it to
         // be at least 1, since there it's the VU count for the entire run. Upper bound applies either
-        // way - see ValidateIterationRun for why an unbounded Vus is a real risk, not just a style nit.
-        if (request.Vus < 0 || request.Vus > 200 || (request.Stages is not { Count: > 0 } && request.Vus < 1))
+        // way - see ValidateIterationRun: there is deliberately no upper bound on Vus.
+        if (request.Vus < 0 || (request.Stages is not { Count: > 0 } && request.Vus < 1))
         {
-            return "vus must be between 1 and 200 (or at least 0 as a ramp's starting point)";
+            return "vus must be at least 1 (or at least 0 as a ramp's starting point)";
         }
 
         if (request.Stages is { Count: > 0 } stages)
@@ -93,9 +92,9 @@ public static class TrafficRequestValidator
                 return "each stage's durationSeconds must be at least 1";
             }
 
-            if (stages.Any(s => s.TargetVus is < 0 or > 200))
+            if (stages.Any(s => s.TargetVus < 0))
             {
-                return "a stage's targetVus must be between 0 and 200";
+                return "a stage's targetVus must be at least 0";
             }
 
             // A custom ramp is user-drawn, so it isn't bound by the flat run's 120s cap - just a

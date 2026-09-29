@@ -293,10 +293,9 @@ export function StageGraphEditor({ points, onChange, totalDurationSeconds, onTot
                 <input
                   type="number"
                   min={0}
-                  max={200}
                   value={p.vus}
                   disabled={disabled}
-                  onChange={(e) => updatePoint(i, { t: p.t, vus: Math.max(0, Math.min(200, Number(e.target.value))) })}
+                  onChange={(e) => updatePoint(i, { t: p.t, vus: Math.max(0, Number(e.target.value)) })}
                 />
               </label>
               <button type="button" onClick={() => removePoint(i)} disabled={disabled || isFirst || isLast}>
