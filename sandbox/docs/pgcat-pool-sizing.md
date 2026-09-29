@@ -3,8 +3,11 @@
 Triggered by a real symptom: scaling `link-api`/`redirect-api` to 20 replicas and running 200 VUs
 against `POST /Links` made throughput collapse (iterations/s dropped to near zero for long stretches
 while VUs stayed flat) and `/health/ready` p95 sat at ~20 seconds. Below is what actually caused it,
-in the order the evidence came in — three separate, real problems were stacked on top of each other,
-and fixing the first one just uncovered the next.
+in the order the evidence came in. Despite the title, this ended up covering **eight** distinct,
+real problems stacked on top of each other — fixing one just uncovered the next, and a code-review
+pass on the fixes themselves (Symptoms 5-6) caught two more before they shipped. Kept the original
+filename since every code comment already points at it and scope grew incrementally, not from a
+second, unrelated investigation.
 
 ## Symptom 1: throughput collapse on `POST /Links`
 
@@ -116,6 +119,95 @@ would trade "occasionally slow" for "occasionally a request that could have succ
 the fallback queue instead," which is a different, bigger behavior change than what this investigation
 was asked to fix.
 
+## Symptom 5: `RabbitMqHealthCheck`'s `Task.WhenAny` fix leaked the losing channel
+
+Caught by a `feature-review` agent pass on the fix itself (report:
+[`.notes/review-reports/2026-09-29-1238-rabbitmq-healthcheck-pgcat-fix.md`](../../.notes/review-reports/2026-09-29-1238-rabbitmq-healthcheck-pgcat-fix.md)),
+not by load-test numbers — this one wouldn't show up as latency at all.
+
+When `Task.WhenAny(channelTask, Task.Delay(Timeout, cancellationToken))` picked the delay (RabbitMQ
+still slow), the method returned `Unhealthy` immediately and never touched `channelTask` again. If
+that task *later* completed successfully — the exact scenario the fix exists for — it handed back a
+live `IChannel` that nothing ever disposed: a leaked client-side channel plus a slot in the broker's
+per-connection channel table, repeating every 5s (Docker's healthcheck interval) for as long as
+RabbitMQ stayed slow.
+
+**Fix:** [`RabbitMqHealthCheck.cs:30-44`](../../src/backend/Shared/Infrastructure/RabbitMqHealthCheck.cs#L30-L44)
+— on the losing branch, attach a `ContinueWith` to the abandoned `channelTask` that disposes the
+channel if it eventually succeeds, or observes (and discards) the fault if it doesn't, instead of
+walking away from it.
+
+## Symptom 6 (minor): `MongoHealthCheck`'s timeout message was dead code
+
+Same review pass, same file class of mistake, lower severity: `MongoClickMetaStore.PingAsync`'s own
+unconditional `catch { return false; }` swallows any `OperationCanceledException` a
+`CancellationTokenSource.CancelAfter` token would produce *before* it ever reached
+`MongoHealthCheck`'s own catch block — so the "MongoDB did not respond within 3s" message could never
+actually be shown; a genuine slowdown would just look like the generic "not reachable" message. Not a
+functional hang (the 3s bound was still honored), just a misleading message and, separately, a missing
+generic `catch (Exception ex)` the sibling health checks all have.
+
+**Fix:** switched `MongoHealthCheck` to the same `Task.WhenAny` race
+[`RabbitMqHealthCheck`](../../src/backend/Shared/Infrastructure/RabbitMqHealthCheck.cs) uses (bounds
+wall-clock regardless of what the inner call does with cancellation, so the timeout message is
+reachable) and added the missing generic catch, in
+[`MongoHealthCheck.cs`](../../src/backend/Shared/Infrastructure/MongoHealthCheck.cs).
+
+## Symptom 7: the same `RabbitMqClient` cold-start tax, now hitting real `redirect-api` traffic
+
+Verifying Symptom 4's fix (redeployed, fresh 20-replica containers, this time driving
+`redirect-api.resolve` instead of `link-api.create`) surfaced the *same* root cause from Symptom 4
+again, but on the publish side rather than the health check: `redirect-api`'s `click.tracked publish`
+hop (fired from `RedirectController` before every redirect — see
+[`docs/scenarios/02-async.md`](scenarios/02-async.md)) showed a single ~57.7s outlier alongside an
+otherwise-healthy run. `RabbitMqHealthCheck`'s fix only ever bounded *health checks*'
+wait — a real publish call hitting the exact same shared, still-connecting `_connection` task
+(`RabbitMqClient.GetConnectionAsync`) has no such bound, deliberately (see Symptom 4's own reasoning
+for why racing a real publish would just trade "slow" for "silently dropped to the fallback queue").
+
+**Fix, this time at the actual root cause instead of bounding a symptom:** a new
+[`RabbitMqWarmupService`](../../src/backend/Shared/Infrastructure/RabbitMqWarmupService.cs)
+(`IHostedService`) that calls `CreateChannelAsync` once during startup, before Kestrel starts
+accepting connections — paying the one-time connection-establishment cost during container boot
+(when docker-compose's `depends_on: rabbitmq: condition: service_healthy` already guarantees the
+broker is up) instead of on whichever real request happens to be first or unlucky. Registered in both
+`LinkApi` and `RedirectApi`'s `Program.cs` (the only two services that only *publish* — worker
+services' `RabbitMqConsumer` already forces an early connection just by starting to consume, so they
+never had this gap).
+
+## Symptom 8: the same cold-start tax again, this time on Redis/Sentinel
+
+Verifying Symptom 7's fix (RabbitMQ warmed, so `click.tracked publish` was fast again) surfaced a
+*third* instance of the identical pattern, one layer deeper: `redirect-api`'s `GET {hash}` hop itself
+— the actual link resolution, via `LinkCacheService`'s `IDistributedCache` (Redis) with a Postgres
+fallback — averaged **~8s** (p95 ~45s, max ~67s) across nearly every one of a fresh run's requests,
+with 43 of 1359 requests failing outright. Re-probing the *same*, now-warm replicas a few minutes
+later came back in under 5ms — the exact signature of a connection-establishment tax paid by real
+traffic instead of at startup, this time for Redis Sentinel discovery (`IDistributedCache` backing
+`LinkCacheService`, and a separate raw `IConnectionMultiplexer` `RedirectApi` registers directly for
+click-count `INCR`) rather than RabbitMQ.
+
+**Fix:** the same warmup pattern as Symptom 7, in a new
+[`RedisWarmupService`](../../src/backend/Shared/Infrastructure/RedisWarmupService.cs) — does one
+`IDistributedCache.GetAsync` at startup, plus a `PING` against `IConnectionMultiplexer` if the service
+registers one (resolved optionally via `IServiceProvider.GetService`, since only `RedirectApi` has
+that second registration — `LinkApi` only has `IDistributedCache`). Registered in both `LinkApi` and
+`RedirectApi`.
+
+**Verified:** 200 VUs, 20 `redirect-api` replicas, 60s, `redirect-api.resolve`, freshly-recreated
+(cold) containers both times:
+
+| | before (Symptom 7 fixed, Symptom 8 not yet) | after both fixes |
+|---|---|---|
+| failed requests | 43 / 1359 (3.16%) | **0 / 118269 (0%)** |
+| throughput | ~20 req/s | **~1750 req/s** |
+| `GET {hash}` avg / p95 / max | **7962 ms / 45451 ms / 66833 ms** | **70 ms / 104 ms / 57779 ms\*** |
+| `click.tracked publish` avg / p95 | (already fixed by Symptom 7) | 47 ms / 4.7 ms |
+
+\* One single outlier out of 118268 requests (0.0008%), not a failure — see Symptom 7's own residual
+tail; not chased further given how rare it is and that this investigation was already three layers
+deep into "which shared connection is cold this time."
+
 ## Final verified numbers (200 VUs, 20 `link-api` + 20 `redirect-api` replicas, 60s, `POST /Links`)
 
 | metric | original (all 4 problems present) | final (all fixes applied) |
@@ -126,10 +218,14 @@ was asked to fix.
 | `redirect-api GET /health/ready` p95 / max | **~20016 ms / ~20144 ms** | **~3022 ms / ~10365 ms** |
 | pgcat `clientWaiting` | not captured (already exhausted) | 0, one transient 1-client blip, no failures caused |
 
-`/health/ready`'s remaining ~9-10s `max` (vs. the ~3s the code now targets) is occasional scheduling
+`/health/ready`'s remaining ~9-15s `max` (vs. the ~3s the code now targets) is occasional scheduling
 jitter under peak load, not a return of the original problem — nowhere near the original ~20-55s
 figures, and Docker's own healthcheck (`interval: 5s, timeout: 5s, retries: 10`,
 [`docker-compose.yml`](../docker-compose.yml)) tolerates it without flapping the container unhealthy.
+
+See Symptoms 7-8 above for the matching before/after on `redirect-api.resolve` — the same class of
+fix (a startup warmup instead of a per-call timeout) took `GET {hash}` from avg 7962ms/3.16% failed
+to avg 70ms/0% failed on fresh containers.
 
 ## Files changed
 
@@ -145,10 +241,21 @@ figures, and Docker's own healthcheck (`interval: 5s, timeout: 5s, retries: 10`,
   — both health checks bounded to a 3s `CancellationTokenSource.CancelAfter` so a saturated pool fails
   the probe fast instead of hanging past Docker's own 5s timeout
 - [`src/backend/Shared/Infrastructure/RabbitMqHealthCheck.cs`](../../src/backend/Shared/Infrastructure/RabbitMqHealthCheck.cs)
-  — `Task.WhenAny`-based 3s race (the actual fix for the persistent ~20s figure — see Symptom 4)
+  — `Task.WhenAny`-based 3s race (the actual fix for the persistent ~20s figure — see Symptom 4),
+  plus the losing-branch channel-disposal fix from the review pass (Symptom 5)
 - [`src/backend/Shared/Infrastructure/MongoHealthCheck.cs`](../../src/backend/Shared/Infrastructure/MongoHealthCheck.cs)
-  — same 3s `CancelAfter` bound, for consistency (not exercised by this specific investigation, no
-  Mongo traffic in this scenario)
+  — switched to the same `Task.WhenAny` race and added a missing generic catch (Symptom 6; not
+  exercised by this investigation's load, no Mongo traffic in these scenarios)
+- [`src/backend/Shared/Infrastructure/RabbitMqWarmupService.cs`](../../src/backend/Shared/Infrastructure/RabbitMqWarmupService.cs)
+  (new) — `IHostedService` that eagerly connects to RabbitMQ at startup (Symptom 7); registered in
+  `src/backend/Services/LinkApi/Program.cs` and `src/backend/Services/RedirectApi/Program.cs`
+- [`src/backend/Shared/Infrastructure/RedisWarmupService.cs`](../../src/backend/Shared/Infrastructure/RedisWarmupService.cs)
+  (new) — same pattern for Redis/`IDistributedCache` and, where present, `IConnectionMultiplexer`
+  (Symptom 8); registered in the same two `Program.cs` files
+- [`src/backend/Shared/Infrastructure/Infrastructure.csproj`](../../src/backend/Shared/Infrastructure/Infrastructure.csproj)
+  — added an explicit `Microsoft.Extensions.Caching.Abstractions` package reference for
+  `RedisWarmupService`'s `IDistributedCache` (was already available transitively via `Common`, added
+  directly to match this project's existing convention of listing packages a project genuinely uses)
 
 ## What this means for scenario 5 (not built yet)
 

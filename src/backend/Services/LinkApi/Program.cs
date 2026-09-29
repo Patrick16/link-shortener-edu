@@ -44,6 +44,7 @@ builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbi
 builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallbackStore(rabbitMqFallbackConnectionString!));
 builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
 builder.Services.AddSingleton<IHashGenerator, Sha256Base62HashGenerator>();
+builder.Services.AddHostedService<RabbitMqWarmupService>();
 builder.Services.AddHostedService<RabbitMqRetryWorker>();
 
 builder.Services.AddStackExchangeRedisCache(options =>
@@ -51,6 +52,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
     options.Configuration = builder.Configuration.GetConnectionString(Constants.RedisConnectionString);
     options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
 });
+builder.Services.AddHostedService<RedisWarmupService>();
 
 builder.Services.AddApiExceptionHandling();
 builder.Services.AddHealthChecks()

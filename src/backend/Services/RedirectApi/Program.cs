@@ -45,6 +45,7 @@ builder.Services.AddStackExchangeRedisCache(options =>
 builder.Services.AddSingleton<IConnectionMultiplexer>(
     _ => ConnectionMultiplexer.Connect(builder.Configuration.GetConnectionString(Constants.RedisConnectionString)!));
 builder.Services.AddSingleton<IClickCounterService, RedisClickCounterService>();
+builder.Services.AddHostedService<RedisWarmupService>();
 
 var rabbitMqConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqConnectionString);
 var rabbitMqFallbackConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqFallbackConnectionString);
@@ -52,6 +53,7 @@ var rabbitMqFallbackConnectionString = builder.Configuration.GetConnectionString
 builder.Services.AddSingleton<IRabbitMqConnection>(_ => new RabbitMqClient(rabbitMqConnectionString!));
 builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallbackStore(rabbitMqFallbackConnectionString!));
 builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
+builder.Services.AddHostedService<RabbitMqWarmupService>();
 builder.Services.AddHostedService<RabbitMqRetryWorker>();
 
 builder.Services.AddApiExceptionHandling();
