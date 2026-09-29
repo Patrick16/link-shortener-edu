@@ -34,14 +34,17 @@ services:
     # harmless to set uniformly. max_connections is set explicitly (not left at the image default)
     # because a standby's own max_connections must be >= the primary's or it refuses to start hot
     # standby at all - postgres-replica1/2 read the *same* POSTGRES_MAX_CONNECTIONS value (see
-    # replica-entrypoint.sh) specifically so the two can never drift apart.
+    # replica-entrypoint.sh) specifically so the two can never drift apart. Raised from 100 to 200:
+    # pgcat's pool_size=40 x 3 database pools (users_db/links_db/clicks_db) can each open up to 40
+    # connections to *this* primary, so worst case is 120 just from pgcat - 100 left no headroom at
+    # all for pgweb/exporters/admin psql. See sandbox/docs/pgcat-pool-sizing.md.
     command: >
       postgres
       -c wal_level=replica
       -c max_wal_senders=10
       -c max_replication_slots=10
       -c hot_standby=on
-      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-100}
+      -c max_connections=${POSTGRES_MAX_CONNECTIONS:-200}
     ports:
       - "5432:5432"
     volumes:
@@ -67,7 +70,7 @@ services:
       PGPASSWORD: replicator_pass
       # Same value the primary gets (see its own command: block) - a standby with a lower
       # max_connections than its primary refuses to start hot standby at all.
-      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-100}
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-200}
       # Own, permanent replication slot (see replica-entrypoint.sh) - without one, the primary is
       # free to recycle WAL this replica hasn't consumed yet the moment it falls behind, so a
       # disconnected-long-enough replica can never resume streaming and needs a manual rebuild.
@@ -105,7 +108,7 @@ services:
       PGPASSWORD: replicator_pass
       # Same value the primary gets (see its own command: block) - a standby with a lower
       # max_connections than its primary refuses to start hot standby at all.
-      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-100}
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-200}
       # See postgres-replica1's REPLICA_SLOT_NAME comment - own slot, must be a different name.
       REPLICA_SLOT_NAME: replica2_slot
     ports:
@@ -768,11 +771,15 @@ services:
     # ScalableServices) multiplies reserved GC heap memory by N against the host's full core count,
     # not against what each replica is actually meant to get. .NET reads a container's cgroup
     # cpus/memory quota (not just the host's) to size Server GC since .NET Core 3.0+, so this limit
-    # is what makes that sizing reflect one replica's real share instead of the whole host.
+    # is what makes that sizing reflect one replica's real share instead of the whole host. Raised
+    # from 1.0 to 1.5 after a 200-VU/20-replica run showed real cgroup CFS throttling (cpu.stat's
+    # nr_throttled/throttled_usec, confirmed non-zero) once the pgcat bottleneck below it was fixed -
+    # 1.0 core left no slack for the healthcheck's own curl process alongside real traffic on the
+    # same quota. See sandbox/docs/pgcat-pool-sizing.md.
     deploy:
       resources:
         limits:
-          cpus: "1.0"
+          cpus: "1.5"
           memory: 512M
     depends_on:
       pgcat:
@@ -820,7 +827,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
+          cpus: "1.5"
           memory: 512M
     depends_on:
       pgcat:

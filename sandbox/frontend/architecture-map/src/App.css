@@ -784,6 +784,13 @@ button:disabled {
   color: var(--text);
 }
 
+.traffic-result-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .traffic-result-toggle {
   flex-shrink: 0;
   border: 1px solid var(--border);
@@ -799,6 +806,22 @@ button:disabled {
 .traffic-result-toggle:hover {
   border-color: var(--accent-border);
   background: var(--accent-bg);
+}
+
+.traffic-result-cancel {
+  flex-shrink: 0;
+  border: 1px solid #ef4444;
+  background: transparent;
+  color: #ef4444;
+  border-radius: 6px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.traffic-result-cancel:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.12);
 }
 
 /* A full report can get tall (stat tiles + latency + checks + per-endpoint status + raw output) -

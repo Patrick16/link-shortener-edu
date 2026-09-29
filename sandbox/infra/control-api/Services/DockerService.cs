@@ -155,10 +155,11 @@ public class DockerService : IDockerService
     private bool _pgcatEnabled = true;
     private bool _cacheEnabled = true;
 
-    // Mirrors pgcat.toml's shipped defaults, collapsed to one shared value across all 3 pools
-    // (the file itself differentiates links_db at 20 vs 10 for the other two - see
-    // SetPgcatPoolSettingsAsync's own comment for why that's fine to lose once this control is used).
-    private PgcatPoolSettings _pgcatPoolSettings = new("transaction", true, 10);
+    // Mirrors pgcat.toml's shipped defaults. Raised from the original 10 after a 200-VU/20-replica
+    // load test showed pgcat's pool - not the app or RabbitMQ - as the actual bottleneck: pool_size
+    // didn't scale with replica count, so requests (including the DB health check, which shares this
+    // same pool) queued for 10+ seconds behind it. See sandbox/docs/pgcat-pool-sizing.md.
+    private PgcatPoolSettings _pgcatPoolSettings = new("transaction", true, 40);
 
     // Mirrors RabbitMqConsumer's own hardcoded-turned-configurable default.
     private int _rabbitMqPrefetch = 10;
@@ -1634,7 +1635,17 @@ public class DockerService : IDockerService
         sb.AppendLine("healthcheck_timeout = 1000");
         sb.AppendLine("healthcheck_delay = 30000");
         sb.AppendLine("shutdown_timeout = 5000");
-        sb.AppendLine("ban_time = 20");
+        // Was 20 (seconds). A 200-VU/20-replica run's connection-establishment burst hit intermittent
+        // Docker embedded-DNS lookup failures against postgres-replica1/2 ("failed to lookup address
+        // information") - transient, gone on the very next attempt - but pgcat's ban then blocked that
+        // replica for the *entire* ban_time, and every read routed there in the meantime queued for
+        // it: this is exactly what showed up as ~20s p95/max on /health/ready (and rare 50s+ tail
+        // latencies on real traffic) despite pgcat's own pool never once reporting a queued client.
+        // Same class of Docker-DNS flakiness already known here for Redis Sentinel (see
+        // [[resilience-ha-postgres-mongo-redis]] in project memory) - shortening the ban keeps the
+        // circuit-breaker (don't hammer a genuinely dead replica) without magnifying a sub-second
+        // blip into a 20-second one. See sandbox/docs/pgcat-pool-sizing.md.
+        sb.AppendLine("ban_time = 3");
         sb.AppendLine("log_client_connections = false");
         sb.AppendLine("log_client_disconnections = false");
         sb.AppendLine("autoreload = 15000");

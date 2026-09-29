@@ -78,6 +78,12 @@ export const controlApi = {
     await send('/api/traffic', 'POST', traffic)
   },
 
+  // Same fire-and-forget shape as startTraffic - the run's own task notices the cancellation and
+  // reports it over SignalR (trafficCancelled), not in this response.
+  cancelTraffic: async (): Promise<void> => {
+    await send('/api/traffic/cancel', 'POST')
+  },
+
   flushRedisCache: () => request<{ flushed: string }>('/api/containers/redis/flush-cache', 'POST'),
 
   listEndpoints: () => request<EndpointDefinition[]>('/api/endpoints'),

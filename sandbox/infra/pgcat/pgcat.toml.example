@@ -10,7 +10,10 @@ idle_timeout = 30000
 healthcheck_timeout = 1000
 healthcheck_delay = 30000
 shutdown_timeout = 5000
-ban_time = 20
+# See DockerService.RenderPgcatToml's identical comment: a 200-VU/20-replica run showed transient
+# Docker-DNS lookup failures against postgres-replica1/2 turning into ~20s stalls once pgcat banned
+# the replica for the old ban_time=20 - shortened so a sub-second DNS blip doesn't cascade that far.
+ban_time = 3
 log_client_connections = false
 log_client_disconnections = false
 autoreload = 15000
@@ -28,7 +31,7 @@ primary_reads_enabled = true
 [pools.users_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 10
+pool_size = 40
 statement_timeout = 0
 
 [pools.users_db.shards.0]
@@ -45,7 +48,7 @@ primary_reads_enabled = true
 [pools.links_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 10
+pool_size = 40
 statement_timeout = 0
 
 [pools.links_db.shards.0]
@@ -62,7 +65,7 @@ primary_reads_enabled = true
 [pools.clicks_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 10
+pool_size = 40
 statement_timeout = 0
 
 [pools.clicks_db.shards.0]

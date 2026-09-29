@@ -9,7 +9,9 @@ export interface TrafficRunState {
   progressHistory: TrafficProgress[]
   report: TrafficReport | null
   error: string | null
+  cancelled: boolean
   start: (request: TrafficRequest) => Promise<void>
+  cancel: () => Promise<void>
   // Bumped (to the new run's id) whenever control-api finishes persisting a run snapshot - a
   // simple change signal RunHistoryPanel watches to refetch its list, instead of a second SignalR
   // connection just for that one event.
@@ -33,6 +35,9 @@ export function useTrafficRun(): TrafficRunState {
   const [progressHistory, setProgressHistory] = useState<TrafficProgress[]>([])
   const [report, setReport] = useState<TrafficReport | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Named apart from the useEffect's own StrictMode-guard "cancelled" local below - this one tracks
+  // whether the *last run* ended via /api/traffic/cancel, not whether this effect instance is stale.
+  const [runCancelled, setRunCancelled] = useState(false)
   const [lastSavedRunId, setLastSavedRunId] = useState<string | null>(null)
   const [verdict, setVerdict] = useState<BottleneckVerdict | null>(null)
   const [traceHops, setTraceHops] = useState<TraceHopStats[] | null>(null)
@@ -69,6 +74,12 @@ export function useTrafficRun(): TrafficRunState {
       setRunning(false)
       setProgress(null)
     })
+    connection.on('trafficCancelled', () => {
+      if (cancelled) return
+      setRunCancelled(true)
+      setRunning(false)
+      setProgress(null)
+    })
     connection.on('runSaved', (e: { id: string }) => {
       if (cancelled) return
       setLastSavedRunId(e.id)
@@ -100,6 +111,7 @@ export function useTrafficRun(): TrafficRunState {
     setProgressHistory([])
     setVerdict(null)
     setTraceHops(null)
+    setRunCancelled(false)
     setRunning(true)
     try {
       await controlApi.startTraffic(request)
@@ -109,5 +121,29 @@ export function useTrafficRun(): TrafficRunState {
     }
   }
 
-  return { running, progress, progressHistory, report, error, start, lastSavedRunId, verdict, traceHops }
+  // Fire-and-forget, same as start() - the actual stop is reported back over SignalR
+  // (trafficCancelled) once the run's background task notices ct got cancelled and unwinds, not in
+  // this response. A failed cancel request (e.g. the run already finished on its own) surfaces
+  // through `error` exactly like a failed start would.
+  async function cancel() {
+    try {
+      await controlApi.cancelTraffic()
+    } catch (err) {
+      setError(err instanceof ControlApiError ? err.message : String(err))
+    }
+  }
+
+  return {
+    running,
+    progress,
+    progressHistory,
+    report,
+    error,
+    cancelled: runCancelled,
+    start,
+    cancel,
+    lastSavedRunId,
+    verdict,
+    traceHops,
+  }
 }

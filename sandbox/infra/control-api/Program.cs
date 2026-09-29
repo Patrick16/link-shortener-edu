@@ -162,6 +162,12 @@ app.MapPost("/api/containers/{serviceId}/scale", async (string serviceId, ScaleR
 // (e.g. run 2's BeginRun() clearing state run 1 is still accumulating into). 0 = idle, 1 = running.
 var trafficRunActive = 0;
 
+// Set right before the run's Task.Run starts and cleared in its finally, guarded the same way as
+// trafficRunActive above (only one run - and so only one writer - at a time). Volatile.Read/Write
+// rather than a plain field so /api/traffic/cancel, called from a different request's thread, is
+// guaranteed to see the latest value instead of a stale cached one.
+CancellationTokenSource? trafficRunCts = null;
+
 app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRunHistoryStore runHistory, IHubContext<StatusHub> hub, ILogger<Program> logger, TraceStore traceStore, RunResourceMaxTracker resourceMaxTracker) =>
 {
     if (request.Steps.Count == 0)
@@ -263,6 +269,9 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
     // Runs in the background and reports over SignalR (trafficProgress while it runs,
     // trafficCompleted with the final TrafficReport) instead of blocking the HTTP request for the
     // full duration - lets the UI show a live progress bar instead of a frozen spinner.
+    var cts = new CancellationTokenSource();
+    Volatile.Write(ref trafficRunCts, cts);
+
     _ = Task.Run(async () =>
     {
         try
@@ -276,7 +285,7 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
             var report = await docker.RunTrafficAsync(
                 request,
                 progress => hub.Clients.All.SendAsync("trafficProgress", progress),
-                CancellationToken.None);
+                cts.Token);
 
             var runEnd = DateTimeOffset.UtcNow;
             // Always ends tracking, even if the run failed/returned null - otherwise a failed run
@@ -367,6 +376,14 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
                 }
             }
         }
+        catch (OperationCanceledException)
+        {
+            // User-requested via /api/traffic/cancel - RunTrafficAsync's own catch already stopped
+            // and removed the k6 container before this exception reached here, so there's nothing
+            // left to clean up, just the UI to tell.
+            logger.LogInformation("Traffic run for {Scenario} was cancelled", request.Scenario);
+            await hub.Clients.All.SendAsync("trafficCancelled", new { request.Scenario });
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Traffic run for {Scenario} failed", request.Scenario);
@@ -374,10 +391,26 @@ app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, IRun
         }
         finally
         {
+            Volatile.Write(ref trafficRunCts, null);
             Volatile.Write(ref trafficRunActive, 0);
         }
     });
 
+    return Results.Accepted();
+});
+
+app.MapPost("/api/traffic/cancel", () =>
+{
+    // Read-then-Cancel is fine without a lock: at most one run (and so one CancellationTokenSource)
+    // is ever active at a time, and the reference is only ever nulled out after the run has already
+    // stopped reading from it, so a cancel that lands after that just sees null.
+    var activeCts = Volatile.Read(ref trafficRunCts);
+    if (activeCts is null)
+    {
+        return Results.Conflict(new { error = "no traffic run is currently active" });
+    }
+
+    activeCts.Cancel();
     return Results.Accepted();
 });
 

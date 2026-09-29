@@ -3,7 +3,8 @@ import { AxisChart } from './AxisChart'
 import { TrafficReportView } from './TrafficReportView'
 import type { TrafficRunState } from '../hooks/useTrafficRun'
 
-interface Props extends Pick<TrafficRunState, 'running' | 'progress' | 'progressHistory' | 'report' | 'error' | 'verdict' | 'traceHops'> {
+interface Props
+  extends Pick<TrafficRunState, 'running' | 'progress' | 'progressHistory' | 'report' | 'error' | 'cancelled' | 'cancel' | 'verdict' | 'traceHops'> {
   fallbackTotalSeconds: number
 }
 
@@ -24,8 +25,18 @@ function readCollapsed(): boolean {
 // A full report (stat tiles + latency + checks + per-endpoint status + raw output) can get tall
 // enough to push the graph and sidebars below the fold if the header were left to grow freely, so
 // its content sits in a height-capped, scrollable box and can be collapsed to a single line.
-export function TrafficResultPanel({ running, progress, progressHistory, report, error, verdict, traceHops, fallbackTotalSeconds }: Props) {
+export function TrafficResultPanel({ running, progress, progressHistory, report, error, cancelled, cancel, verdict, traceHops, fallbackTotalSeconds }: Props) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
+  const [cancelling, setCancelling] = useState(false)
+
+  async function handleCancel() {
+    setCancelling(true)
+    try {
+      await cancel()
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   function toggleCollapsed() {
     setCollapsed((prev) => {
@@ -45,7 +56,7 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
   const vusPoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.activeVus }))
   const ratePoints = progressHistory.map((p) => ({ x: p.elapsedSeconds, y: p.iterationsPerSecond }))
 
-  if (!running && !report && !error) {
+  if (!running && !report && !error && !cancelled) {
     return <div className="traffic-result-panel traffic-result-empty">Configure a run on the left, then hit Run traffic.</div>
   }
 
@@ -59,11 +70,20 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
               : 'Running...'
             : report
               ? `Last run - ${report.httpRequests} requests, ${report.failedRequests} failed`
-              : 'Last run'}
+              : cancelled
+                ? 'Run cancelled'
+                : 'Last run'}
         </span>
-        <button type="button" className="traffic-result-toggle" onClick={toggleCollapsed}>
-          {collapsed ? 'Show details' : 'Hide details'}
-        </button>
+        <div className="traffic-result-header-actions">
+          {running && (
+            <button type="button" className="traffic-result-cancel" onClick={handleCancel} disabled={cancelling}>
+              {cancelling ? 'Cancelling...' : 'Cancel run'}
+            </button>
+          )}
+          <button type="button" className="traffic-result-toggle" onClick={toggleCollapsed}>
+            {collapsed ? 'Show details' : 'Hide details'}
+          </button>
+        </div>
       </div>
 
       {error && <p className="service-card-error">{error}</p>}
