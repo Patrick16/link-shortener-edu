@@ -18,7 +18,31 @@ namespace Infrastructure;
 // off any real request's critical path, instead of on whichever caller is first or unlucky.
 public sealed class RabbitMqWarmupService(IRabbitMqConnection connection, ILogger<RabbitMqWarmupService> logger) : IHostedService
 {
+    // Bounds how long a slow-but-not-fully-down broker can delay container startup. Unlike a health
+    // check (which just fails one probe), a hang *here* stalls the whole container: StartAsync blocks
+    // Kestrel from listening until it returns, and HostOptions.StartupTimeout is unbounded by default
+    // - confirmed live elsewhere in this investigation that a connection-establishment burst can take
+    // 13-67s under load (see sandbox/docs/pgcat-pool-sizing.md). When this fires, the warmup attempt
+    // itself isn't cancelled - WarmupAsync already disposes its own channel and swallows its own
+    // exceptions, so it's safe to just stop *waiting* for it and let startup proceed; a slow broker
+    // trades "no warmup benefit this boot" for "the container still starts on time" instead of "the
+    // container never becomes ready."
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+
     public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var warmup = WarmupAsync(cancellationToken);
+        var winner = await Task.WhenAny(warmup, Task.Delay(Timeout, cancellationToken));
+
+        if (winner != warmup)
+        {
+            logger.LogWarning(
+                "RabbitMQ warmup did not complete within {TimeoutSeconds}s - continuing startup without it, will connect lazily on first use instead",
+                Timeout.TotalSeconds);
+        }
+    }
+
+    private async Task WarmupAsync(CancellationToken cancellationToken)
     {
         try
         {

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using RabbitMQ.Client;
 
 namespace Infrastructure;
 
@@ -41,7 +42,7 @@ public sealed class RabbitMqHealthCheck(IRabbitMqConnection connection) : IHealt
                     {
                         if (t.IsCompletedSuccessfully)
                         {
-                            return t.Result.DisposeAsync().AsTask();
+                            return DisposeQuietlyAsync(t.Result);
                         }
 
                         _ = t.Exception; // observe the fault so it never surfaces as unobserved later
@@ -61,6 +62,20 @@ public sealed class RabbitMqHealthCheck(IRabbitMqConnection connection) : IHealt
         catch (Exception ex)
         {
             return HealthCheckResult.Unhealthy("RabbitMQ is not reachable.", ex);
+        }
+    }
+
+    // Best-effort cleanup of an already-abandoned channel - guarded the same way the failure branch
+    // observes its own fault, since DisposeAsync() itself throwing here would otherwise surface as an
+    // unobserved task exception with nothing left that could act on it anyway.
+    private static async Task DisposeQuietlyAsync(IChannel channel)
+    {
+        try
+        {
+            await channel.DisposeAsync();
+        }
+        catch
+        {
         }
     }
 }

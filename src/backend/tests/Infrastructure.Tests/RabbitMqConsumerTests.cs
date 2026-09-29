@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -275,5 +275,50 @@ public class RabbitMqConsumerTests
 
         Assert.True(hasMore);
         Assert.Single(batch);
+    }
+
+    [Fact]
+    public async Task ConsumeBatchAsync_ChannelShutsDown_ReSubscribesOnFreshChannel()
+    {
+        // Regression: after a broker restart the channel died but the flush loop kept waiting for
+        // deliveries forever, leaving the queue with 0 consumers while health checks stayed green.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var first = NewWorkingChannelMock();
+        first.SetupGet(c => c.IsOpen).Returns(true);
+        first.Setup(c => c.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        first.Setup(c => c.BasicConsumeAsync(
+                It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>?>(), It.IsAny<IAsyncBasicConsumer>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                _ = Task.Run(() => first.RaiseAsync(
+                    c => c.ChannelShutdownAsync += null, first.Object, new ShutdownEventArgs(ShutdownInitiator.Peer, 320, "broker restart")));
+                return Task.FromResult("tag-1");
+            });
+
+        var second = NewWorkingChannelMock();
+        second.SetupGet(c => c.IsOpen).Returns(true);
+        second.Setup(c => c.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        second.Setup(c => c.BasicConsumeAsync(
+                It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>?>(), It.IsAny<IAsyncBasicConsumer>(), It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                cts.Cancel();
+                return Task.FromResult("tag-2");
+            });
+
+        var channels = new Queue<IChannel>([first.Object, second.Object]);
+        var connection = new Mock<IRabbitMqConnection>();
+        connection.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>())).ReturnsAsync(() => channels.Dequeue());
+
+        var sut = new RabbitMqConsumer(connection.Object, NullLogger<RabbitMqConsumer>.Instance, EmptyConfig());
+
+        await sut.ConsumeBatchAsync<TestMessage>(
+            "queue-name", "routing.key", (_, _) => Task.FromResult(BatchOutcome.Success), cts.Token);
+
+        connection.Verify(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        first.Verify(c => c.DisposeAsync(), Times.Once);
     }
 }

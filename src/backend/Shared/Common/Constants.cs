@@ -15,6 +15,10 @@ public static class Constants
     public const string RabbitMqFallbackConnectionString = "RabbitMqFallback";
     public const string MongoDbConnectionString = "Mongo";
 
+    // Tag on the health checks that /health/ready runs (dependency reachability), as opposed to
+    // /health/live, which runs none.
+    public const string ReadyHealthCheckTag = "ready";
+
     public const string FrontendCorsPolicy = "Frontend";
     public const string CorsAllowedOriginsSection = "Cors:AllowedOrigins";
 

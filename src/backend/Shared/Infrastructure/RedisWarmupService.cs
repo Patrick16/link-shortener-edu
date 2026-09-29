@@ -24,7 +24,30 @@ public sealed class RedisWarmupService(
     IServiceProvider services,
     ILogger<RedisWarmupService> logger) : IHostedService
 {
+    // See RabbitMqWarmupService's identical field for why this exists: a hang here stalls the whole
+    // container's startup (IHostedService.StartAsync blocks Kestrel from listening, and
+    // HostOptions.StartupTimeout is unbounded by default), unlike a health check which just fails one
+    // probe. Both inner warmup attempts already dispose/swallow after themselves, so letting this
+    // fire and moving on is safe - a slow Redis trades "no warmup benefit this boot" for "the
+    // container still starts on time."
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+
     public async Task StartAsync(CancellationToken cancellationToken)
+    {
+        var warmup = Task.WhenAll(
+            WarmupDistributedCacheAsync(cancellationToken),
+            WarmupConnectionMultiplexerAsync());
+        var winner = await Task.WhenAny(warmup, Task.Delay(Timeout, cancellationToken));
+
+        if (winner != warmup)
+        {
+            logger.LogWarning(
+                "Redis warmup did not complete within {TimeoutSeconds}s - continuing startup without it, will connect lazily on first use instead",
+                Timeout.TotalSeconds);
+        }
+    }
+
+    private async Task WarmupDistributedCacheAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -39,17 +62,28 @@ public sealed class RedisWarmupService(
             // case where it's already up (docker-compose gates on the Redis Sentinels being healthy).
             logger.LogWarning(ex, "Redis (IDistributedCache) warmup at startup failed - will connect lazily on first use instead");
         }
+    }
 
-        if (services.GetService<IConnectionMultiplexer>() is { } multiplexer)
+    private async Task WarmupConnectionMultiplexerAsync()
+    {
+        try
         {
-            try
+            // GetService itself runs the synchronous, blocking ConnectionMultiplexer.Connect(...) for
+            // this singleton's factory - it throws (RedisConnectionException) when Sentinel can't
+            // resolve the master yet, and an unhandled throw here used to abort host startup
+            // (observed live: redirect-api exited 139 on a cold `docker compose up`; a failed factory
+            // isn't cached, so the next real use just retries). Offloaded to a pool thread via
+            // Task.Run so the Timeout race in StartAsync can actually bound it - a plain synchronous
+            // call never yields back to let Task.WhenAny observe the Delay while it's running.
+            var multiplexer = await Task.Run(() => services.GetService<IConnectionMultiplexer>());
+            if (multiplexer is not null)
             {
                 await multiplexer.GetDatabase().PingAsync();
             }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Redis (IConnectionMultiplexer) warmup at startup failed - will connect lazily on first use instead");
-            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Redis (IConnectionMultiplexer) warmup at startup failed - will connect lazily on first use instead");
         }
     }
 

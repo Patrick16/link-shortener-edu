@@ -11,8 +11,8 @@
          do run on the ASP.NET Core shared framework now (a minimal Kestrel listener for /health/*
          only, no controllers) but instrumenting it would trace every health-check ping alongside
          real request/message spans, which is just noise. The three real web APIs add this
-         instrumentation themselves — see their own .csproj and the extra lines after
-         AddServiceDefaults() in their Program.cs. -->
+         instrumentation via WebDefaults' AddWebApiDefaults() (called right after
+         AddServiceDefaults() in their Program.cs). -->
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />

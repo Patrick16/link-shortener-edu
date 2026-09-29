@@ -61,30 +61,83 @@ public sealed class RabbitMqConsumer(
         ArgumentException.ThrowIfNullOrEmpty(routingKey);
         ArgumentNullException.ThrowIfNull(handler);
 
-        // The broker being briefly unreachable at startup (a container health check that passed
-        // before the AMQP listener actually opened, a restart, ...) shouldn't crash this worker —
-        // that's exactly the kind of transient condition retrying should absorb.
-        var channel = await SetUpChannelWithRetryAsync(queueName, routingKey, cancellationToken).ConfigureAwait(false);
-        await using (channel.ConfigureAwait(false))
+        // Runs (and keeps this call alive) until the caller cancels. Each pass is one channel's
+        // lifetime: if the broker restarts or the connection drops, the channel shuts down, the pass
+        // ends, and the next one re-declares the topology and re-subscribes. Without this loop a
+        // broker restart left the consumer subscribed to nothing while /health/ready (which reconnects
+        // on its own) stayed green - observed live: 0 consumers on every queue after a broker restart.
+        var retryDelay = InitialRetryDelay;
+        while (!cancellationToken.IsCancellationRequested)
         {
-            var deadQueueName = DeadQueueName(queueName);
+            try
+            {
+                // The broker being briefly unreachable at startup (a container health check that
+                // passed before the AMQP listener actually opened, a restart, ...) shouldn't crash
+                // this worker - that's exactly the kind of transient condition retrying should absorb.
+                var channel = await SetUpChannelWithRetryAsync(queueName, routingKey, cancellationToken).ConfigureAwait(false);
+                await using (channel.ConfigureAwait(false))
+                {
+                    await ConsumeUntilChannelClosesAsync(channel, queueName, handler, cancellationToken).ConfigureAwait(false);
+                }
 
-            // Bounded specifically so it applies real backpressure: once _batchSize deliveries are
-            // sitting here waiting for the next flush, ReceiveDeliveryAsync's WriteAsync below blocks,
-            // which in turn stalls RabbitMQ's own push once the prefetch window is also exhausted.
-            var buffer = Channel.CreateBounded<BufferedDelivery<TMessage>>(
-                new BoundedChannelOptions(_batchSize) { FullMode = BoundedChannelFullMode.Wait });
+                retryDelay = InitialRetryDelay;
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                // e.g. an ack/nack on a channel that died mid-batch - same recovery as a clean
+                // shutdown; the unacked deliveries are redelivered to the next subscription.
+                _logger.LogWarning(ex, "RabbitMQ consumer for queue {QueueName} failed, re-subscribing in {Delay}", queueName, retryDelay);
+                await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                retryDelay = TimeSpan.FromSeconds(Math.Min(retryDelay.TotalSeconds * 2, MaxRetryDelay.TotalSeconds));
+                continue;
+            }
 
-            var consumer = new AsyncEventingBasicConsumer(channel);
-            consumer.ReceivedAsync += (_, ea) =>
-                ReceiveDeliveryAsync(channel, deadQueueName, buffer.Writer, ea, cancellationToken);
-
-            await channel.BasicConsumeAsync(queueName, autoAck: false, consumer, cancellationToken);
-
-            // Runs (and keeps this call alive) until the caller cancels.
-            await RunFlushLoopAsync(channel, queueName, deadQueueName, buffer.Reader, handler, cancellationToken)
-                .ConfigureAwait(false);
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("RabbitMQ channel for queue {QueueName} closed - re-subscribing", queueName);
+                await Task.Delay(InitialRetryDelay, cancellationToken).ConfigureAwait(false);
+            }
         }
+    }
+
+    private async Task ConsumeUntilChannelClosesAsync<TMessage>(
+        IChannel channel,
+        string queueName,
+        Func<IReadOnlyList<BatchItem<TMessage>>, CancellationToken, Task<BatchOutcome>> handler,
+        CancellationToken cancellationToken)
+    {
+        var deadQueueName = DeadQueueName(queueName);
+
+        // Cancelled when the caller stops us *or* this channel shuts down, so the flush loop (which
+        // otherwise blocks forever waiting for deliveries a dead channel will never send) unwinds and
+        // the caller can open a fresh one.
+        using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        channel.ChannelShutdownAsync += (_, _) =>
+        {
+            sessionCts.Cancel();
+            return Task.CompletedTask;
+        };
+        if (!channel.IsOpen)
+        {
+            return;
+        }
+
+        var sessionToken = sessionCts.Token;
+
+        // Bounded specifically so it applies real backpressure: once _batchSize deliveries are
+        // sitting here waiting for the next flush, ReceiveDeliveryAsync's WriteAsync below blocks,
+        // which in turn stalls RabbitMQ's own push once the prefetch window is also exhausted.
+        var buffer = Channel.CreateBounded<BufferedDelivery<TMessage>>(
+            new BoundedChannelOptions(_batchSize) { FullMode = BoundedChannelFullMode.Wait });
+
+        var consumer = new AsyncEventingBasicConsumer(channel);
+        consumer.ReceivedAsync += (_, ea) =>
+            ReceiveDeliveryAsync(channel, deadQueueName, buffer.Writer, ea, sessionToken);
+
+        await channel.BasicConsumeAsync(queueName, autoAck: false, consumer, sessionToken);
+
+        await RunFlushLoopAsync(channel, queueName, deadQueueName, buffer.Reader, handler, sessionToken)
+            .ConfigureAwait(false);
     }
 
     internal async Task ReceiveDeliveryAsync<TMessage>(

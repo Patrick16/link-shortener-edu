@@ -8,9 +8,18 @@
 
 	<ItemGroup>
 		<!-- Not Sdk.Web: this is a class library, not a host. FrameworkReference alone is enough to
-		     get ProblemDetails/IExceptionHandler types without pulling in a full web SDK. Only the
-		     three controller-based APIs (AuthApi, LinkApi, RedirectApi) reference this project. -->
+		     get ProblemDetails/IExceptionHandler types without pulling in a full web SDK. Referenced by
+		     every service with an HTTP listener - the three controller-based APIs (AuthApi, LinkApi,
+		     RedirectApi) and the workers' health endpoints (ShortenerService, TrafficService). -->
 		<FrameworkReference Include="Microsoft.AspNetCore.App" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- AddWebApiDefaults/MapApiDocumentation: OpenAPI + Scalar UI + ASP.NET Core OTel instrumentation
+		     (deliberately absent from ServiceDefaults, see the comment in its csproj). -->
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
+		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+		<PackageReference Include="Scalar.AspNetCore" Version="2.17.4" />
 	</ItemGroup>
 
 	<ItemGroup>

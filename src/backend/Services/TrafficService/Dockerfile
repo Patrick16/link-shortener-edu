@@ -11,6 +11,7 @@ COPY ["src/backend/Shared/Contracts/Contracts.csproj", "src/backend/Shared/Contr
 COPY ["src/backend/Shared/Infrastructure/Infrastructure.csproj", "src/backend/Shared/Infrastructure/"]
 COPY ["src/backend/Shared/Common/Common.csproj", "src/backend/Shared/Common/"]
 COPY ["src/backend/Shared/ServiceDefaults/ServiceDefaults.csproj", "src/backend/Shared/ServiceDefaults/"]
+COPY ["src/backend/Shared/WebDefaults/WebDefaults.csproj", "src/backend/Shared/WebDefaults/"]
 RUN dotnet restore "src/backend/Services/TrafficService/TrafficService.csproj"
 COPY . .
 WORKDIR "/src/src/backend/Services/TrafficService"
