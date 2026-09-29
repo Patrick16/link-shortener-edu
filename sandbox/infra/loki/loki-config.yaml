@@ -1,0 +1,30 @@
+# Minimal single-binary Loki, filesystem storage - load-test-run scoped (see docker-compose.yml's
+# `loki` service, profile-gated), not meant to persist across stack recreates. Native OTLP log
+# ingestion (the /otlp/v1/logs path otel-collector-config.full.yaml's otlphttp/loki exporter posts
+# to) needs no extra config here - Loki serves it on the same HTTP listener as everything else from
+# 3.0 onward.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+
+common:
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h

@@ -1,0 +1,13 @@
+# Auto-provisioned on Grafana startup, same mechanism as ../datasources/datasources.yaml - any
+# *.json file dropped in this same folder is loaded as a dashboard automatically, version-controlled
+# like the rest of this stack's config instead of living only in Grafana's own database.
+apiVersion: 1
+
+providers:
+  - name: default
+    folder: ""
+    type: file
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards

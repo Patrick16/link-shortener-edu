@@ -318,6 +318,18 @@ services:
     ports:
       - "5672:5672"   # AMQP
       - "15672:15672" # management UI (guest/guest)
+      - "15692:15692" # Prometheus metrics (rabbitmq_prometheus plugin, enabled below) - scraped by prometheus (observability profile) at infra/prometheus/prometheus.yml's rabbitmq job
+    volumes:
+      # rabbitmq_prometheus is actually already on by default in the rabbitmq:3-management-alpine
+      # tag this service uses (confirmed live via `rabbitmq-plugins list -e` against the running
+      # container) - this mount is functionally redundant today. Kept anyway and pinned explicitly
+      # rather than relied on implicitly, so a future image/tag bump that changes what ships enabled
+      # by default can't silently turn this plugin (and the rabbitmq scrape job in
+      # infra/prometheus/prometheus.yml that depends on it) off with no error anywhere. Not
+      # profile-gated (unlike the postgres/redis/mongo exporters below): it's a one-line tweak to
+      # this already-always-on service, and the extra listener is free when nothing's scraping it in
+      # Aspire mode.
+      - ./infra/rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro
     healthcheck:
       # "ping" only checks the Erlang node is alive — it can succeed before the AMQP listener
       # itself is actually bound, which raced clients that connect the moment it goes "healthy".
@@ -491,17 +503,191 @@ services:
       DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS: "true"
 
   # Every service's OTEL_EXPORTER_OTLP_ENDPOINT points here now, not straight at aspire-dashboard.
-  # Fans the same stream out two ways: unchanged to aspire-dashboard for manual trace/log/metric
-  # drill-down, and traces only (re-encoded as OTLP/JSON) to control-api's own ingestion endpoint
-  # for automated per-run bottleneck aggregation - see otel-collector-config.yaml.
+  # Which config file it loads is picked by OTEL_COLLECTOR_CONFIG (same override pattern as
+  # DB_HOST/CACHE_ENABLED elsewhere in this file) - unset/default fans out to aspire-dashboard +
+  # control-api same as always; start-stack.ps1's -Observability Full sets it to
+  # otel-collector-config.full.yaml, which instead fans to prometheus/jaeger/loki + control-api.
+  # See both files' own headers for why they're mutually exclusive rather than always-all-of-it.
   otel-collector:
     logging: *default-logging
     image: otel/opentelemetry-collector:latest
     volumes:
-      - ./infra/otel-collector/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+      - ./infra/otel-collector/${OTEL_COLLECTOR_CONFIG:-otel-collector-config.yaml}:/etc/otelcol/config.yaml:ro
+    ports:
+      - "8889:8889" # Prometheus scrape endpoint (only served/scraped in the Full variant; harmless to publish otherwise)
     depends_on:
       aspire-dashboard:
         condition: service_started
+
+  # The four services below only start with `docker compose --profile observability up` (what
+  # start-stack.ps1's -Observability Full does) - a plain `docker compose up` never touches them,
+  # so the default/everyday stack is unchanged. See otel-collector-config.full.yaml for how they're
+  # fed and its header for why aspire-dashboard is deliberately left out of that fan-out.
+  prometheus:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  jaeger:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: jaegertracing/all-in-one:latest
+    environment:
+      # Default in-memory store is unbounded (0 = no cap) - the same "in-memory store with no
+      # eviction" problem this whole feature exists to route around for aspire-dashboard, just
+      # lower exposure since the intended usage is one run then `stop-stack.ps1` (which discards the
+      # container entirely). Capped anyway so a long-lived Full session can't grow without bound.
+      MEMORY_MAX_TRACES: "50000"
+    ports:
+      - "16686:16686" # UI - trace ingestion (OTLP gRPC on 4317) only happens over the internal network, from otel-collector
+
+  loki:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: grafana/loki:latest
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./infra/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+
+  grafana:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      # Dev-only: skips Grafana's own login, same posture as aspire-dashboard's
+      # DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS and mongo-express's ME_CONFIG_BASICAUTH above.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      # Grafana's own sqlite DB (org/user state, and anything not covered by the provisioned
+      # dashboards/datasources above, e.g. UI-driven edits) - without this, every container
+      # recreate started from a blank slate. The 3 dashboards themselves don't depend on this for
+      # persistence (they're loaded from the provisioning mount above on every start regardless);
+      # this is for state beyond what's checked into those files.
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+      - jaeger
+      - loki
+
+  # One exporter per node (not one per cluster) across all three HA clusters - deliberately, since
+  # what this stack is actually meant to demonstrate is replication lag, who's currently
+  # primary/master, and what a degraded node looks like (pgcat/Sentinel/the replica set all exist
+  # for that story - see resilience docs). A single exporter per cluster would only ever show one
+  # node and hide exactly the thing worth graphing. No host ports published - Prometheus reaches
+  # these over the internal network only, same as otel-collector before this.
+  postgres-exporter-primary:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres:5432/postgres?sslmode=disable"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres-exporter-replica1:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres-replica1:5432/postgres?sslmode=disable"
+    depends_on:
+      postgres-replica1:
+        condition: service_healthy
+
+  postgres-exporter-replica2:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: "postgresql://postgres:postgres@postgres-replica2:5432/postgres?sslmode=disable"
+    depends_on:
+      postgres-replica2:
+        condition: service_healthy
+
+  redis-exporter-master:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: "redis://redis-master:6379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+
+  redis-exporter-replica1:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: "redis://redis-replica1:6379"
+    depends_on:
+      redis-replica1:
+        condition: service_healthy
+
+  redis-exporter-replica2:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: oliver006/redis_exporter:latest
+    environment:
+      REDIS_ADDR: "redis://redis-replica2:6379"
+    depends_on:
+      redis-replica2:
+        condition: service_healthy
+
+  mongo-exporter-1:
+    logging: *default-logging
+    profiles: ["observability"]
+    # Pinned, unlike this file's other :latest exporters - percona/mongodb_exporter doesn't publish
+    # a `latest` tag at all (confirmed live: pulling it 404s), only versioned ones.
+    image: percona/mongodb_exporter:0.53
+    environment:
+      # directConnection=true is explicit here, not just relied on implicitly via "single host + no
+      # replicaSet param" (which happens to default to a direct connection per the MongoDB URI spec,
+      # confirmed live that it does) - without it, a plausible future edit adding `?replicaSet=rs0`
+      # (the set is literally named that elsewhere in this file) would silently make the driver
+      # discover the real primary and route all 3 exporters there instead of each scraping its own
+      # member, collapsing the entire point of running one per member with no error anywhere.
+      MONGODB_URI: "mongodb://mongo1:27017/?directConnection=true"
+    # diagnosticdata/replicasetstatus need the replica set actually initiated (mongo-init below) -
+    # without them the exporter only exposes generic process-level metrics, missing the replication
+    # lag / member-state data that's the whole point of running one of these per member.
+    command: ["--collector.diagnosticdata", "--collector.replicasetstatus"]
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+
+  mongo-exporter-2:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: percona/mongodb_exporter:0.53
+    environment:
+      MONGODB_URI: "mongodb://mongo2:27017/?directConnection=true"
+    command: ["--collector.diagnosticdata", "--collector.replicasetstatus"]
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+
+  mongo-exporter-3:
+    logging: *default-logging
+    profiles: ["observability"]
+    image: percona/mongodb_exporter:0.53
+    environment:
+      MONGODB_URI: "mongodb://mongo3:27017/?directConnection=true"
+    command: ["--collector.diagnosticdata", "--collector.replicasetstatus"]
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
 
   auth-api:
     logging: *default-logging
@@ -807,6 +993,7 @@ volumes:
   redis-sentinel-3-data:
   redis-master-state:
   redisinsight-data:
+  grafana-data:
   control-api-data:
   link-api-data:
   redirect-api-data:

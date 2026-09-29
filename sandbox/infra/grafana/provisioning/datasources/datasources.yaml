@@ -1,0 +1,25 @@
+# Auto-provisioned on Grafana startup (see docker-compose.yml's grafana volume mount) - opens with
+# all three wired up already, no manual "Add data source" click-through. `uid` is pinned explicitly
+# on each (Grafana auto-generates one otherwise) so the provisioned dashboards under ../dashboards/
+# can hardcode a stable datasource reference instead of one that could change on a fresh provision.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100

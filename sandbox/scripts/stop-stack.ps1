@@ -22,12 +22,16 @@ $sandboxRoot = Split-Path -Parent $PSScriptRoot
 
 Push-Location $sandboxRoot
 try {
+    # Always activates the observability profile on `down`, regardless of which -Observability mode
+    # start-stack.ps1 was run with - a profile the run never started just has nothing to stop, but
+    # without this a Full run's prometheus/jaeger/loki/grafana containers would be left as orphans
+    # (profiles gate `down` the same way they gate `up`).
     if ($Wipe) {
         Write-Host "==> Stopping backend and removing volumes (Postgres data will be wiped)" -ForegroundColor Yellow
-        docker compose down -v
+        docker compose --profile observability down -v
     } else {
         Write-Host "==> Stopping backend (Postgres data kept)" -ForegroundColor Cyan
-        docker compose down
+        docker compose --profile observability down
     }
 } finally {
     Pop-Location

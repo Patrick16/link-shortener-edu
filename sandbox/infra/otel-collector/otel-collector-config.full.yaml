@@ -1,0 +1,54 @@
+# "Full" observability variant, selected via OTEL_COLLECTOR_CONFIG=otel-collector-config.full.yaml
+# (see docker-compose.yml's otel-collector volume mount and start-stack.ps1's -Observability switch).
+# Deliberately does NOT export to aspire-dashboard: the whole point of this variant is to route
+# load-test-volume telemetry to a stack built for it instead of the in-memory dashboard that chokes
+# under that volume - fanning into both at once would keep feeding the exact bottleneck this exists
+# to route around. control-api's trace ingestion is untouched either way (see
+# otel-collector-config.yaml's header) - it's a cheap, one-way JSON hop unrelated to aspire-dashboard's
+# own slowness, and BottleneckAdvisor shouldn't lose data just because this variant is active.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+
+exporters:
+  # Pull-based: Prometheus scrapes this port itself (see infra/prometheus/prometheus.yml) rather
+  # than the collector pushing to it - the standard collector<->Prometheus integration pattern.
+  prometheus:
+    endpoint: 0.0.0.0:8889
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    # Loki's native OTLP logs endpoint is /otlp/v1/logs - the plain `endpoint` field has the
+    # exporter append its own "/v1/logs" suffix, so the base here is "/otlp", same reasoning as
+    # otel-collector-config.yaml's traces_endpoint comment on the control-api exporter.
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
+  otlphttp/controlapi:
+    traces_endpoint: http://control-api:8080/api/traces/ingest
+    encoding: json
+    compression: none
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger, otlphttp/controlapi]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]

@@ -13,20 +13,38 @@
 .PARAMETER NoBrowser
     Don't automatically open a browser tab once the frontend dev servers are up.
 
+.PARAMETER Observability
+    Which telemetry stack to route traces/metrics/logs to: 'Aspire' (default - the lightweight
+    Aspire Dashboard, fine for everyday dev) or 'Full' (Prometheus + Jaeger + Loki + Grafana - use
+    for load-test runs, since Aspire Dashboard's in-memory store chokes under that volume). Skips
+    the interactive prompt below when passed.
+
 .EXAMPLE
     .\scripts\start-stack.ps1
 .EXAMPLE
     .\scripts\start-stack.ps1 -Build
 .EXAMPLE
     .\scripts\start-stack.ps1 -SkipFrontend
+.EXAMPLE
+    .\scripts\start-stack.ps1 -Observability Full
 #>
 
 [CmdletBinding()]
 param(
     [switch]$Build,
     [switch]$SkipFrontend,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [ValidateSet('Aspire', 'Full')]
+    [string]$Observability
 )
+
+if (-not $Observability) {
+    Write-Host "`nWhich observability stack should this run use?" -ForegroundColor Cyan
+    Write-Host "  [1] Aspire Dashboard only (default - lightweight, fine for everyday dev)"
+    Write-Host "  [2] Full: Prometheus + Jaeger + Loki + Grafana (for load-test runs - Aspire Dashboard chokes on that volume)"
+    $choice = Read-Host 'Choice (1/2, Enter = 1)'
+    $Observability = if ($choice -eq '2') { 'Full' } else { 'Aspire' }
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -153,8 +171,26 @@ try {
         }
     }
 
-    Write-Step 'Starting backend (postgres + 2 replicas, redis sentinel cluster, mongo replica set, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service)'
-    docker compose up -d
+    if ($Observability -eq 'Full') {
+        $env:OTEL_COLLECTOR_CONFIG = 'otel-collector-config.full.yaml'
+        Write-Step 'Starting backend (postgres + 2 replicas, redis sentinel cluster, mongo replica set, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service, prometheus, jaeger, loki, grafana)'
+        docker compose --profile observability up -d
+    } else {
+        # $env: assignments land on this whole PowerShell process, not just this script run - without
+        # an explicit reset here, a prior `-Observability Full` invocation *in the same window* would
+        # leave OTEL_COLLECTOR_CONFIG pointing at the Full config forever, silently starving
+        # aspire-dashboard even though this branch's own plain `docker compose up -d` below never
+        # asked for that.
+        Remove-Item Env:\OTEL_COLLECTOR_CONFIG -ErrorAction SilentlyContinue
+        # Compose profiles gate `up` the same way they gate `down` (see stop-stack.ps1's comment) -
+        # a plain `docker compose up -d` here neither starts nor stops prometheus/jaeger/loki/grafana,
+        # so a previous Full run's containers (started in an earlier window, or before this session
+        # even began) would otherwise keep running unnoticed. Stopping them by name works regardless
+        # of which profile started them.
+        docker compose stop prometheus jaeger loki grafana 2>$null
+        Write-Step 'Starting backend (postgres + 2 replicas, redis sentinel cluster, mongo replica set, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service)'
+        docker compose up -d
+    }
     if ($LASTEXITCODE -ne 0) {
         Write-Error 'docker compose up failed - see output above.'
     }
@@ -295,6 +331,14 @@ Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'
 Write-Host '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
 Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis-master", port 6379)'
 Write-Host '  Mongo Express:    http://localhost:8085'
-Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
+if ($Observability -eq 'Full') {
+    Write-Host '  Grafana:          http://localhost:3000  (Prometheus/Jaeger/Loki pre-wired)'
+    Write-Host '  Prometheus:       http://localhost:9090'
+    Write-Host '  Jaeger:           http://localhost:16686'
+    Write-Host '  Loki:             http://localhost:3100  (query via Grafana Explore, not a browsable UI)'
+    Write-Host '  Aspire Dashboard: http://localhost:18888  (up, but not receiving telemetry in Full mode)'
+} else {
+    Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
+}
 Write-Host "`nStop the backend with: .\stop-stack.ps1"
 Write-Host "Stop the frontends by closing their windows (or Ctrl+C in each)."
