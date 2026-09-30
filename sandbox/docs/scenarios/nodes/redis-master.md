@@ -36,6 +36,8 @@ with what was fetched.
   (logic-bug) — fixed
 - 🐛 [No de-duplication for concurrent cache misses](pitfall:cache-concurrent-miss-no-dedup)
   (best-practice) — fixed
+- 🐛 [Shared `Common` library pulled in the full Redis client just for one interface](pitfall:common-lib-full-redis-client-dependency)
+  (best-practice) — fixed
 
 ## Relatives
 

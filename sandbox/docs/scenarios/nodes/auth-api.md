@@ -45,6 +45,8 @@ services reference.
   (race-condition) — fixed
 - 🐛 [Email uniqueness and login were case-sensitive](pitfall:auth-email-case-sensitivity)
   (logic-bug) — fixed
+- 🐛 [Concurrent refresh-token rotations could fork the token family instead of detecting reuse](pitfall:auth-refresh-token-rotation-race)
+  (race-condition) — fixed
 
 ## Relatives
 

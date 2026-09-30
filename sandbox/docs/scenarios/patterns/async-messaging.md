@@ -51,6 +51,18 @@ different reasons — see [ShortenerService](node:shortener-service)).
   (cpu-leak) — fixed
 - 🐛 [The SQLite fallback retry loop could crash itself permanently](pitfall:rabbitmq-retry-worker-crash-loop)
   (logic-bug) — fixed
+- 🐛 [RabbitMQ health check leaked a channel when its own timeout won the race](pitfall:rabbitmq-healthcheck-loser-channel-leak)
+  (memory-leak) — fixed
+- 🐛 [A dead RabbitMQ connection was never detected once it had connected successfully once](pitfall:rabbitmq-client-stale-connection-reused-forever)
+  (logic-bug) — fixed
+- 🐛 [A permanently-failing message looped forever instead of ever giving up](pitfall:rabbitmq-consumer-poison-message-hot-loop)
+  (cpu-leak) — fixed
+- 🐛 [Scaling link-api/redirect-api made the SQLite fallback queue republish messages twice](pitfall:rabbitmq-fallback-store-shared-file-race)
+  (race-condition) — fixed
+- 🐛 [The publisher's channel pool could permanently shrink to zero on broker errors](pitfall:rabbitmq-publisher-channel-pool-slot-leaks)
+  (logic-bug) — fixed
+- 🐛 [Shutting down the publisher only disposed idle channels, not ones still in flight](pitfall:rabbitmq-publisher-dispose-misses-in-flight-channels)
+  (memory-leak) — fixed
 
 ## Relatives
 
