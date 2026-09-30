@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { AccessInfoModal } from './AccessInfoModal'
 import { ComponentCard } from './ComponentCard'
+import { LearnModal } from './LearnModal'
 import { ServiceControls } from './ServiceControls'
 import { Sparkline } from './Sparkline'
 import { renderCapabilityControls } from '../utils/controlRegistry'
 import { statusColor } from '../utils/statusColor'
 import { getQuickLinks } from '../utils/quickLink'
 import { getAccessInfo } from '../utils/accessInfo'
+import { getNodeDoc } from '../utils/docsRegistry'
 import type { ArchComponent } from '../types/architecture'
 import type { ManagedContainer, ResourceSample } from '../types/controlApi'
 
@@ -23,14 +25,17 @@ interface Props {
   // there's no live CPU/RAM/TCP reading to pin in that case.
   pinned?: boolean
   onTogglePin?: () => void
+  onSelectNode?: (id: string) => void
 }
 
-export function NodePanel({ component, serviceId, instances, resourceHistoryByContainer, onClose, pinned, onTogglePin }: Props) {
+export function NodePanel({ component, serviceId, instances, resourceHistoryByContainer, onClose, pinned, onTogglePin, onSelectNode }: Props) {
   const primary = instances[0]
   const hasCharts = instances.some((instance) => (resourceHistoryByContainer[instance.containerId]?.length ?? 0) > 0)
   const quickLinks = getQuickLinks(component)
   const accessInfo = getAccessInfo(component)
+  const hasLearnDoc = getNodeDoc(component.id) !== undefined
   const [showAccessInfo, setShowAccessInfo] = useState(false)
+  const [showLearn, setShowLearn] = useState(false)
 
   return (
     <div className="side-panel">
@@ -43,7 +48,7 @@ export function NodePanel({ component, serviceId, instances, resourceHistoryByCo
         </button>
       </div>
 
-      {(quickLinks.length > 0 || accessInfo) && (
+      {(quickLinks.length > 0 || accessInfo || hasLearnDoc) && (
         <div className="node-panel-link-row">
           {quickLinks.map((link) => (
             <a key={link.url} className="node-panel-quick-link" href={link.url} target="_blank" rel="noreferrer">
@@ -55,11 +60,25 @@ export function NodePanel({ component, serviceId, instances, resourceHistoryByCo
               🔑 Access info
             </button>
           )}
+          {hasLearnDoc && (
+            <button className="node-panel-quick-link node-panel-access-btn" onClick={() => setShowLearn(true)}>
+              📚 Learn
+            </button>
+          )}
         </div>
       )}
 
       {showAccessInfo && accessInfo && (
         <AccessInfoModal title={component.name} info={accessInfo} onClose={() => setShowAccessInfo(false)} />
+      )}
+
+      {showLearn && (
+        <LearnModal
+          title={component.name}
+          nodeId={component.id}
+          onClose={() => setShowLearn(false)}
+          onSelectNode={onSelectNode ?? (() => {})}
+        />
       )}
 
       {serviceId && onTogglePin && (

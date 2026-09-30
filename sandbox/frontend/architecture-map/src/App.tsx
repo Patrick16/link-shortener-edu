@@ -100,6 +100,7 @@ function App() {
                   onClose={() => setSelection(null)}
                   pinned={pins.isPinned(selectedComponent.id)}
                   onTogglePin={() => pins.togglePin(selectedComponent.id)}
+                  onSelectNode={(id) => setSelection({ kind: 'component', id })}
                 />
               )}
               {selectedComponent && selectedComponent.id !== 'k6' && !selectedServiceId && (
@@ -109,6 +110,7 @@ function App() {
                   instances={[]}
                   resourceHistoryByContainer={{}}
                   onClose={() => setSelection(null)}
+                  onSelectNode={(id) => setSelection({ kind: 'component', id })}
                 />
               )}
               {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}

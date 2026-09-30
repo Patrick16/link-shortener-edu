@@ -733,6 +733,132 @@ button:disabled {
   color: var(--text);
 }
 
+/* Learn modal (node/pattern docs, see .notes/documentation-plan.md) - same overlay/box pattern as
+   the access-modal above, just wider and scrollable for markdown content (headings, diffs). */
+
+.learn-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+
+.learn-modal {
+  width: 100%;
+  max-width: 720px;
+  max-height: 85vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.learn-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+}
+
+.learn-modal-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  margin: 0;
+  color: var(--text-h);
+}
+
+.learn-modal-header > button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.learn-modal-back {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.learn-modal-back:hover {
+  color: var(--text-h);
+}
+
+.learn-modal-body {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.learn-modal-body h1 {
+  font-size: 18px;
+  color: var(--text-h);
+  margin: 0 0 10px;
+}
+
+.learn-modal-body h2 {
+  font-size: 14px;
+  color: var(--text-h);
+  margin: 14px 0 4px;
+}
+
+.learn-modal-body h1:first-child,
+.learn-modal-body h2:first-child {
+  margin-top: 0;
+}
+
+.learn-modal-body h3 {
+  font-size: 13px;
+  color: var(--text-h);
+  margin: 10px 0 4px;
+}
+
+.learn-modal-body p,
+.learn-modal-body ul,
+.learn-modal-body ol {
+  margin: 4px 0;
+}
+
+.learn-modal-body code {
+  background: var(--code-bg);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+.learn-modal-body pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.learn-modal-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.learn-modal-body a {
+  color: var(--text-h);
+}
+
 /* Sparkline */
 
 .sparkline {

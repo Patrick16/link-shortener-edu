@@ -43,7 +43,7 @@ schemas) — closer to real microservice isolation, and it's the model `pgcat` p
 - **Partitioning** of Clicks/ClicksMeta by time — scenario 2+
 - **Message bus** RabbitMQ between APIs and workers (LinkApi → ShortenerService, RedirectApi → TrafficService — both live)
 - **pgcat/pgbouncer** — connection pooling to each Postgres shard — scenario 4
-- **nginx** — load balancer in front of the API services — cross-cutting, not built yet
+- **nginx** — load balancer in front of the API services — cross-cutting, done
 
 ---
 
@@ -95,9 +95,17 @@ Short version of what's real today:
   and `TrafficService` carry a minimal Kestrel listener for these two routes only — they have no
   other HTTP surface. `docker-compose.yml`'s `healthcheck:` blocks poll `/health/live`; `nginx`
   waits on `link-api`/`redirect-api` being `service_healthy` before starting.
+- **Scenario 3 (Postgres replicas / read scaling) is substantially built** — PgCat routes reads
+  across the primary + 2 Postgres replicas (`query_parser_read_write_splitting`), Redis runs
+  master + 2 replicas + 3 Sentinels with real automatic failover, Mongo runs a 3-node replica set.
+  Not written up here yet in the same level of detail as scenarios 1-2 above — the day-by-day
+  build notes (including two real bugs found getting failover to actually work) live in
+  `.notes/PLAN.md` under "Scenario 3" until `scenarios/03-replicas.md` exists (tracked, not done —
+  see the TODO below).
 
 ## TODO
 
-`infra/pgcat/`, `infra/postgres/shard1/`, `infra/postgres/shard2/` stay empty placeholders until
-scenario 4 (sharding). `infra/nginx/nginx.conf` stays empty until the load-balancer cross-cutting
-task is picked up.
+`infra/postgres/shard1/`, `infra/postgres/shard2/` stay empty placeholders until scenario 4
+(sharding). `docs/scenarios/03-replicas.md` doesn't exist yet — this file's Current Status section
+above is the only write-up of scenario 3 so far, and it's a summary, not the detailed
+walkthrough/try-it-yourself the other scenario docs have.

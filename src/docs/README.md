@@ -18,6 +18,8 @@ scenario walkthroughs, and the target system architecture, see `sandbox/docs/` i
 - `Shared/Common` — cross-service utilities (e.g. `LinkCacheService`, since LinkApi and RedirectApi
   must agree on the same Redis key format)
 - `Shared/ServiceDefaults` — OpenTelemetry wiring shared by every service
+- `Shared/WebDefaults` — shared web-host setup, used by the HTTP-facing services (and by
+  `control-api`'s tests, outside this solution)
 - `tests/` — one test project per service under test, plus `Integration.Tests`
 
 **Rule:** each database has exactly one owning service that runs migrations against it (see
