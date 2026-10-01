@@ -38,6 +38,8 @@ with what was fetched.
   (best-practice) — fixed
 - 🐛 [Shared `Common` library pulled in the full Redis client just for one interface](pitfall:common-lib-full-redis-client-dependency)
   (best-practice) — fixed
+- 🐛 [redis-master accepted writes with no fencing against a split brain](pitfall:redis-master-no-split-brain-fencing)
+  (logic-bug) — fixed
 
 ## Relatives
 
@@ -45,7 +47,9 @@ with what was fetched.
 
 - [LinkApi](node:link-api) — writes/reads through the same `link:{hash}` key
 - [RedirectApi](node:redirect-api) — writes/reads through the same `link:{hash}` key
+- [Redis Sentinel 1](node:redis-sentinel-1) — monitors this node, promotes a replica if it dies
 
 ### Patterns
 
 - [Caching](pattern:caching)
+- [High availability & failover](pattern:high-availability-failover)
