@@ -15,11 +15,14 @@ namespace Infrastructure;
 //
 // Trade-off, by design: this only protects against "RabbitMQ is slow", not "the process is killed
 // before this event is sent" - an in-memory queue can't survive a hard process kill. A graceful
-// shutdown (SIGTERM, docker-compose stop) drains whatever is queued before the host stops (see
-// LocalPublishQueueWorker.StopAsync); only a hard crash between enqueue and drain can still lose an
-// item, the same risk every in-memory buffer carries. RabbitMQ actually being unreachable is still
-// covered end-to-end by IMessagePublisher's own SQLite fallback + RabbitMqRetryWorker, exactly as
-// before this queue existed - this queue only ever changes *when* that call happens, never *how* it
+// shutdown (SIGTERM, docker-compose stop) drains whatever is queued before the host stops, up to the
+// host's own shutdown timeout (see LocalPublishQueueWorker.StopAsync) - a hard process kill is the
+// main way an item can go missing, but if draining itself gets stuck past that budget (RabbitMQ
+// genuinely wedged, not just slow), LocalPublishQueueWorker force-stops and abandons whatever is
+// still queued at that point too, logging how many so the loss is visible instead of silent.
+// RabbitMQ actually being unreachable (rather than wedged) is still covered end-to-end by
+// IMessagePublisher's own SQLite fallback + RabbitMqRetryWorker, exactly as before this queue
+// existed - this queue only ever changes *when* that call happens, never *how* it
 // handles failure.
 public interface ILocalPublishQueue
 {

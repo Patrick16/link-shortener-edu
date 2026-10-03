@@ -60,22 +60,48 @@ public sealed class LocalPublishQueueWorker(
 
     private async Task ProcessAsync(CancellationToken cancellationToken)
     {
-        await foreach (var job in queue.Reader.ReadAllAsync(cancellationToken))
+        try
         {
-            try
+            await foreach (var job in queue.Reader.ReadAllAsync(cancellationToken))
             {
-                // The trace context captured at enqueue time (see LocalPublishQueue.EnqueueAsync) is
-                // already baked into this closure as an explicit parentContext argument - it rides
-                // along regardless of whatever Activity.Current happens to be ambient on this loop.
-                await job.Publish(publisher, cancellationToken);
+                try
+                {
+                    // The trace context captured at enqueue time (see LocalPublishQueue.EnqueueAsync)
+                    // is already baked into this closure as an explicit parentContext argument - it
+                    // rides along regardless of whatever Activity.Current happens to be ambient here.
+                    await job.Publish(publisher, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // PublishAsync already falls back to SQLite internally on its own failures (broker
+                    // unreachable) and swallows those - reaching here means something unexpected
+                    // escaped that (e.g. the fallback store itself faulted). Must not crash this loop,
+                    // or the queue stops draining entirely for every event still waiting behind this one.
+                    logger.LogError(ex, "Local publish queue worker failed to process a queued publish");
+                }
             }
-            catch (Exception ex)
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // StopAsync's drain budget elapsed and force-cancelled this loop (see _forceStopCts) -
+            // whatever this worker never got to dequeue never reached PublishAsync at all, so it never
+            // got the SQLite-fallback safety net either; it would otherwise vanish with nothing but a
+            // generic shutdown warning to show for it. TryRead (non-blocking, no further waiting -
+            // RabbitMQ being stuck may be the reason this was force-cancelled in the first place) at
+            // least turns a silent loss into a counted, logged one. With WorkerCount workers racing
+            // the same drain concurrently, more than one can log its own partial count here - they
+            // still sum to the real total lost.
+            var abandoned = 0;
+            while (queue.Reader.TryRead(out _))
             {
-                // PublishAsync already falls back to SQLite internally on its own failures (broker
-                // unreachable) and swallows those - reaching here means something unexpected escaped
-                // that (e.g. the fallback store itself faulted). Must not crash this loop, or the
-                // queue stops draining entirely for every event still waiting behind this one.
-                logger.LogError(ex, "Local publish queue worker failed to process a queued publish");
+                abandoned++;
+            }
+
+            if (abandoned > 0)
+            {
+                logger.LogWarning(
+                    "Local publish queue worker force-stopped before finishing its drain - {Abandoned} queued event(s) were discarded unpublished",
+                    abandoned);
             }
         }
     }

@@ -66,6 +66,28 @@ public class RabbitMqPublisherTests
     }
 
     [Fact]
+    public async Task PublishAsync_CallerTokenAlreadyCancelled_StillSavesToFallbackStore()
+    {
+        // feature-review F1 on the LocalPublishQueueWorker fix: a forced shutdown
+        // (LocalPublishQueueWorker.StopAsync's drain budget elapsing) passes an already-cancelled
+        // token into a still-in-flight PublishAsync call. TryPublishAsync's own catch already treats
+        // that the same as any other publish failure and routes it to the fallback save below - but
+        // reusing the same cancelled token for that save would make it throw immediately too,
+        // silently losing the event instead of persisting it as the fallback is meant to.
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var connection = new Mock<IRabbitMqConnection>();
+        var fallbackStore = new Mock<IMessageFallbackStore>();
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+
+        await sut.PublishAsync(new { Value = "hi" }, "some.topic", cts.Token);
+
+        fallbackStore.Verify(
+            x => x.SaveAsync(It.Is<FallbackMessage>(m => m.Topic == "some.topic"), CancellationToken.None),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task PublishAsync_Failure_LogsWarningWithMessageIdAndTopic()
     {
         // F2: a publish failure used to be visible only as an OTel span status, never in plain

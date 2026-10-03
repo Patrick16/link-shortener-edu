@@ -48,9 +48,16 @@ public sealed class RabbitMqPublisher(
         var published = await TryPublishAsync(messageId, topic, payload, cancellationToken, parentContext);
         if (!published)
         {
+            // Deliberately CancellationToken.None, not the token above: TryPublishAsync's own catch
+            // treats that token firing (e.g. LocalPublishQueueWorker force-stopping a stuck worker
+            // past the shutdown drain budget) as just another publish failure and already routed it
+            // here - reusing an already-cancelled token for this save would make it throw immediately
+            // too, silently losing the event instead of persisting it. This save is the actual safety
+            // net for exactly the case a cancelled publish represents, so it needs its own chance to
+            // run regardless of why the live attempt was aborted.
             await _fallbackStore.SaveAsync(
                 new FallbackMessage(messageId, topic, payload, DateTime.UtcNow),
-                cancellationToken);
+                CancellationToken.None);
         }
     }
 
