@@ -13,13 +13,13 @@ namespace RedirectApi.Controllers;
 public class RedirectController(
     DatabaseContext context,
     IEntityCacheService<Link> cache,
-    IMessagePublisher publisher,
+    ILocalPublishQueue publishQueue,
     IClickCounterService clickCounter,
     ILogger<RedirectController> logger) : Controller
 {
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _cache = cache;
-    private readonly IMessagePublisher _publisher = publisher;
+    private readonly ILocalPublishQueue _publishQueue = publishQueue;
     private readonly IClickCounterService _clickCounter = clickCounter;
     private readonly ILogger<RedirectController> _logger = logger;
 
@@ -56,14 +56,17 @@ public class RedirectController(
             IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString(),
         };
 
-        // Same pattern as LinkApi: published (or SQLite-fallback-queued) before responding, so a
-        // click is never silently dropped just because the redirect finished first.
-        await _publisher.PublishAsync(clickEvent, Topics.ClickTracked, cancellationToken);
+        // Enqueued, not awaited-to-completion - LocalPublishQueueWorker does the actual
+        // IMessagePublisher.PublishAsync call (RabbitMQ, or its SQLite fallback) off this request's
+        // critical path, so a slow or reconnecting RabbitMQ connection never delays the redirect
+        // itself (see sandbox/docs/pgcat-pool-sizing.md, Symptom 7, for the 57.7s outlier this used
+        // to cause when the publish was awaited here directly).
+        await _publishQueue.EnqueueAsync(clickEvent, Topics.ClickTracked, cancellationToken);
 
         // Debug, not Information - this is the hottest path in the whole system under a load test
         // (every single click). Flip RedirectApi to Debug locally to watch redirect -> publish ->
         // TrafficService/ShortenerService-consume step by step.
-        _logger.LogDebug("Redirecting {Hash} -> {OriginalLink}, click {ClickId} published", hash, link.OriginalLink, clickEvent.Id);
+        _logger.LogDebug("Redirecting {Hash} -> {OriginalLink}, click {ClickId} queued for publish", hash, link.OriginalLink, clickEvent.Id);
 
         // 302 — a short link's target can change (or the link could be deleted), so this must
         // never be cached as permanent by the browser.

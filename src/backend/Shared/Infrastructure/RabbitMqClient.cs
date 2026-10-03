@@ -5,6 +5,11 @@ namespace Infrastructure;
 public interface IRabbitMqConnection
 {
     Task<IChannel> CreateChannelAsync(CancellationToken cancellationToken = default);
+
+    // True only once a connection attempt has already succeeded and the broker hasn't since closed
+    // it - the same definition of "good" IsUsable uses below. Never tries to (re)connect by itself;
+    // a caller that needs a live connection established still has to call CreateChannelAsync.
+    bool IsOpen { get; }
 }
 
 // Connection wrapper around RabbitMQ, used by all services.
@@ -25,6 +30,12 @@ public sealed class RabbitMqClient(string connectionString) : IRabbitMqConnectio
         var connection = await GetConnectionAsync(cancellationToken).ConfigureAwait(false);
         return await connection.CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
     }
+
+    // Reads the cached connection task without the gate: a stale read (a reconnect starting or
+    // finishing concurrently) only means a caller occasionally takes the slow CreateChannelAsync path
+    // instead of this fast one, same as any benign race on a cached value - never a correctness issue,
+    // since GetConnectionAsync re-checks IsUsable itself under the gate regardless of what this returns.
+    public bool IsOpen => _connection is { IsCompletedSuccessfully: true } task && task.Result.IsOpen;
 
     private async Task<IConnection> GetConnectionAsync(CancellationToken cancellationToken)
     {

@@ -18,7 +18,7 @@ namespace LinkApi.Controllers;
 public class LinksController(
     DatabaseContext context,
     IEntityCacheService<Link> service,
-    IMessagePublisher publisher,
+    ILocalPublishQueue publishQueue,
     IHashGenerator hashGenerator,
     ILogger<LinksController> logger) : Controller
 {
@@ -26,7 +26,7 @@ public class LinksController(
 
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _service = service;
-    private readonly IMessagePublisher _publisher = publisher;
+    private readonly ILocalPublishQueue _publishQueue = publishQueue;
     private readonly IHashGenerator _hashGenerator = hashGenerator;
     private readonly ILogger<LinksController> _logger = logger;
 
@@ -55,12 +55,15 @@ public class LinksController(
             UserId = userId
         };
 
-        await _publisher.PublishAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
+        // Enqueued, not awaited-to-completion - LocalPublishQueueWorker does the actual
+        // IMessagePublisher.PublishAsync call off this request's critical path, so a slow or
+        // reconnecting RabbitMQ connection never shows up as CreateLink latency.
+        await _publishQueue.EnqueueAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
 
         // Debug, not Information - this fires on every CreateLink call, including under a k6 load
         // test hammering this endpoint at hundreds of req/s. Flip LinkApi to Debug locally when you
         // want to watch the create -> publish -> ShortenerService-persists flow step by step.
-        _logger.LogDebug("Link {Hash} created for {OriginalLink}, published to {Topic}", hash, request.OriginalLink, Topics.LinkCreated);
+        _logger.LogDebug("Link {Hash} created for {OriginalLink}, queued for publish to {Topic}", hash, request.OriginalLink, Topics.LinkCreated);
 
         return new LinkResponse(hash, createdAt);
     }

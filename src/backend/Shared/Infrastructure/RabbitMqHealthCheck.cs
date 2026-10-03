@@ -16,6 +16,20 @@ public sealed class RabbitMqHealthCheck(IRabbitMqConnection connection) : IHealt
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
+        // Fast path: skip opening (and immediately disposing) a brand-new channel when the shared
+        // connection is already known to be open. Without this, every single probe paid the full
+        // CreateChannelAsync round trip - under a connection-establishment burst elsewhere on the same
+        // shared connection (see the comment below), that round trip consistently lands on this
+        // method's own 3s Timeout instead of actually completing fast: a live run showed
+        // /health/ready's p95 tracking this Timeout almost exactly (~3000ms) under load, for a
+        // connection that was otherwise healthy. IsOpen is the same signal RabbitMqClient.IsUsable
+        // already trusts to tell "still good" apart from "was good, now dead", so reusing it here
+        // doesn't weaken what this check actually verifies.
+        if (connection.IsOpen)
+        {
+            return HealthCheckResult.Healthy();
+        }
+
         try
         {
             // Confirmed live (200-VU run, RabbitMQ under a connection-establishment burst):

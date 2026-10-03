@@ -28,15 +28,15 @@ public class LinksControllerTests
     private static LinksController NewController(
         DatabaseContext context,
         out Mock<IEntityCacheService<Link>> cache,
-        out Mock<IMessagePublisher> publisher,
+        out Mock<ILocalPublishQueue> publishQueue,
         out Mock<IHashGenerator> hashGenerator,
         ClaimsPrincipal? user = null)
     {
         cache = new Mock<IEntityCacheService<Link>>();
-        publisher = new Mock<IMessagePublisher>();
+        publishQueue = new Mock<ILocalPublishQueue>();
         hashGenerator = new Mock<IHashGenerator>();
 
-        var controller = new LinksController(context, cache.Object, publisher.Object, hashGenerator.Object, NullLogger<LinksController>.Instance)
+        var controller = new LinksController(context, cache.Object, publishQueue.Object, hashGenerator.Object, NullLogger<LinksController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -50,7 +50,7 @@ public class LinksControllerTests
     public async Task CreateLink_AnonymousCaller_PublishesEventWithNullUserId()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var publisher, out var hashGenerator);
+        var sut = NewController(context, out _, out var publishQueue, out var hashGenerator);
         hashGenerator.Setup(x => x.Generate("https://example.com")).Returns("abc12345");
 
         var result = await sut.CreateLink(
@@ -59,8 +59,8 @@ public class LinksControllerTests
 
         var response = Assert.IsType<LinkResponse>(result.Value);
         Assert.Equal("abc12345", response.ShortenLink);
-        publisher.Verify(
-            x => x.PublishAsync(
+        publishQueue.Verify(
+            x => x.EnqueueAsync(
                 It.Is<LinkCreatedEvent>(e => e.Hash == "abc12345" && e.OriginalLink == "https://example.com" && e.UserId == null),
                 Topics.LinkCreated,
                 It.IsAny<CancellationToken>()),
@@ -73,13 +73,13 @@ public class LinksControllerTests
         var userId = Guid.NewGuid();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var publisher, out var hashGenerator, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out var publishQueue, out var hashGenerator, new ClaimsPrincipal(identity));
         hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
 
         await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
 
-        publisher.Verify(
-            x => x.PublishAsync(It.Is<LinkCreatedEvent>(e => e.UserId == userId), Topics.LinkCreated, It.IsAny<CancellationToken>()),
+        publishQueue.Verify(
+            x => x.EnqueueAsync(It.Is<LinkCreatedEvent>(e => e.UserId == userId), Topics.LinkCreated, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 

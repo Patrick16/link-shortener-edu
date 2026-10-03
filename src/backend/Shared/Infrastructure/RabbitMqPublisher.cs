@@ -37,7 +37,7 @@ public sealed class RabbitMqPublisher(
     private readonly Lock _disposeLock = new();
     private bool _disposed;
 
-    public async Task PublishAsync<TMessage>(TMessage message, string topic, CancellationToken cancellationToken)
+    public async Task PublishAsync<TMessage>(TMessage message, string topic, CancellationToken cancellationToken, ActivityContext? parentContext = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(topic);
         ArgumentNullException.ThrowIfNull(message);
@@ -45,7 +45,7 @@ public sealed class RabbitMqPublisher(
         var messageId = Guid.NewGuid().ToString();
         var payload = JsonSerializer.Serialize(message);
 
-        var published = await TryPublishAsync(messageId, topic, payload, cancellationToken);
+        var published = await TryPublishAsync(messageId, topic, payload, cancellationToken, parentContext);
         if (!published)
         {
             await _fallbackStore.SaveAsync(
@@ -55,11 +55,21 @@ public sealed class RabbitMqPublisher(
     }
 
     public Task<bool> TryRepublishAsync(FallbackMessage message, CancellationToken cancellationToken) =>
-        TryPublishAsync(message.MessageId, message.Topic, message.Payload, cancellationToken);
+        TryPublishAsync(message.MessageId, message.Topic, message.Payload, cancellationToken, parentContext: null);
 
-    private async Task<bool> TryPublishAsync(string messageId, string topic, string payload, CancellationToken cancellationToken)
+    private async Task<bool> TryPublishAsync(
+        string messageId,
+        string topic,
+        string payload,
+        CancellationToken cancellationToken,
+        ActivityContext? parentContext)
     {
-        using var activity = MessagingActivitySource.Instance.StartActivity($"{topic} publish", ActivityKind.Producer);
+        // An explicit parentContext (see IMessagePublisher.PublishAsync) wins over whatever
+        // Activity.Current happens to be ambient right now - set when this runs on
+        // LocalPublishQueueWorker's loop, where Current is no longer the original caller's.
+        using var activity = parentContext is { } context
+            ? MessagingActivitySource.Instance.StartActivity($"{topic} publish", ActivityKind.Producer, context)
+            : MessagingActivitySource.Instance.StartActivity($"{topic} publish", ActivityKind.Producer);
         activity?.SetTag("messaging.system", "rabbitmq");
         activity?.SetTag("messaging.destination.name", MessagingConstants.EventsExchange);
         activity?.SetTag("messaging.rabbitmq.routing_key", topic);
