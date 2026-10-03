@@ -55,6 +55,18 @@ public sealed class LocalPublishQueueWorker(
             // still waiting on a slow channel pool slot) so the process can actually exit instead of
             // the host's own hard-kill timeout doing it anyway with no chance to log first.
             await _forceStopCts.CancelAsync();
+
+            // Taken right after the cancel above, with no further dequeues possible in between (every
+            // worker's ReadAllAsync observes _forceStopCts and stops pulling from the channel) - an
+            // accurate count of whatever never made it to PublishAsync, logged once here instead of
+            // racing all WorkerCount workers to drain-and-log their own partial share of it.
+            var abandoned = queue.Reader.Count;
+            if (abandoned > 0)
+            {
+                logger.LogWarning(
+                    "Local publish queue force-stopped before finishing its drain - {Abandoned} queued event(s) were discarded unpublished",
+                    abandoned);
+            }
         }
     }
 
@@ -85,24 +97,9 @@ public sealed class LocalPublishQueueWorker(
         {
             // StopAsync's drain budget elapsed and force-cancelled this loop (see _forceStopCts) -
             // whatever this worker never got to dequeue never reached PublishAsync at all, so it never
-            // got the SQLite-fallback safety net either; it would otherwise vanish with nothing but a
-            // generic shutdown warning to show for it. TryRead (non-blocking, no further waiting -
-            // RabbitMQ being stuck may be the reason this was force-cancelled in the first place) at
-            // least turns a silent loss into a counted, logged one. With WorkerCount workers racing
-            // the same drain concurrently, more than one can log its own partial count here - they
-            // still sum to the real total lost.
-            var abandoned = 0;
-            while (queue.Reader.TryRead(out _))
-            {
-                abandoned++;
-            }
-
-            if (abandoned > 0)
-            {
-                logger.LogWarning(
-                    "Local publish queue worker force-stopped before finishing its drain - {Abandoned} queued event(s) were discarded unpublished",
-                    abandoned);
-            }
+            // got the SQLite-fallback safety net either. Nothing left to do here: StopAsync logs the
+            // total abandoned count itself (via queue.Reader.Count) once every worker has exited this
+            // way, instead of each worker draining and logging its own partial share.
         }
     }
 }
