@@ -337,6 +337,30 @@ export interface BottleneckVerdict {
   checklist: ChecklistStep[]
 }
 
+// The "desired config" half of RunSnapshot, named on its own so a Preset can reference it without
+// dragging in the run-result fields below (request/report/connections/trace/verdict) that don't
+// apply to "reconfigure the stand to this." RunSnapshot already satisfies this shape structurally
+// (same field names), so applyInfraConfig/diffInfraConfig in utils/infraConfig.ts work on either.
+export interface InfraConfigSnapshot {
+  infra: InfraStatus
+  replicas: ReplicaCount[]
+  pgcatPool?: PgcatPoolSettings | null
+  sentinel?: SentinelConfig | null
+  replicationLags?: ReplicationLagEntry[] | null
+  rabbitMqPrefetchCount?: number | null
+  mongoReadPreference?: MongoReadPreference | null
+  npgsqlPoolSize?: number | null
+}
+
+// A named, reloadable infra config - see Preset on the backend. scenarioName, if set, points at
+// one of the saved CustomScenario load profiles that makes sense to run once the stand is in this
+// shape (not auto-started on apply - just a shortcut into the k6 panel).
+export interface Preset {
+  name: string
+  config: InfraConfigSnapshot
+  scenarioName?: string | null
+}
+
 // Full detail for one past run - everything needed to answer "what configuration produced this
 // result", not just the report on its own. The experimental-controls fields are optional/nullable
 // since runs saved before they existed won't have them.

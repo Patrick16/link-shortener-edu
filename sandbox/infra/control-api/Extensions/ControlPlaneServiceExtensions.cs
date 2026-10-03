@@ -12,6 +12,7 @@ public static class ControlPlaneServiceExtensions
 
         services.AddSingleton<IDockerService, DockerService>();
         services.AddSingleton<IScenarioStore, ScenarioStore>();
+        services.AddSingleton<IPresetStore, PresetStore>();
         services.AddSingleton<IRunHistoryStore, RunHistoryStore>();
         services.AddSingleton<ResourceStatsStore>();
         services.AddSingleton<TraceStore>();

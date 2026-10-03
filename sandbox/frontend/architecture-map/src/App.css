@@ -2354,3 +2354,249 @@ button:disabled {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* Presets - global modal (reachable regardless of node selection, unlike every other control
+   here), opened from the header button. Overlay/header chrome mirrors .access-modal-*; the diff
+   table inside the "preview & apply" step reuses .compare-table/.compare-row-diff directly rather
+   than duplicating them. */
+
+.app-header-presets-btn {
+  flex-shrink: 0;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.app-header-presets-btn:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.presets-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+
+.presets-modal {
+  width: 100%;
+  max-width: 640px;
+  max-height: 85vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.presets-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.presets-modal-header h3 {
+  font-size: 16px;
+  margin: 0;
+  color: var(--text-h);
+}
+
+.presets-modal-header button {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.presets-modal-note {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+
+.presets-empty {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.presets-list-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.presets-list-header button {
+  align-self: flex-start;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.presets-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.presets-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.presets-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.presets-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.presets-row-scenario {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.presets-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.presets-row-actions button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.presets-row-actions button:hover {
+  border-color: var(--accent-border);
+}
+
+.presets-row-delete:hover {
+  border-color: #ef4444 !important;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.presets-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.presets-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.presets-form-row input,
+.presets-form-row select {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.presets-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.presets-form-actions button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.presets-form-actions button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+
+.presets-form-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.presets-preview-back {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  padding: 0;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.presets-preview-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.presets-apply-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.presets-apply-result button {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 6px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}

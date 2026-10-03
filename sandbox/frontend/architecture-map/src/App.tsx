@@ -13,10 +13,11 @@ import { ConnectionDetail } from './components/ConnectionDetail'
 import { K6ConfigPanel } from './components/K6ConfigPanel'
 import { TrafficResultPanel } from './components/TrafficResultPanel'
 import { RunHistoryPanel } from './components/RunHistoryPanel'
+import { PresetsModal } from './components/PresetsModal'
 import { resolveServiceId } from './utils/resolveServiceId'
 import { applySystemConfig, runRequestToScenario } from './utils/reuseRunConfig'
 import type { ArchitectureData } from './types/architecture'
-import type { RunSnapshot } from './types/controlApi'
+import type { CustomScenario, RunSnapshot } from './types/controlApi'
 
 const data = architectureData as unknown as ArchitectureData
 const metaById = new Map(data.components.map((c) => [c.id, c]))
@@ -41,6 +42,7 @@ function App() {
   const trafficConfig = useTrafficConfig()
   const pins = usePinnedMetrics()
   const [selection, setSelection] = useState<Selection>(null)
+  const [presetsOpen, setPresetsOpen] = useState(false)
   const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1, true)
 
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
@@ -65,6 +67,16 @@ function App() {
     sidebar.expand()
   }
 
+  // A preset's linked load profile is loaded (not auto-started) the same way a past run's
+  // sequence/ramp is - the infra side of a preset is already applied by PresetsModal itself by
+  // the time this fires, so there's no applySystemConfig call here, just the "jump to the k6
+  // panel with this loaded" half of reuseRun.
+  function loadScenarioFromPreset(scenario: CustomScenario) {
+    trafficConfig.loadScenario(scenario)
+    setSelection({ kind: 'component', id: 'k6' })
+    sidebar.expand()
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -74,8 +86,13 @@ function App() {
           {loading && <p>Loading containers...</p>}
           {error && <p className="service-card-error">{error}</p>}
         </div>
+        <button className="app-header-presets-btn" onClick={() => setPresetsOpen(true)}>
+          Presets
+        </button>
         <TrafficResultPanel {...trafficRun} fallbackTotalSeconds={trafficConfig.totalDuration} />
       </header>
+
+      {presetsOpen && <PresetsModal onClose={() => setPresetsOpen(false)} onLoadScenario={loadScenarioFromPreset} />}
 
       <div className="app-body">
         <aside className="app-sidebar-left" style={{ width: sidebar.width, padding: sidebar.collapsed ? 0 : undefined }}>

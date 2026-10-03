@@ -21,6 +21,7 @@ app.MapContainerEndpoints();
 app.MapInfraEndpoints();
 app.MapTrafficEndpoints();
 app.MapScenarioEndpoints();
+app.MapPresetEndpoints();
 app.MapRunHistoryEndpoints();
 app.MapTraceEndpoints();
 

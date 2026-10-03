@@ -13,6 +13,7 @@ import type {
   MongoReadPreferenceStatus,
   NpgsqlPoolSize,
   PostgresConnectionStats,
+  Preset,
   RabbitMqPrefetch,
   ReplicationLag,
   RunSnapshot,
@@ -97,6 +98,10 @@ export const controlApi = {
   listScenarios: () => request<CustomScenario[]>('/api/scenarios'),
   saveScenario: (scenario: CustomScenario) => request<CustomScenario>('/api/scenarios', 'POST', scenario),
   deleteScenario: (name: string) => send(`/api/scenarios/${encodeURIComponent(name)}`, 'DELETE'),
+
+  listPresets: () => request<Preset[]>('/api/presets'),
+  savePreset: (preset: Preset) => request<Preset>('/api/presets', 'POST', preset),
+  deletePreset: (name: string) => send(`/api/presets/${encodeURIComponent(name)}`, 'DELETE'),
 
   getPgcatConnections: () => request<PgcatConnectionStats>('/api/containers/pgcat/connections'),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
