@@ -208,6 +208,77 @@ that second registration — `LinkApi` only has `IDistributedCache`). Registered
 tail; not chased further given how rare it is and that this investigation was already three layers
 deep into "which shared connection is cold this time."
 
+## Symptom 9: `/health/ready`'s residual ~3s floor was the health check itself, not scheduling jitter
+
+Symptom 4 shipped `RabbitMqHealthCheck` bounded to a 3s `Task.WhenAny` race and chalked the
+post-fix numbers (`~3060ms`/`~3022ms` p95 in the Final verified numbers table below) up to "the
+3s the code now targets" plus "occasional scheduling jitter" for the `max` tail. That framing was
+wrong: a live run months later (same symptom, a fresh trace table) showed `/health/ready` p95
+landing within a few percent of exactly 3000ms on *every* run, not just under peak jitter — too
+consistent to be jitter. The real cause: the check opened (`connection.CreateChannelAsync`) and
+immediately disposed a brand-new AMQP channel on **every single probe**, Healthy or not. Once
+under any load that keeps `RabbitMqClient`'s shared connection busy enough that a fresh
+`CreateChannelAsync` call has to queue behind it even briefly, that round trip reliably lands on
+the check's own `Timeout` instead of completing in the low milliseconds a channel-open normally
+takes on an already-open connection — so the "3s target" wasn't a floor the check settled at under
+contention, it was the check paying its own worst case almost every time.
+
+**Fix:** added `IRabbitMqConnection.IsOpen` — a cheap property reading the already-cached
+connection's `IConnection.IsOpen` (the exact same signal `RabbitMqClient.IsUsable` already trusts
+to tell "still good" from "was good, now dead") with no network round trip at all. `RabbitMqHealthCheck`
+checks it first and returns `Healthy` immediately when true, only falling back to the
+`Task.WhenAny`-bounded `CreateChannelAsync` race from Symptom 4 when the connection isn't
+currently open (cold start before `RabbitMqWarmupService` finishes, or mid-reconnect after a
+broker restart).
+
+Separately, `LinkApi`'s `CreateLink` and `RedirectApi`'s `RedirectToOrigin` were awaiting
+`IMessagePublisher.PublishAsync` synchronously before responding (the code comment in
+`RedirectController` literally said *"Same pattern as LinkApi"* — accurate, just not the fix
+Symptom 7 implied it needed: the warmup service solved the one-time cold-start tax, but a
+request could still queue behind the *shared* connection any time RabbitMQ was genuinely busy or
+mid-reconnect, same root mechanism as Symptom 4, now hitting real traffic instead of a probe).
+Added [`LocalPublishQueue`](../../src/backend/Shared/Infrastructure/LocalPublishQueue.cs) — a
+bounded (4096-slot), backpressured in-memory channel — and
+[`LocalPublishQueueWorker`](../../src/backend/Shared/Infrastructure/LocalPublishQueueWorker.cs), a
+pool of 8 background workers that drain it and call the same `IMessagePublisher.PublishAsync`
+(RabbitMQ, falling back to the same SQLite store on failure — nothing about that path changed)
+off the request's critical path. `LocalPublishQueueWorker.StopAsync` completes the queue's writer
+and waits (bounded by the host's own shutdown timeout) for workers to drain whatever was already
+queued before the process actually exits, so a graceful shutdown doesn't silently drop in-flight
+events — only a hard kill between enqueue and drain still can, the same risk every in-memory
+buffer carries; RabbitMQ actually being down is still covered end-to-end by the unchanged SQLite
+fallback + `RabbitMqRetryWorker`.
+
+One subtlety this surfaced: `Activity.Current` can't be set back to an `Activity` that has
+already `Stop()`'d (the .NET runtime rejects it), and ASP.NET stops the request's `Activity` once
+the response finishes — well before a background worker gets around to the queued publish. Simply
+carrying the `Activity` object through the queue and restoring `Activity.Current` from a worker
+(the first version of this fix) silently lost the trace parent every time, because by the time a
+worker tried to restore it, it was already stopped. `IMessagePublisher.PublishAsync` gained an
+optional `ActivityContext? parentContext` parameter instead — a plain value, captured from
+`Activity.Current?.Context` at enqueue time, with none of the Activity lifecycle's restrictions —
+and `LocalPublishQueue` passes it through explicitly so `RabbitMqPublisher` can hand it to
+`StartActivity` as the publish span's parent regardless of how long it sat queued.
+`RabbitMqRetryWorker`'s own retries intentionally keep `parentContext: null`: a message that fell
+back to SQLite already lost its live trace context the moment it was persisted as a
+`FallbackMessage` (no trace fields on that record), so a retry minutes or hours later has no
+real parent to attach to anyway.
+
+**Verified:** 150 VUs, 60s, default replica counts (5× `redirect-api`, 5× `shortener-service`,
+1× `link-api`), `link-api.create` → `redirect-api.resolve`:
+
+| | before (Symptoms 1-8 fixed, this one not) | after |
+|---|---|---|
+| `link-api GET /health/ready` p95 / max | ~3052 ms / ~3211 ms | **~54 ms / ~54 ms** (13 samples) |
+| `redirect-api GET /health/ready` p95 / max | ~3206 ms / ~3801 ms | **~2.8 ms / ~12.5 ms** |
+| `redirect-api GET {hash}` p95 / max | ~134 ms / ~11764 ms | **~12 ms / ~662 ms** |
+
+"Before" is the exact trace table a live run produced on this stack prior to this fix (same
+shared connection, same `RabbitMqHealthCheck`/synchronous-publish code Symptom 4/7 left in place).
+Link-api's own `/health/ready` sample count is low (13, vs. redirect-api's 62) simply because it
+runs at 1 replica against redirect-api's 5 in this stack's current scaling — still two orders of
+magnitude off the pre-fix number. Zero warnings or errors logged by either service across the run.
+
 ## Final verified numbers (200 VUs, 20 `link-api` + 20 `redirect-api` replicas, 60s, `POST /Links`)
 
 | metric | original (all 4 problems present) | final (all fixes applied) |
@@ -222,6 +293,10 @@ deep into "which shared connection is cold this time."
 jitter under peak load, not a return of the original problem — nowhere near the original ~20-55s
 figures, and Docker's own healthcheck (`interval: 5s, timeout: 5s, retries: 10`,
 [`docker-compose.yml`](../docker-compose.yml)) tolerates it without flapping the container unhealthy.
+
+**Correction (see Symptom 9 below):** the `~3060ms`/`~3022ms` p95 figures in the table above were
+*not* this check settling at its intended timeout under contention — they were the check paying its
+own full round-trip cost on nearly every single probe, fixed by `IRabbitMqConnection.IsOpen`.
 
 See Symptoms 7-8 above for the matching before/after on `redirect-api.resolve` — the same class of
 fix (a startup warmup instead of a per-call timeout) took `GET {hash}` from avg 7962ms/3.16% failed
@@ -256,6 +331,23 @@ to avg 70ms/0% failed on fresh containers.
   — added an explicit `Microsoft.Extensions.Caching.Abstractions` package reference for
   `RedisWarmupService`'s `IDistributedCache` (was already available transitively via `Common`, added
   directly to match this project's existing convention of listing packages a project genuinely uses)
+- [`src/backend/Shared/Infrastructure/RabbitMqClient.cs`](../../src/backend/Shared/Infrastructure/RabbitMqClient.cs)
+  — added `IRabbitMqConnection.IsOpen` (Symptom 9)
+- [`src/backend/Shared/Infrastructure/RabbitMqHealthCheck.cs`](../../src/backend/Shared/Infrastructure/RabbitMqHealthCheck.cs)
+  — checks `IsOpen` first, short-circuiting to `Healthy` without opening a channel (Symptom 9)
+- [`src/backend/Shared/Infrastructure/LocalPublishQueue.cs`](../../src/backend/Shared/Infrastructure/LocalPublishQueue.cs),
+  [`LocalPublishQueueWorker.cs`](../../src/backend/Shared/Infrastructure/LocalPublishQueueWorker.cs)
+  (new) — bounded in-memory publish queue + draining workers, so `LinkApi`/`RedirectApi` no longer
+  await `IMessagePublisher.PublishAsync` synchronously before responding (Symptom 9); registered in
+  `RabbitMqExtensions.AddRabbitMqPublisher`
+- [`src/backend/Shared/Infrastructure/IMessagePublisher.cs`](../../src/backend/Shared/Infrastructure/IMessagePublisher.cs),
+  [`RabbitMqPublisher.cs`](../../src/backend/Shared/Infrastructure/RabbitMqPublisher.cs) — `PublishAsync`
+  gained an optional `ActivityContext? parentContext` parameter so a queued publish's span still
+  attaches to the original request's trace (Symptom 9)
+- [`src/backend/Services/LinkApi/Controllers/LinksController.cs`](../../src/backend/Services/LinkApi/Controllers/LinksController.cs),
+  [`RedirectApi/Controllers/RedirectController.cs`](../../src/backend/Services/RedirectApi/Controllers/RedirectController.cs)
+  — enqueue onto `ILocalPublishQueue` instead of awaiting `IMessagePublisher.PublishAsync` directly
+  (Symptom 9)
 
 ## What this means for scenario 5 (not built yet)
 
