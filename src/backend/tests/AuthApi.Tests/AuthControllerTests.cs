@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 
 namespace AuthApi.Tests;
@@ -206,6 +207,38 @@ public class AuthControllerTests
         var response = Assert.IsType<AuthResponse>(result.Value);
         Assert.Equal("jwt-token", response.Token);
         Assert.Contains("raw-refresh-token", SetCookieHeader(sut));
+    }
+
+    [Fact]
+    public async Task Login_PasswordHashNeedsRehash_PersistsUpgradedHashAndStillAuthenticates()
+    {
+        // Regression: VerifyHashedPassword returning SuccessRehashNeeded (stored hash used
+        // weaker/older parameters than the hasher's current default) used to be treated identically
+        // to Success - the upgraded hash was never written back, so the weak hash stuck around
+        // forever. A hasher configured with a much lower iteration count stands in for "an old hash
+        // from before a parameter bump".
+        await using var context = NewContext();
+        var weakHasher = new PasswordHasher<User>(Options.Create(new PasswordHasherOptions { IterationCount = 1 }));
+        var placeholder = new User(Guid.Empty, "Alice", "alice@example.com", string.Empty, string.Empty);
+        var weakHash = weakHasher.HashPassword(placeholder, "Str0ngPassw0rd!");
+        var user = new User(Guid.NewGuid(), "Alice", "alice@example.com", weakHash, string.Empty);
+        context.Users.Add(user);
+        await context.SaveChangesAsync();
+        var sut = NewController(context, out var tokenGenerator, out var refreshTokenService);
+        tokenGenerator.Setup(x => x.GenerateToken(It.IsAny<User>())).Returns(("jwt-token", DateTime.UtcNow.AddHours(1)));
+        refreshTokenService.Setup(x => x.IssueAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(("raw-refresh-token", DateTime.UtcNow.AddDays(14)));
+
+        var result = await sut.Login(
+            new LoginRequest { Email = "alice@example.com", Password = "Str0ngPassw0rd!" },
+            CancellationToken.None);
+
+        Assert.IsType<AuthResponse>(result.Value);
+        var stored = await context.Users.SingleAsync();
+        Assert.NotEqual(weakHash, stored.PasswordHash);
+        Assert.Equal(
+            PasswordVerificationResult.Success,
+            PasswordHasher.VerifyHashedPassword(stored, stored.PasswordHash, "Str0ngPassw0rd!"));
     }
 
     [Fact]

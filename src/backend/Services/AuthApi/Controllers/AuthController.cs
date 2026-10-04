@@ -99,6 +99,19 @@ public class AuthController(
             return InvalidCredentials();
         }
 
+        if (result == PasswordVerificationResult.SuccessRehashNeeded)
+        {
+            // PasswordHasher signals this when the stored hash used older/weaker parameters than
+            // its current default (e.g. a future .NET upgrade bumping the iteration count).
+            // Verification is the only moment the plaintext password is available, so this is the
+            // only place the stored hash can ever be upgraded. PasswordHash is an init-only record
+            // property - EF Core writes it directly via Entry().Property() regardless, bypassing
+            // the C#-only init restriction.
+            _context.Entry(user).Property(x => x.PasswordHash).CurrentValue =
+                PasswordHasher.HashPassword(user, request.Password);
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+
         await IssueRefreshCookieAsync(user.Id, cancellationToken);
         var (token, expiresAt) = _tokenGenerator.GenerateToken(user);
         _logger.LogInformation("User {UserId} logged in", user.Id);

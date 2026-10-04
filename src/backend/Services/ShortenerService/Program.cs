@@ -1,3 +1,5 @@
+using Common;
+using Common.Models;
 using Infrastructure;
 using ServiceDefaults;
 using ShortenerService;
@@ -7,6 +9,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
 builder.AddPostgresDbContextFactory<DatabaseContext>();
+builder.AddRedisDistributedCache();
+builder.Services.AddSingleton<IEntityCacheService<Link>, LinkCacheService>();
 builder.AddRabbitMqConsumer();
 builder.AddLinkEventConsumers();
 

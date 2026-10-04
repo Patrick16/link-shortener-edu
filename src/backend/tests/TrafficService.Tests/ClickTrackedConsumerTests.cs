@@ -123,6 +123,43 @@ public class ClickTrackedConsumerTests
     }
 
     [Fact]
+    public async Task HandleBatchAsync_MultipleClicks_ResolvesGeoIpConcurrentlyWithoutMixingUpResults()
+    {
+        // Regression: geo-IP resolution moved from a strictly sequential per-item await to bounded
+        // parallelism (Parallel.ForEachAsync) to stop one slow/batch-sized lookup from serializing
+        // the whole batch. That must still match each click's own geo result back to that same
+        // click - not scramble results across the batch under concurrency.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var geoIpResolver = new Mock<IGeoIpResolver>();
+        geoIpResolver.Setup(x => x.ResolveAsync("1.1.1.1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GeoLocation("Australia", "Sydney"));
+        geoIpResolver.Setup(x => x.ResolveAsync("2.2.2.2", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new GeoLocation("Germany", "Berlin"));
+        var clickMetaStore = new Mock<IClickMetaStore>();
+        List<ClickMeta>? saved = null;
+        clickMetaStore.Setup(x => x.SaveManyAsync(It.IsAny<IReadOnlyCollection<ClickMeta>>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyCollection<ClickMeta>, CancellationToken>((metas, _) => saved = metas.ToList())
+            .Returns(Task.CompletedTask);
+        var sut = new ClickTrackedConsumer(
+            Mock.Of<IMessageConsumer>(),
+            factory,
+            clickMetaStore.Object,
+            Mock.Of<IUserAgentParser>(),
+            geoIpResolver.Object,
+            NullLogger<ClickTrackedConsumer>.Instance);
+        var eventA = NewEvent() with { IpAddress = "1.1.1.1" };
+        var eventB = NewEvent() with { IpAddress = "2.2.2.2" };
+
+        await sut.HandleBatchAsync(NewBatch(eventA, eventB), CancellationToken.None);
+
+        Assert.NotNull(saved);
+        var metaA = saved!.Single(m => m.Id == eventA.Id);
+        var metaB = saved!.Single(m => m.Id == eventB.Id);
+        Assert.Equal("Australia", metaA.Country);
+        Assert.Equal("Germany", metaB.Country);
+    }
+
+    [Fact]
     public async Task HandleBatchAsync_DifferentIds_PersistsBoth()
     {
         var factory = NewFactory(Guid.NewGuid().ToString());

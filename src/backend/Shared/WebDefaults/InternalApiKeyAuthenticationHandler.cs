@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
 using Common;
 using Microsoft.AspNetCore.Authentication;
@@ -34,7 +36,7 @@ public sealed class InternalApiKeyAuthenticationHandler(
         }
 
         var configuredKey = configuration[Constants.InternalApiKeySection];
-        if (string.IsNullOrEmpty(configuredKey) || provided != configuredKey)
+        if (string.IsNullOrEmpty(configuredKey) || !IsMatch(provided.ToString(), configuredKey))
         {
             // Warning, not Debug - this scheme is only ever meant to be used by control-api, so a
             // rejected attempt is either a misconfiguration or something worth a second look, not
@@ -46,5 +48,19 @@ public sealed class InternalApiKeyAuthenticationHandler(
         var identity = new ClaimsIdentity([new Claim(Constants.InternalClaim, "true")], Scheme.Name);
         var ticket = new AuthenticationTicket(new ClaimsPrincipal(identity), Scheme.Name);
         return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+
+    // Ordinary string equality short-circuits on the first differing character - this scheme is
+    // reachable from LinkApi's normal public surface (nginx proxies straight through, see
+    // sandbox/infra/nginx/nginx.conf), so that timing difference is a real, remotely observable side
+    // channel an attacker could use to recover the key byte-by-byte across repeated guesses.
+    // FixedTimeEquals compares in constant time; only a length mismatch (not sensitive here, unlike
+    // content) is allowed to short-circuit first.
+    private static bool IsMatch(string provided, string configured)
+    {
+        var providedBytes = Encoding.UTF8.GetBytes(provided);
+        var configuredBytes = Encoding.UTF8.GetBytes(configured);
+        return providedBytes.Length == configuredBytes.Length &&
+            CryptographicOperations.FixedTimeEquals(providedBytes, configuredBytes);
     }
 }

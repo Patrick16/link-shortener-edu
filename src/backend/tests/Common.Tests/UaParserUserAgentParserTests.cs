@@ -73,6 +73,21 @@ public class UaParserUserAgentParserTests
     }
 
     [Fact]
+    public void Parse_ExtremelyLongUserAgent_DoesNotThrowAndStillClassifiesFromTruncatedPrefix()
+    {
+        // Regression: the header is caller-controlled and otherwise unbounded before reaching
+        // UAParser's regex-based matching - truncating before parsing keeps the worst-case parse
+        // cost bounded regardless of how long an adversarial value is, while a recognizable prefix
+        // (as any real browser/bot UA well under the cap would be, in full) still classifies fine.
+        var longUserAgent = ChromeOnWindows + new string('a', 10_000);
+
+        var result = _sut.Parse(longUserAgent);
+
+        Assert.Equal("Chrome", result.Browser);
+        Assert.Equal("Windows", result.Os);
+    }
+
+    [Fact]
     public void Parse_UnrecognizedUserAgent_ReturnsNullBrowserAndOsButStillDesktop()
     {
         // UAParser maps an unrecognized client to family "Other" - that must surface as null, not

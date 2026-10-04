@@ -84,6 +84,43 @@ public class LinksControllerTests
     }
 
     [Fact]
+    public async Task CreateLink_EmptyOriginalLink_ReturnsBadRequestWithoutPublishing()
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out var publishQueue, out var hashGenerator);
+
+        var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "" }, CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+        hashGenerator.Verify(x => x.Generate(It.IsAny<string>()), Times.Never);
+        publishQueue.Verify(
+            x => x.EnqueueAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("not-a-url")]
+    [InlineData("ftp://example.com/file")]
+    public async Task CreateLink_NonHttpOriginalLink_ReturnsBadRequestWithoutPublishing(string originalLink)
+    {
+        // Regression: without this check, a non-http(s) value is persisted as-is, and RedirectApi
+        // later calls Redirect(link.OriginalLink) on it verbatim - an open redirect out of a trusted
+        // short-link domain to an arbitrary scheme.
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out var publishQueue, out _);
+
+        var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = originalLink }, CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+        publishQueue.Verify(
+            x => x.EnqueueAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task GetLink_CacheHit_ReturnsCachedValueWithoutTouchingDb()
     {
         await using var context = NewContext();

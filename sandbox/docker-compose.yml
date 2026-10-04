@@ -872,6 +872,10 @@ services:
       # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      # Pre-warms LinkCacheService right after a link is actually persisted (see
+      # LinkCreatedConsumer) so RedirectApi's own cache miss doesn't also race a Postgres read that
+      # hasn't caught up yet - same Sentinel-aware connection string as redirect-api's.
+      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       # Consumer QoS (unacked deliveries in flight) - read once at consumer startup, so changing it
       # needs a recreate, not a live toggle. See RabbitMqConsumer's own _prefetchCount field.
@@ -888,6 +892,12 @@ services:
       OTEL_BSP_SCHEDULE_DELAY: "1000"
     depends_on:
       pgcat:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy

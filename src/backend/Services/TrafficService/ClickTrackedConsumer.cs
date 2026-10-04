@@ -25,6 +25,12 @@ public sealed class ClickTrackedConsumer(
 {
     private const string QueueName = "traffic-service.click-tracked";
 
+    // ip-api.com's free tier caps at ~45 requests/minute per caller IP - resolving a whole batch
+    // (default 100 clicks) one at a time serializes up to batch-size * the resolver's own 3s
+    // timeout behind the Mongo write below. A bounded degree of parallelism overlaps most of that
+    // latency without hammering the rate limit any harder than a burst of real traffic already would.
+    private const int GeoIpConcurrency = 8;
+
     private readonly IMessageConsumer _consumer = consumer;
     private readonly IDbContextFactory<DatabaseContext> _dbContextFactory = dbContextFactory;
     private readonly IClickMetaStore _clickMetaStore = clickMetaStore;
@@ -66,11 +72,20 @@ public sealed class ClickTrackedConsumer(
                 alreadyStored.Count);
         }
 
+        // Geo-IP resolution is the only per-item cost worth overlapping here - UserAgent parsing is
+        // pure in-process regex work, cheap enough to stay sequential below.
+        var geoResults = new GeoLocation[distinctByClickId.Count];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, distinctByClickId.Count),
+            new ParallelOptions { MaxDegreeOfParallelism = GeoIpConcurrency, CancellationToken = cancellationToken },
+            async (i, ct) => geoResults[i] = await _geoIpResolver.ResolveAsync(distinctByClickId[i].IpAddress, ct));
+
         var metas = new List<ClickMeta>(distinctByClickId.Count);
-        foreach (var e in distinctByClickId)
+        for (var i = 0; i < distinctByClickId.Count; i++)
         {
+            var e = distinctByClickId[i];
             var parsedUserAgent = _userAgentParser.Parse(e.UserAgent);
-            var geo = await _geoIpResolver.ResolveAsync(e.IpAddress, cancellationToken);
+            var geo = geoResults[i];
             metas.Add(new ClickMeta(
                 e.Id,
                 e.Hash,

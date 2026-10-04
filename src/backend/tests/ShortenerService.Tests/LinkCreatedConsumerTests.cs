@@ -1,3 +1,5 @@
+using Common;
+using Common.Models;
 using Contracts.Events;
 using Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -31,7 +33,7 @@ public class LinkCreatedConsumerTests
         events.Select(e => new BatchItem<LinkCreatedEvent>(Guid.NewGuid().ToString(), e)).ToList();
 
     private static LinkCreatedConsumer NewSut(IDbContextFactory<DatabaseContext> factory) =>
-        new(Mock.Of<IMessageConsumer>(), factory, NullLogger<LinkCreatedConsumer>.Instance);
+        new(Mock.Of<IMessageConsumer>(), factory, Mock.Of<IEntityCacheService<Link>>(), NullLogger<LinkCreatedConsumer>.Instance);
 
     [Fact]
     public async Task HandleBatchAsync_NewLink_PersistsToDatabase()
@@ -74,6 +76,47 @@ public class LinkCreatedConsumerTests
 
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(1, await verify.Links.CountAsync());
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_NewLink_PreWarmsCache()
+    {
+        // Regression: without this, RedirectApi's Redis cache was only ever populated lazily on its
+        // own miss - a client following a just-created short link before this consumer caught up
+        // could hit both a Redis miss AND a Postgres miss (the row wasn't persisted yet either),
+        // getting a false 404 for a hash LinkApi already confirmed as created.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var cache = new Mock<IEntityCacheService<Link>>();
+        var sut = new LinkCreatedConsumer(Mock.Of<IMessageConsumer>(), factory, cache.Object, NullLogger<LinkCreatedConsumer>.Instance);
+        var @event = NewEvent();
+
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+
+        cache.Verify(
+            x => x.CacheAsync(
+                It.Is<Link>(l => l.Hash == @event.Hash && l.OriginalLink == @event.OriginalLink),
+                @event.Hash,
+                It.IsAny<CancellationToken>(),
+                3600),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_AlreadyStoredLink_DoesNotReCacheIt()
+    {
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var cache = new Mock<IEntityCacheService<Link>>();
+        var sut = new LinkCreatedConsumer(Mock.Of<IMessageConsumer>(), factory, cache.Object, NullLogger<LinkCreatedConsumer>.Instance);
+        var @event = NewEvent();
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+        cache.Invocations.Clear();
+
+        // Redelivery of an already-persisted hash - must not re-warm the cache a second time.
+        await sut.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+
+        cache.Verify(
+            x => x.CacheAsync(It.IsAny<Link>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<int>()),
+            Times.Never);
     }
 
     [Fact]

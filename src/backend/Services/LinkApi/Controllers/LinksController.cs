@@ -37,6 +37,20 @@ public class LinksController(
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Rejects empty/malformed input before it reaches the hash generator's own
+        // ArgumentException.ThrowIfNullOrEmpty (which would otherwise surface as an opaque 500
+        // via GlobalExceptionHandler instead of a 400), and - more importantly - rejects any
+        // non-http(s) scheme so a stored link can never later redirect through RedirectApi to a
+        // javascript:/data:/arbitrary-scheme target (an open redirect out of a trusted domain).
+        if (!Uri.TryCreate(request.OriginalLink, UriKind.Absolute, out var originalUri) ||
+            (originalUri.Scheme != Uri.UriSchemeHttp && originalUri.Scheme != Uri.UriSchemeHttps))
+        {
+            return Problem(
+                detail: "OriginalLink must be an absolute http or https URL.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid link.");
+        }
+
         var hash = _hashGenerator.Generate(request.OriginalLink);
         var createdAt = DateTime.UtcNow;
 

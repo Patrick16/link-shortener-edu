@@ -8,11 +8,21 @@ public sealed class UaParserUserAgentParser : IUserAgentParser
 {
     private static readonly Parser Parser = Parser.GetDefault();
 
+    // Real browser/bot user agents are well under this; the header itself is caller-controlled and
+    // unbounded otherwise, and UAParser's matching is regex-based - truncating before it ever sees
+    // the string bounds the worst-case parse cost regardless of how long an adversarial value is.
+    private const int MaxLength = 512;
+
     public ParsedUserAgent Parse(string userAgent)
     {
         if (string.IsNullOrWhiteSpace(userAgent))
         {
             return new ParsedUserAgent(null, null, null);
+        }
+
+        if (userAgent.Length > MaxLength)
+        {
+            userAgent = userAgent[..MaxLength];
         }
 
         var client = Parser.Parse(userAgent);

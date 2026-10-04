@@ -35,7 +35,7 @@ public static class PostgresExtensions
     // call specifically (see Constants.PostgresPrimaryConnectionString); falls back to the regular
     // connection string when no separate primary one is configured. Call after Build(), before Run().
     public static async Task MigratePostgresAsync<TContext>(this IHost host, CancellationToken cancellationToken = default)
-        where TContext : DbContext
+        where TContext : DbContext, IOwnedDbContext
     {
         var configuration = host.Services.GetRequiredService<IConfiguration>();
         var connectionString = configuration.GetConnectionString(Constants.PostgresPrimaryConnectionString)

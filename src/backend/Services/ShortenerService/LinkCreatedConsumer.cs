@@ -1,3 +1,4 @@
+using Common;
 using Common.Models;
 using Contracts.Events;
 using Infrastructure;
@@ -11,12 +12,14 @@ namespace ShortenerService;
 public sealed class LinkCreatedConsumer(
     IMessageConsumer consumer,
     IDbContextFactory<DatabaseContext> dbContextFactory,
+    IEntityCacheService<Link> cache,
     ILogger<LinkCreatedConsumer> logger) : BackgroundService
 {
     private const string QueueName = "shortener-service.link-created";
 
     private readonly IMessageConsumer _consumer = consumer;
     private readonly IDbContextFactory<DatabaseContext> _dbContextFactory = dbContextFactory;
+    private readonly IEntityCacheService<Link> _cache = cache;
     private readonly ILogger<LinkCreatedConsumer> _logger = logger;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
@@ -42,8 +45,19 @@ public sealed class LinkCreatedConsumer(
             .ToHashSetAsync(cancellationToken);
 
         var newLinks = distinctByHash.Where(x => !alreadyStored.Contains(x.Hash)).ToList();
-        context.Links.AddRange(newLinks.Select(e => new Link(e.Hash, e.OriginalLink, e.ShortenLink, e.CreatedAt, e.UserId)));
+        var newLinkEntities = newLinks.Select(e => new Link(e.Hash, e.OriginalLink, e.ShortenLink, e.CreatedAt, e.UserId)).ToList();
+        context.Links.AddRange(newLinkEntities);
         await context.SaveChangesAsync(cancellationToken);
+
+        // Pre-warms Redis right after the row genuinely exists in Postgres - without this,
+        // RedirectApi's cache only ever gets populated lazily on its own miss, so a client that
+        // follows a just-created short link before this consumer caught up would hit both a Redis
+        // miss AND a Postgres miss (the row wasn't here yet either), getting a false 404 for a hash
+        // LinkApi already confirmed as created.
+        foreach (var link in newLinkEntities)
+        {
+            await _cache.CacheAsync(link, link.Hash, cancellationToken);
+        }
 
         if (alreadyStored.Count > 0)
         {
