@@ -46,9 +46,9 @@ lower than whatever the primary is currently running with.
 ## Pitfalls
 
 - 🐛 [Replica healthchecks proved the process was up, not that replication was happening](pitfall:postgres-replica-healthcheck-doesnt-verify-streaming)
-  (logic-bug) — fixed
+  (infrastructure-bug) — fixed
 - 🐛 [No replication slot meant a disconnected replica could never catch back up](pitfall:postgres-replica-no-replication-slot)
-  (logic-bug) — fixed
+  (infrastructure-bug) — fixed
 
 ## Relatives
 

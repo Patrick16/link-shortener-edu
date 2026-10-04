@@ -1,14 +1,19 @@
 # Mongo ClickMeta write was permanently skipped after a Postgres-committed redelivery
 
-**Category:** logic-bug **Status:** fixed
+**Category:** resilience-gap **Status:** fixed
 
-The Postgres `Click` row and the Mongo `ClickMeta` document are two separate, non-transactional
-writes for the same click — see [Async messaging](pattern:async-messaging) for why redelivery
-safety matters here at all. The redelivery-safety check only looked at Postgres: if a click's `Id`
-was already stored there, the handler returned immediately — never attempting the Mongo write
-again, even if that was the *reason* the message got redelivered in the first place.
+Watch for a redelivery-safety check that only looks at *one* of several non-transactional writes a
+handler makes for the same logical event. The Postgres `Click` row and the Mongo `ClickMeta`
+document are two separate, non-transactional writes for the same click — see
+[Async messaging](pattern:async-messaging) for why redelivery safety matters here at all. Gating
+the *whole* handler on whether just the Postgres side is already done — "if a click's `Id` is
+already stored there, return immediately" — silently assumes every write in the handler always
+succeeds or fails together, which at-least-once delivery semantics never actually guarantee: a
+handler can partially succeed (Postgres commits, Mongo throws) and get redelivered specifically
+*because* of the write that's still missing, only for the redelivery-safety check to skip
+re-attempting exactly that write.
 
-🐛 **Bug** — one early return skips both writes, not just the one that actually succeeded:
+⚠️ **Mistake** — one early return skips both writes, not just the one that actually succeeded:
 
 ```csharp
 internal async Task HandleAsync(ClickTrackedEvent @event, CancellationToken cancellationToken)
@@ -34,8 +39,8 @@ existed, so `alreadyStored` was `true` and the handler returned before ever retr
 write. The click permanently had no `ClickMeta` document, acked as if fully processed, no error or
 log signal beyond the original transient warning.
 
-✅ **Fix** — only the Postgres insert is conditional on `alreadyStored`; the Mongo write always
-runs, on every delivery:
+✅ **Do this instead** — only the Postgres insert is conditional on `alreadyStored`; the Mongo
+write always runs, on every delivery:
 
 ```csharp
 internal async Task HandleAsync(ClickTrackedEvent @event, CancellationToken cancellationToken)

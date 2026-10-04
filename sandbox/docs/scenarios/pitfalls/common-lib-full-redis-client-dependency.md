@@ -1,19 +1,24 @@
 # Shared `Common` library pulled in the full Redis client just for one interface
 
-**Category:** best-practice **Status:** fixed
+**Category:** coupling **Status:** fixed
 
-`EntityCacheService` (in the `Common` library, shared by every backend service) only needs
-`IDistributedCache`/`DistributedCacheEntryOptions` — both live in the small
-`Microsoft.Extensions.Caching.Abstractions` package. `Common.csproj` instead referenced
+Watch for a shared library that references a *concrete* client package when it only actually needs
+the small abstraction interface that client implements. `EntityCacheService` (in the `Common`
+library, shared by every backend service) only needs `IDistributedCache`/
+`DistributedCacheEntryOptions` — both live in the small `Microsoft.Extensions.Caching.Abstractions`
+package. `Common.csproj` instead referenced
 `Microsoft.Extensions.Caching.StackExchangeRedis`, the concrete Redis-backed implementation, which
 drags in the full `StackExchange.Redis` client and its transitive dependencies. Every service that
 references `Common` — including ones with no reason to talk to Redis at all — transitively carried
 that client. Not a runtime bug (nothing actually broke), but unnecessary coupling: the dependency
 didn't even buy `Common` anything beyond the interface, since each service using Redis for real
 (`LinkApi`, and — once fixed — `RedirectApi`) still had to register `AddStackExchangeRedisCache`
-itself in its own `Program.cs` either way.
+itself in its own `Program.cs` either way. In a multi-service system this is exactly the kind of
+boundary choice that increases blast radius later: a shared lib pulling in a concrete dependency
+nobody downstream actually asked for means every service that merely references the lib is now
+one step closer to being forced to upgrade/patch/audit a client it never chose to depend on.
 
-🐛 **Bug** — `src/backend/Shared/Common/Common.csproj`:
+⚠️ **Mistake** — `src/backend/Shared/Common/Common.csproj`:
 
 ```xml
 <ItemGroup>
@@ -24,11 +29,11 @@ itself in its own `Program.cs` either way.
 </ItemGroup>
 ```
 
-✅ **Fix** — swap the concrete Redis package for the lightweight abstractions package (plus an
-explicit `Logging.Abstractions` reference, which had been arriving transitively through the Redis
-package and needed to be named directly once that path was gone). `RedirectApi.csproj` — which had
-been building only because it inherited the Redis client transitively through `Common` — now
-references `Microsoft.Extensions.Caching.StackExchangeRedis` directly instead, alongside its
+✅ **Do this instead** — swap the concrete Redis package for the lightweight abstractions package
+(plus an explicit `Logging.Abstractions` reference, which had been arriving transitively through
+the Redis package and needed to be named directly once that path was gone). `RedirectApi.csproj` —
+which had been building only because it inherited the Redis client transitively through `Common` —
+now references `Microsoft.Extensions.Caching.StackExchangeRedis` directly instead, alongside its
 existing `AddStackExchangeRedisCache` call in `Program.cs` (`LinkApi.csproj` already referenced it
 directly, so it needed no change):
 

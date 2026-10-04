@@ -1,11 +1,12 @@
 # The publisher's channel pool could permanently shrink to zero on broker errors
 
-**Category:** logic-bug **Status:** fixed
+**Category:** connection-pooling **Status:** fixed
 
 `RabbitMqPublisher` pools already-open, already-exchange-declared channels behind a
 `SemaphoreSlim` (`_slots`) so publishing doesn't have to open a channel and redeclare the exchange
-on every call. Two of its methods could leak a slot — permanently shrinking the pool's capacity by
-one — on realistic broker-error paths, both introduced in the same commit that added the pool:
+on every call. Watch for a pool's slot-release logic that only runs on the happy path: two of this
+pool's methods could leak a slot — permanently shrinking the pool's capacity by one — on realistic
+broker-error paths, both introduced in the same commit that added the pool:
 
 - `RentChannelAsync` disposed stale idle channels (found closed after a reconnect) *outside* the
   try/catch that releases the semaphore slot. If `DisposeAsync()` on one of them threw — a real
@@ -24,7 +25,7 @@ future `PublishAsync`/`TryRepublishAsync` call then blocks on `_slots.WaitAsync`
 the publisher for the app's remaining lifetime — worse than the pre-pooling behavior of "just fail
 this one publish and fall back to SQLite."
 
-🐛 **Bug** — `src/backend/Shared/Infrastructure/RabbitMqPublisher.cs`:
+⚠️ **Mistake** — `src/backend/Shared/Infrastructure/RabbitMqPublisher.cs`:
 
 ```csharp
 private async Task<IChannel> RentChannelAsync(CancellationToken cancellationToken)
@@ -71,9 +72,9 @@ private async Task ReleaseChannelAsync(IChannel channel, bool healthy)
 }
 ```
 
-✅ **Fix** — wrap the whole idle-dequeue-through-declare sequence in a try/catch that always
-releases the slot; dispose an already-opened channel before rethrowing if the declare fails; move
-`ReleaseChannelAsync`'s slot release into a `finally`:
+✅ **Do this instead** — wrap the whole idle-dequeue-through-declare sequence in a try/catch that
+always releases the slot; dispose an already-opened channel before rethrowing if the declare
+fails; move `ReleaseChannelAsync`'s slot release into a `finally`:
 
 ```csharp
 private async Task<IChannel> RentChannelAsync(CancellationToken cancellationToken)

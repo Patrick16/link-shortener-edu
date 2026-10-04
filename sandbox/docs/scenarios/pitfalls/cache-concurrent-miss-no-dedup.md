@@ -1,14 +1,16 @@
 # No de-duplication for concurrent cache misses
 
-**Category:** best-practice **Status:** fixed
+**Category:** concurrency **Status:** fixed
 
-On a cache miss, every concurrent caller for the same key used to independently run
-`fetchFromDb` and independently re-write the same cache entry — no in-flight lock/singleflight to
-coalesce them. A burst of concurrent requests for the same just-expired key each hit Postgres
-independently, instead of one request populating the cache for the rest — redundant DB load
-proportional to concurrent request count on every cold key, worse the more popular the link.
+Watch for a cache-aside implementation with no coordination between concurrent callers that miss
+on the *same* key at the *same* time — a classic cache-stampede/thundering-herd gap. Without an
+in-flight lock or singleflight mechanism, every concurrent caller for the same key independently
+runs `fetchFromDb` and independently re-writes the same cache entry. A burst of concurrent requests
+for the same just-expired key each hits Postgres independently, instead of one request populating
+the cache for the rest — redundant DB load proportional to concurrent request count on every cold
+key, worse the more popular the link.
 
-✅ **Fix** — `GetOrFetch` (`src/backend/Shared/Common/EntityCacheService.cs`) now coalesces
+✅ **Do this instead** — `GetOrFetch` (`src/backend/Shared/Common/EntityCacheService.cs`) coalesces
 concurrent misses on the same key through a `ConcurrentDictionary<string, Lazy<Task<T?>>>` of
 in-flight fetches; joiners await the same `Lazy<Task<T?>>` instead of calling `fetchFromDb`
 again, and the entry is removed once that fetch completes so a later, independent miss still

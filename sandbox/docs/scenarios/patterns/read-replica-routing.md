@@ -52,7 +52,7 @@ right at all.
 ## Pitfalls
 
 - 🐛 [PgCat routed DDL and writes to a read-only replica](pitfall:pgcat-missing-read-write-split)
-  (logic-bug) — fixed
+  (architecture-bug) — fixed
 - ⚠️ [A read immediately after a write can land on a lagging replica](pitfall:pgcat-read-your-writes-race)
   — known limitation
 

@@ -55,7 +55,7 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
 ## Pitfalls
 
 - 🐛 [Mongo ClickMeta write was permanently skipped after a Postgres-committed redelivery](pitfall:traffic-mongo-write-skipped-on-redelivery)
-  (logic-bug) — fixed
+  (resilience-gap) — fixed
 - 🐛 [Docker-internal IPs were misclassified as public, hitting a real external API on every click](pitfall:traffic-geoip-dualstack-misclassified)
   (cpu-leak) — fixed
 

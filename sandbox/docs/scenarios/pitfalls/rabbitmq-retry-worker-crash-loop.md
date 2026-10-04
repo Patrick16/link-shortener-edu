@@ -1,17 +1,20 @@
 # The SQLite fallback retry loop could crash itself permanently
 
-**Category:** logic-bug **Status:** fixed
+**Category:** resilience-gap **Status:** fixed
 
-`RabbitMqRetryWorker` (retries messages saved to the SQLite fallback store while RabbitMQ was
-unreachable) ran its whole poll tick — `GetPendingAsync` / `TryRepublishAsync` /
-`DeleteAsync` — directly inside the loop with no `try`/`catch`. `SqliteMessageFallbackStore` opens
-a fresh `SqliteConnection` per call against the same on-disk file, written to concurrently by the
-publisher's own fallback-save path. Any transient failure there (e.g. `SQLITE_BUSY` from a
-concurrent write) propagated out of the loop and ended `ExecuteAsync` — and a `BackgroundService`
-whose `ExecuteAsync` faults does not restart itself. The retry mechanism went silently, permanently
-dead for the rest of the process's life, even after RabbitMQ recovered.
+Watch for a recovery mechanism that is itself not resilient to the exact kind of transient failure
+it exists to recover from. `RabbitMqRetryWorker` (retries messages saved to the SQLite fallback
+store while RabbitMQ was unreachable) ran its whole poll tick — `GetPendingAsync` /
+`TryRepublishAsync` / `DeleteAsync` — directly inside the loop with no `try`/`catch`.
+`SqliteMessageFallbackStore` opens a fresh `SqliteConnection` per call against the same on-disk
+file, written to concurrently by the publisher's own fallback-save path. Any transient failure
+there (e.g. `SQLITE_BUSY` from a concurrent write) propagates out of the loop and ends
+`ExecuteAsync` — and a `BackgroundService` whose `ExecuteAsync` faults does not restart itself. The
+retry mechanism goes silently, permanently dead for the rest of the process's life, even after
+RabbitMQ recovers — the one piece of infrastructure whose whole job is surviving outages becomes a
+single point of failure itself.
 
-🐛 **Bug** — no exception handling around the tick body:
+⚠️ **Mistake** — no exception handling around the tick body:
 
 ```csharp
 protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -29,8 +32,8 @@ protected override async Task ExecuteAsync(CancellationToken stoppingToken)
 }
 ```
 
-✅ **Fix** — the tick body moved into its own method, wrapped so a transient failure logs a
-warning instead of ending the host:
+✅ **Do this instead** — move the tick body into its own method, wrapped so a transient failure
+logs a warning instead of ending the host:
 
 ```csharp
 protected override async Task ExecuteAsync(CancellationToken stoppingToken)

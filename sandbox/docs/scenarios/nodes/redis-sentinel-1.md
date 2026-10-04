@@ -37,7 +37,7 @@ turned out to be non-trivial.
 ## Pitfalls
 
 - 🐛 [Sentinel's own hostname resolver failed even though every other tool on the same container could resolve it](pitfall:redis-sentinel-resolver-fails-despite-dns-working)
-  (logic-bug) — fixed
+  (infrastructure-bug) — fixed
 
 ## Relatives
 

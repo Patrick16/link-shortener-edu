@@ -1,19 +1,20 @@
 # PgCat routed DDL and writes to a read-only replica
 
-**Category:** logic-bug **Status:** fixed
+**Category:** architecture-bug **Status:** fixed
 
-`query_parser_enabled = true` alone does **not** make PgCat infer a query's read/write role from
-its text — a separate flag is needed for that. Without it, an EF Core migration's `CREATE TABLE`
-and a plain `INSERT` (e.g. `AuthApi`'s `/register`) could both get load-balanced onto a read-only
-replica the same as any `SELECT`, and Postgres correctly rejected them:
-`cannot execute ... in a read-only transaction`. This crashed `TrafficService` on startup (its
-migration failed) and 500'd `AuthApi`'s `/register` — found live, not by reading the config.
+Watch out for the assumption that `query_parser_enabled = true` alone makes a pooler infer a
+query's read/write role from its text — a separate flag is needed for that. Without it, every
+query is routed by the pooler's default load-balancing, read/write role ignored: an EF Core
+migration's `CREATE TABLE` or a plain `INSERT` (e.g. `AuthApi`'s `/register`) can land on a
+read-only replica the same as any `SELECT`, and Postgres correctly rejects them with
+`cannot execute ... in a read-only transaction` — a routing/topology mistake, not a one-off typo,
+since it silently misclassifies every write until the missing flag is found.
 
 This project's original `pgcat.toml` was based on an upstream example config that itself omits
 this flag, which is easy to miss since `query_parser_enabled` *sounds* like it should be the whole
 story.
 
-🐛 **Bug** — `sandbox/infra/pgcat/pgcat.toml`, missing the one flag that actually does the
+⚠️ **Mistake** — `sandbox/infra/pgcat/pgcat.toml`, missing the one flag that actually does the
 classification:
 
 ```toml
@@ -23,7 +24,7 @@ query_parser_enabled = true
 primary_reads_enabled = true
 ```
 
-✅ **Fix** — the flag that was actually missing:
+✅ **Do this instead** — the flag that actually does the classification:
 
 ```toml
 [pools.links_db]

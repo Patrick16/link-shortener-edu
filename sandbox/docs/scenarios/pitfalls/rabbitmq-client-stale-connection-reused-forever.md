@@ -1,30 +1,33 @@
 # A dead RabbitMQ connection was never detected once it had connected successfully once
 
-**Category:** logic-bug **Status:** fixed
+**Category:** resilience-gap **Status:** fixed
 
-This is the mirror-image bug of [a failed connection attempt being cached
-forever](pitfall:rabbitmq-client-connection-never-retried): fixing *that* bug introduced this one.
-`IsUsable` decided whether the cached `Task<IConnection>` could be reused by checking only its
-`Task.Status` — `Faulted`/`Canceled` meant reconnect, anything else (including `RanToCompletion`)
-meant reuse. But a task that ran to completion once stays `RanToCompletion` forever, even after the
-`IConnection` it produced is later closed — by a RabbitMQ restart, a Pumba chaos experiment, or an
-ordinary network blip. `IsUsable` never checked `IConnection.IsOpen`, so once a service had
-connected successfully at least once, every later caller — including the retry loops in
-`RabbitMqConsumer`/`RabbitMqPublisher` that exist specifically to recover from a dropped connection
-— kept being handed back the same dead connection object. Each retry's `CreateChannelAsync` call
-threw immediately, the loop logged, waited, and retried — calling straight back into `IsUsable`,
-which still reported the same closed connection "usable." The retry could never succeed even once
-the broker came back up; only a full process restart recovered.
+This is the mirror-image mistake of [caching a failed connection attempt
+forever](pitfall:rabbitmq-client-connection-never-retried): fixing *that* one introduces this one if
+you're not careful. Watch for a "reuse this cached connection?" check that only looks at the task
+wrapping the connection, not the connection object itself: `IsUsable` deciding whether the cached
+`Task<IConnection>` can be reused by checking only its `Task.Status` — `Faulted`/`Canceled` means
+reconnect, anything else (including `RanToCompletion`) means reuse — misses that a task which ran
+to completion once stays `RanToCompletion` forever, even after the `IConnection` it produced is
+later closed by a RabbitMQ restart, a Pumba chaos experiment, or an ordinary network blip. Without
+also checking `IConnection.IsOpen`, once a service has connected successfully at least once, every
+later caller — including the retry loops in `RabbitMqConsumer`/`RabbitMqPublisher` that exist
+specifically to recover from a dropped connection — keeps being handed back the same dead
+connection object. Each retry's `CreateChannelAsync` call throws immediately, the loop logs, waits,
+and retries — calling straight back into `IsUsable`, which still reports the same closed connection
+"usable." The retry can never succeed even once the broker comes back up; only a full process
+restart recovers.
 
-🐛 **Bug** — `src/backend/Shared/Infrastructure/RabbitMqClient.cs`, `IsUsable`:
+⚠️ **Mistake** — `src/backend/Shared/Infrastructure/RabbitMqClient.cs`, `IsUsable`:
 
 ```csharp
 private static bool IsUsable(Task<IConnection>? connection) =>
     connection is not null && connection.Status is not (TaskStatus.Faulted or TaskStatus.Canceled);
 ```
 
-✅ **Fix** — a completed task is only usable if the connection it produced is still actually open;
-`GetConnectionAsync` also best-effort disposes the now-dead connection before replacing it:
+✅ **Do this instead** — a completed task is only usable if the connection it produced is still
+actually open; `GetConnectionAsync` also best-effort disposes the now-dead connection before
+replacing it:
 
 ```csharp
 internal static bool IsUsable(Task<IConnection>? connection)

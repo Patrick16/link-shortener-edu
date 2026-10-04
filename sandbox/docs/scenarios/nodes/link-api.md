@@ -39,15 +39,11 @@ synchronous-return/async-persist split possible in the first place.
 A Bearer token is read *optionally* — `CreateLink` has no `[Authorize]`, so anonymous callers work
 identically to authenticated ones; the only difference is whether `Link.UserId` ends up populated
 from the token's `sub` claim. `GetLinks` (the "my links" listing) is the opposite: it requires
-either a valid Bearer token or control-api's internal API key scheme, and always filters by caller
-— see this node's Pitfalls for what happened before that requirement existed.
+either a valid Bearer token or control-api's internal API key scheme, and always filters by caller.
 
 ## Pitfalls
 
-- 🐛 [CreateLink was a hard-coded stub that persisted nothing](pitfall:linkapi-create-stub)
-  (logic-bug) — fixed
-- 🐛 [Anonymous request bypassed per-user link filtering](pitfall:linkapi-anonymous-bypass)
-  (logic-bug) — fixed
+None yet.
 
 ## Relatives
 

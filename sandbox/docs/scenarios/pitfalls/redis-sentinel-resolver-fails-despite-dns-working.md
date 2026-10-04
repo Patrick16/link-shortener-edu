@@ -1,13 +1,16 @@
 # Sentinel's own hostname resolver failed even though every other tool on the same container could resolve it
 
-**Category:** logic-bug **Status:** fixed
+**Category:** infrastructure-bug **Status:** fixed
 
-The first attempt at Sentinel's config used `sentinel resolve-hostnames yes`, so Sentinel would
-track the master by hostname (`redis-master`), surviving a container recreate that gets a new IP.
-Once `redis-master` was genuinely gone, though, Docker's embedded DNS stopped resolving that
-hostname at all — and Sentinel's repeated *blocking* resolution attempts stalled its own cron loop
-badly enough that it kept re-entering its self-protective "tilt mode" every cycle (tilt mode
-refuses to fail over; it needs ~30 clean seconds to exit, which it never got).
+Watch for relying on a piece of infrastructure's own hostname resolver when a simpler, already-
+proven-working tool on the same box could do it instead — the two don't necessarily behave the
+same even on identical input. The first attempt at Sentinel's config used
+`sentinel resolve-hostnames yes`, so Sentinel would track the master by hostname (`redis-master`),
+surviving a container recreate that gets a new IP. Once `redis-master` was genuinely gone, though,
+Docker's embedded DNS stopped resolving that hostname at all — and Sentinel's repeated *blocking*
+resolution attempts stalled its own cron loop badly enough that it kept re-entering its
+self-protective "tilt mode" every cycle (tilt mode refuses to fail over; it needs ~30 clean seconds
+to exit, which it never got).
 
 Switching to IP-based monitoring (no `resolve-hostnames`) fixed that, but surfaced a second,
 narrower bug: without `resolve-hostnames`, Sentinel still has to resolve the hostname in its
@@ -17,7 +20,7 @@ same container, the same network — resolved it fine**, and treated the failure
 (crash-loop, no retry), not transient. Looks like a musl/Alpine resolver quirk specific to the
 Sentinel binary itself, not an actual DNS problem.
 
-🐛 **Bug** — relying on Sentinel's own resolver, one way or the other:
+⚠️ **Mistake** — relying on Sentinel's own resolver, one way or the other:
 
 ```
 # sentinel.conf, attempt 1
@@ -30,8 +33,8 @@ sentinel monitor mymaster redis-master 6379 2
 # -> Sentinel's own resolver fails on startup even though getent/redis-cli resolve it fine
 ```
 
-✅ **Fix** — resolve the IP with a tool that's known to work (`getent`), and bake the literal IP
-into the generated config so Sentinel's own resolver is never involved at all:
+✅ **Do this instead** — resolve the IP with a tool that's known to work (`getent`), and bake the
+literal IP into the generated config so Sentinel's own resolver is never involved at all:
 
 ```sh
 # redis-sentinel-1's entrypoint (generated, not bind-mounted — Sentinel rewrites this file itself

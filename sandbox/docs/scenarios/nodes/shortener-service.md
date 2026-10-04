@@ -52,7 +52,7 @@ assumed it would only ever run as one instance.
 ## Pitfalls
 
 - 🐛 [AddDbContextPool registered as a scoped service inside a Worker Service](pitfall:shortener-dbcontext-pool-scoped-in-worker)
-  (logic-bug) — fixed
+  (connection-pooling) — fixed
 - 🐛 [Click-count increment raced once the consumer became scalable](pitfall:shortener-click-count-race)
   (race-condition) — fixed
 

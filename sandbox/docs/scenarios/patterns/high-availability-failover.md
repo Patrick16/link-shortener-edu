@@ -46,13 +46,13 @@ a failover.
 ## Pitfalls
 
 - 🐛 [Replica healthchecks proved the process was up, not that replication was happening](pitfall:postgres-replica-healthcheck-doesnt-verify-streaming)
-  (logic-bug) — fixed
+  (infrastructure-bug) — fixed
 - 🐛 [No replication slot meant a disconnected replica could never catch back up](pitfall:postgres-replica-no-replication-slot)
-  (logic-bug) — fixed
+  (infrastructure-bug) — fixed
 - 🐛 [redis-master accepted writes with no fencing against a split brain](pitfall:redis-master-no-split-brain-fencing)
-  (logic-bug) — fixed
+  (architecture-bug) — fixed
 - 🐛 [Sentinel's own hostname resolver failed even though every other tool on the same container could resolve it](pitfall:redis-sentinel-resolver-fails-despite-dns-working)
-  (logic-bug) — fixed
+  (infrastructure-bug) — fixed
 
 ## Relatives
 

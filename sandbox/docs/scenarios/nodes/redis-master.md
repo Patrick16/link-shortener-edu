@@ -33,13 +33,13 @@ with what was fetched.
 ## Pitfalls
 
 - 🐛 [Redis outage used to 500 every link read](pitfall:cache-read-no-error-handling)
-  (logic-bug) — fixed
+  (resilience-gap) — fixed
 - 🐛 [No de-duplication for concurrent cache misses](pitfall:cache-concurrent-miss-no-dedup)
-  (best-practice) — fixed
-- 🐛 [Shared `Common` library pulled in the full Redis client just for one interface](pitfall:common-lib-full-redis-client-dependency)
-  (best-practice) — fixed
+  (concurrency) — fixed
 - 🐛 [redis-master accepted writes with no fencing against a split brain](pitfall:redis-master-no-split-brain-fencing)
-  (logic-bug) — fixed
+  (architecture-bug) — fixed
+- 🐛 [Shared `Common` library pulled in the full Redis client just for one interface](pitfall:common-lib-full-redis-client-dependency)
+  (coupling) — fixed
 
 ## Relatives
 

@@ -1,28 +1,32 @@
 # Replica healthchecks proved the process was up, not that replication was happening
 
-**Category:** logic-bug **Status:** fixed
+**Category:** infrastructure-bug **Status:** fixed
 
-Both replicas' healthcheck was `pg_isready -U postgres` — identical to the primary's. `pg_isready`
-only proves the server accepts connections; it says nothing about whether this specific server is
-actually a functioning standby still receiving WAL. [PgCat](node:pgcat) and downstream services key
-their startup ordering off `service_healthy` for these containers.
+Watch for a healthcheck that only proves the process is up, not that the thing it's actually
+supposed to be doing is still happening. `pg_isready -U postgres` — identical to the primary's — is
+a plausible-looking healthcheck for a replica, but it only proves the server accepts connections;
+it says nothing about whether this specific server is actually a functioning standby still
+receiving WAL. [PgCat](node:pgcat) and downstream services key their startup ordering off
+`service_healthy` for these containers, so a healthcheck that can't tell "healthy standby" apart
+from "healthy but no longer replicating" leaves a real failure mode invisible at the infra layer.
 
-If a replica's streaming connection broke after startup (network blip, the primary restarting, or
+If a replica's streaming connection breaks after startup (network blip, the primary restarting, or
 the replica permanently falling behind — see the companion
 [replication-slot pitfall](pitfall:postgres-replica-no-replication-slot)), the Postgres *process*
-kept running and answering `pg_isready` as healthy. Docker never marked it unhealthy, and PgCat
-(with read/write splitting on) kept load-balancing `SELECT`s onto it — reads through the app
-silently returned arbitrarily stale data, with no error, no failed healthcheck, and no visible
-signal in `docker compose ps`.
+keeps running and keeps answering `pg_isready` as healthy. Docker never marks it unhealthy, and
+PgCat (with read/write splitting on) keeps load-balancing `SELECT`s onto it — reads through the app
+silently return arbitrarily stale data, with no error, no failed healthcheck, and no visible signal
+in `docker compose ps`.
 
-🐛 **Bug** — `sandbox/docker-compose.yml`, both replicas:
+⚠️ **Mistake** — `sandbox/docker-compose.yml`, both replicas:
 
 ```yaml
 healthcheck:
   test: ["CMD-SHELL", "pg_isready -U postgres"]
 ```
 
-✅ **Fix** — also checks that this server is in recovery *and* has an active WAL receiver:
+✅ **Do this instead** — also check that this server is in recovery *and* has an active WAL
+receiver:
 
 ```yaml
 healthcheck:
