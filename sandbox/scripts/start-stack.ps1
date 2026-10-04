@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Starts the full Link Shortener stack: the docker-compose backend (Postgres, Redis, RabbitMQ,
     and all 5 .NET services) plus both frontend dev servers (the product app and the sandbox
@@ -8,16 +8,42 @@
     Rebuild the backend Docker images before starting (use after changing backend/.NET code).
 
 .PARAMETER SkipFrontend
-    Only start the backend (docker compose); don't launch either frontend dev server.
+    Don't launch either frontend dev server (product app or architecture-map) at all. Finer-grained
+    control over the product app alone is -SkipProductUi; architecture-map (the sandbox's own
+    control-plane UI, not part of the product) has no toggle - it always starts whenever frontends
+    aren't skipped altogether, since it's the panel you drive the rest of this script's choices from.
 
 .PARAMETER NoBrowser
     Don't automatically open a browser tab once the frontend dev servers are up.
 
 .PARAMETER Observability
-    Which telemetry stack to route traces/metrics/logs to: 'Aspire' (default - the lightweight
-    Aspire Dashboard, fine for everyday dev) or 'Full' (Prometheus + Jaeger + Loki + Grafana - use
-    for load-test runs, since Aspire Dashboard's in-memory store chokes under that volume). Skips
-    the interactive prompt below when passed.
+    Which telemetry stack to route traces/metrics/logs to: 'Aspire' (the lightweight Aspire
+    Dashboard, fine for everyday dev), 'Full' (default - Prometheus + Jaeger + Loki + Grafana, for
+    load-test runs since Aspire Dashboard's in-memory store chokes under that volume), or 'None'
+    (don't start otel-collector/aspire-dashboard/the Full stack at all - services still run, they
+    just drop their telemetry on the floor). Skips the interactive prompt below when passed.
+
+.PARAMETER SkipPostgresUi
+    Don't start pgweb (the Postgres browser UI, port 8084).
+
+.PARAMETER SkipRedisUi
+    Don't start RedisInsight (port 5540).
+
+.PARAMETER SkipMongoUi
+    Don't start Mongo Express (port 8085).
+
+.PARAMETER SkipSqliteUi
+    Don't start the two sqlite-web fallback viewers (link-api-fallback-viewer port 8086,
+    redirect-api-fallback-viewer port 8087).
+
+.PARAMETER SkipRabbitMqUi
+    Don't expose RabbitMQ's management UI (port 15672) on the host. The broker itself (AMQP,
+    Prometheus metrics) is unaffected - this only toggles whether that one port is published,
+    since the UI lives in the same container as the broker, not a separate one.
+
+.PARAMETER SkipProductUi
+    Don't start the product app's own dev server (src/frontend/app, port 5173). architecture-map
+    still starts (see -SkipFrontend above).
 
 .EXAMPLE
     .\scripts\start-stack.ps1
@@ -26,7 +52,7 @@
 .EXAMPLE
     .\scripts\start-stack.ps1 -SkipFrontend
 .EXAMPLE
-    .\scripts\start-stack.ps1 -Observability Full
+    .\scripts\start-stack.ps1 -Observability Aspire -SkipMongoUi -SkipProductUi
 #>
 
 [CmdletBinding()]
@@ -34,19 +60,83 @@ param(
     [switch]$Build,
     [switch]$SkipFrontend,
     [switch]$NoBrowser,
-    [ValidateSet('Aspire', 'Full')]
-    [string]$Observability
+    [ValidateSet('Aspire', 'Full', 'None')]
+    [string]$Observability,
+    [switch]$SkipPostgresUi,
+    [switch]$SkipRedisUi,
+    [switch]$SkipMongoUi,
+    [switch]$SkipSqliteUi,
+    [switch]$SkipRabbitMqUi,
+    [switch]$SkipProductUi
 )
 
-if (-not $Observability) {
-    Write-Host "`nWhich observability stack should this run use?" -ForegroundColor Cyan
-    Write-Host "  [1] Aspire Dashboard only (default - lightweight, fine for everyday dev)"
-    Write-Host "  [2] Full: Prometheus + Jaeger + Loki + Grafana (for load-test runs - Aspire Dashboard chokes on that volume)"
-    $choice = Read-Host 'Choice (1/2, Enter = 1)'
-    $Observability = if ($choice -eq '2') { 'Full' } else { 'Aspire' }
+$ErrorActionPreference = 'Stop'
+
+function Read-MenuChoice {
+    param(
+        [string]$Title,
+        [string[]]$Options,  # each "label (description)" in display order; index 0 is the default
+        [string]$Prompt
+    )
+    Write-Host "`n$Title" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $Options.Count; $i++) {
+        $suffix = if ($i -eq 0) { ' (default)' } else { '' }
+        Write-Host "  [$($i + 1)] $($Options[$i])$suffix"
+    }
+    $raw = Read-Host "$Prompt (1-$($Options.Count), Enter = 1)"
+    $index = 0
+    if ($raw -and [int]::TryParse($raw, [ref]$index) -and $index -ge 1 -and $index -le $Options.Count) {
+        return $index - 1
+    }
+    return 0
 }
 
-$ErrorActionPreference = 'Stop'
+function Read-YesNo {
+    param(
+        [string]$Prompt,
+        [bool]$DefaultYes = $true
+    )
+    $suffix = if ($DefaultYes) { 'Y/n' } else { 'y/N' }
+    $raw = Read-Host "$Prompt ($suffix)"
+    if (-not $raw) { return $DefaultYes }
+    return $raw -match '^(y|yes|д|да)$'
+}
+
+if (-not $Observability) {
+    $choice = Read-MenuChoice `
+        -Title 'Which observability stack should this run route telemetry to?' `
+        -Options @(
+            'Full: Prometheus + Jaeger + Loki + Grafana (for load-test runs - Aspire Dashboard chokes on that volume)'
+            'Aspire Dashboard only (lightweight, fine for everyday dev)'
+            "None (don't start otel-collector/aspire-dashboard at all - services just drop telemetry)"
+        ) `
+        -Prompt 'Choice'
+    $Observability = @('Full', 'Aspire', 'None')[$choice]
+}
+
+# -SkipXxxUi switches are either present or absent - PSBoundParameters is how we tell "explicitly
+# passed -SkipXxxUi:$false" (still absent unless the user wrote exactly that) from "never mentioned,
+# ask interactively". Each of these UI containers is independently profile-gated in
+# docker-compose.yml (ui-postgres/ui-redis/ui-mongo) specifically so this script can include or
+# leave out just that profile instead of needing to list every other service by name.
+if (-not $PSBoundParameters.ContainsKey('SkipPostgresUi')) {
+    $SkipPostgresUi = -not (Read-YesNo -Prompt 'Start the Postgres UI (pgweb, port 8084)?')
+}
+if (-not $PSBoundParameters.ContainsKey('SkipRedisUi')) {
+    $SkipRedisUi = -not (Read-YesNo -Prompt 'Start the Redis UI (RedisInsight, port 5540)?')
+}
+if (-not $PSBoundParameters.ContainsKey('SkipMongoUi')) {
+    $SkipMongoUi = -not (Read-YesNo -Prompt 'Start the Mongo UI (Mongo Express, port 8085)?')
+}
+if (-not $PSBoundParameters.ContainsKey('SkipSqliteUi')) {
+    $SkipSqliteUi = -not (Read-YesNo -Prompt 'Start the SQLite fallback-queue UIs (ports 8086/8087)?')
+}
+if (-not $PSBoundParameters.ContainsKey('SkipRabbitMqUi')) {
+    $SkipRabbitMqUi = -not (Read-YesNo -Prompt 'Start the RabbitMQ UI (management UI, port 15672)?')
+}
+if (-not $SkipFrontend -and -not $PSBoundParameters.ContainsKey('SkipProductUi')) {
+    $SkipProductUi = -not (Read-YesNo -Prompt 'Start the product UI (src/frontend/app, port 5173)?')
+}
 
 $sandboxRoot = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $sandboxRoot
@@ -171,26 +261,61 @@ try {
         }
     }
 
+    # Each optional extra (observability's two tiers, each UI viewer) is its own Compose profile
+    # (see docker-compose.yml) - the service names list below is only used to proactively `stop`
+    # whichever ones this run opted OUT of, so a leftover container from a *previous* run (e.g. a
+    # prior -Observability Full, or a prior "yes" to the Mongo UI prompt) doesn't linger as an
+    # orphan just because this run's `docker compose up` never mentions its profile.
+    $profileServices = [ordered]@{
+        otel            = @('aspire-dashboard', 'otel-collector')
+        observability   = @('prometheus', 'jaeger', 'loki', 'grafana')
+        'ui-postgres'   = @('pgweb')
+        'ui-redis'      = @('redisinsight')
+        'ui-mongo'      = @('mongo-express')
+        'ui-sqlite'     = @('link-api-fallback-viewer', 'redirect-api-fallback-viewer')
+    }
+
+    $activeProfiles = New-Object System.Collections.Generic.List[string]
+    if ($Observability -ne 'None') { $activeProfiles.Add('otel') }
+    if ($Observability -eq 'Full') { $activeProfiles.Add('observability') }
+    if (-not $SkipPostgresUi) { $activeProfiles.Add('ui-postgres') }
+    if (-not $SkipRedisUi) { $activeProfiles.Add('ui-redis') }
+    if (-not $SkipMongoUi) { $activeProfiles.Add('ui-mongo') }
+    if (-not $SkipSqliteUi) { $activeProfiles.Add('ui-sqlite') }
+
+    $inactiveServices = @(
+        $profileServices.Keys | Where-Object { $activeProfiles -notcontains $_ } |
+            ForEach-Object { $profileServices[$_] }
+    )
+    if ($inactiveServices.Count -gt 0) {
+        docker compose stop @inactiveServices 2>$null
+    }
+
     if ($Observability -eq 'Full') {
         $env:OTEL_COLLECTOR_CONFIG = 'otel-collector-config.full.yaml'
-        Write-Step 'Starting backend (postgres + 2 replicas, redis sentinel cluster, mongo replica set, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service, prometheus, jaeger, loki, grafana)'
-        docker compose --profile observability up -d
     } else {
-        # $env: assignments land on this whole PowerShell process, not just this script run - without
-        # an explicit reset here, a prior `-Observability Full` invocation *in the same window* would
-        # leave OTEL_COLLECTOR_CONFIG pointing at the Full config forever, silently starving
-        # aspire-dashboard even though this branch's own plain `docker compose up -d` below never
-        # asked for that.
+        # $env: assignments land on this whole PowerShell process, not just this script run -
+        # without an explicit reset here, a prior `-Observability Full` invocation *in the same
+        # window* would leave OTEL_COLLECTOR_CONFIG pointing at the Full config forever, silently
+        # breaking a later Aspire-mode otel-collector even though that run never asked for Full.
         Remove-Item Env:\OTEL_COLLECTOR_CONFIG -ErrorAction SilentlyContinue
-        # Compose profiles gate `up` the same way they gate `down` (see stop-stack.ps1's comment) -
-        # a plain `docker compose up -d` here neither starts nor stops prometheus/jaeger/loki/grafana,
-        # so a previous Full run's containers (started in an earlier window, or before this session
-        # even began) would otherwise keep running unnoticed. Stopping them by name works regardless
-        # of which profile started them.
-        docker compose stop prometheus jaeger loki grafana 2>$null
-        Write-Step 'Starting backend (postgres + 2 replicas, redis sentinel cluster, mongo replica set, rabbitmq, auth-api, link-api, redirect-api, shortener-service, traffic-service)'
-        docker compose up -d
     }
+
+    # RabbitMQ's management UI lives in the same container as the broker (unlike pgweb/
+    # RedisInsight/Mongo Express, which are separate containers gated by their own profile above),
+    # so it's toggled by publishing or not publishing its one host port instead - see
+    # docker-compose.yml's `${RABBITMQ_UI_PORT-15672}:15672` for why this must be an *explicit*
+    # empty string (not just unset) to actually suppress it, and why that line uses bash's `-`
+    # default-if-unset instead of `:-` default-if-unset-or-empty.
+    if ($SkipRabbitMqUi) {
+        $env:RABBITMQ_UI_PORT = ''
+    } else {
+        Remove-Item Env:\RABBITMQ_UI_PORT -ErrorAction SilentlyContinue
+    }
+
+    $profileArgs = @($activeProfiles | ForEach-Object { '--profile', $_ })
+    Write-Step "Starting backend (observability: $Observability; profiles: $(if ($activeProfiles.Count -gt 0) { $activeProfiles -join ', ' } else { 'none' }))"
+    docker compose @profileArgs up -d
     if ($LASTEXITCODE -ne 0) {
         Write-Error 'docker compose up failed - see output above.'
     }
@@ -258,7 +383,9 @@ function Initialize-Frontend {
     }
 }
 
-Initialize-Frontend -Dir $frontendDir -Label 'src\frontend\app'
+if (-not $SkipProductUi) {
+    Initialize-Frontend -Dir $frontendDir -Label 'src\frontend\app'
+}
 Initialize-Frontend -Dir $architectureMapDir -Label 'sandbox\frontend\architecture-map'
 
 Write-Step 'Starting the frontend dev servers, each in a new window'
@@ -269,7 +396,7 @@ Write-Step 'Starting the frontend dev servers, each in a new window'
 # auto-incrementing onto it) is already listening there. Checked before spawning either window,
 # not after, so a doomed-to-fail launch is skipped instead of opening a window that immediately
 # crashes with no indication in this script's own output.
-if (Test-PortInUse -Port 5173) {
+if (-not $SkipProductUi -and (Test-PortInUse -Port 5173)) {
     Write-Warning "  Port 5173 is already in use - a previous 'npm run dev' window for the product app may still be running. Its dev server will auto-pick the next free port instead of failing outright, but that can land it on 5174 and collide with architecture-map below."
 }
 
@@ -278,11 +405,13 @@ if (-not $architectureMapPortFree) {
     Write-Warning "  Port 5174 is already in use - architecture-map's dev server pins this exact port (strictPort) and will fail to start if it's taken, most likely by a previous 'npm run dev' window that was never closed. Close it and re-run this script; skipping the architecture-map window for now."
 }
 
-Start-Process powershell -ArgumentList @(
-    '-NoExit',
-    '-Command',
-    "Set-Location '$frontendDir'; npm run dev"
-)
+if (-not $SkipProductUi) {
+    Start-Process powershell -ArgumentList @(
+        '-NoExit',
+        '-Command',
+        "Set-Location '$frontendDir'; npm run dev"
+    )
+}
 
 if ($architectureMapPortFree) {
     Start-Process powershell -ArgumentList @(
@@ -293,11 +422,14 @@ if ($architectureMapPortFree) {
 }
 
 Write-Step 'Waiting for the frontend dev servers to actually come up'
-$productUp = Wait-ForDevServer -Url 'http://localhost:5173'
-if ($productUp) {
-    Write-Host '  Frontend (product) is up' -ForegroundColor Green
-} else {
-    Write-Warning "  Frontend (product) didn't respond within the timeout - check its own window for errors."
+$productUp = $false
+if (-not $SkipProductUi) {
+    $productUp = Wait-ForDevServer -Url 'http://localhost:5173'
+    if ($productUp) {
+        Write-Host '  Frontend (product) is up' -ForegroundColor Green
+    } else {
+        Write-Warning "  Frontend (product) didn't respond within the timeout - check its own window for errors."
+    }
 }
 
 $sandboxMapUp = $false
@@ -312,8 +444,9 @@ if ($architectureMapPortFree) {
 
 if (-not $NoBrowser) {
     # Only open a tab for whichever dev server was actually confirmed up above - opening a tab
-    # against a dev server that never bound its port (or was skipped for a port conflict) just
-    # shows the browser's own connection-refused page, no more informative than the warnings above.
+    # against a dev server that never bound its port (or was skipped for a port conflict, or
+    # skipped by choice via -SkipProductUi) just shows the browser's own connection-refused page,
+    # no more informative than the warnings above.
     if ($productUp) {
         Start-Process 'http://localhost:5173'
     }
@@ -323,22 +456,45 @@ if (-not $NoBrowser) {
 }
 
 Write-Host "`nFull stack is up:" -ForegroundColor Cyan
-Write-Host "  Frontend (product):     http://localhost:5173$(if (-not $productUp) { '  (not confirmed up - see warning above)' })"
+if (-not $SkipProductUi) {
+    Write-Host "  Frontend (product):     http://localhost:5173$(if (-not $productUp) { '  (not confirmed up - see warning above)' })"
+} else {
+    Write-Host '  Frontend (product):     skipped (-SkipProductUi)'
+}
 Write-Host "  Frontend (sandbox map): http://localhost:5174$(if (-not $sandboxMapUp) { '  (not confirmed up - see warning above)' })"
 Write-Host '  AuthApi:          http://localhost:8081/scalar/v1'
 Write-Host '  LinkApi:          http://localhost:8082/scalar/v1'
 Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'
-Write-Host '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
-Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis-master", port 6379)'
-Write-Host '  Mongo Express:    http://localhost:8085'
-if ($Observability -eq 'Full') {
-    Write-Host '  Grafana:          http://localhost:3000  (Prometheus/Jaeger/Loki pre-wired)'
-    Write-Host '  Prometheus:       http://localhost:9090'
-    Write-Host '  Jaeger:           http://localhost:16686'
-    Write-Host '  Loki:             http://localhost:3100  (query via Grafana Explore, not a browsable UI)'
-    Write-Host '  Aspire Dashboard: http://localhost:18888  (up, but not receiving telemetry in Full mode)'
-} else {
-    Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
+if (-not $SkipRabbitMqUi) {
+    Write-Host '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
+}
+if (-not $SkipRedisUi) {
+    Write-Host '  RedisInsight:     http://localhost:5540  (add a DB: host "redis-master", port 6379)'
+}
+if (-not $SkipPostgresUi) {
+    Write-Host '  pgweb:            http://localhost:8084'
+}
+if (-not $SkipMongoUi) {
+    Write-Host '  Mongo Express:    http://localhost:8085'
+}
+if (-not $SkipSqliteUi) {
+    Write-Host '  LinkApi fallback queue (sqlite-web):     http://localhost:8086'
+    Write-Host '  RedirectApi fallback queue (sqlite-web): http://localhost:8087'
+}
+switch ($Observability) {
+    'Full' {
+        Write-Host '  Grafana:          http://localhost:3000  (Prometheus/Jaeger/Loki pre-wired)'
+        Write-Host '  Prometheus:       http://localhost:9090'
+        Write-Host '  Jaeger:           http://localhost:16686'
+        Write-Host '  Loki:             http://localhost:3100  (query via Grafana Explore, not a browsable UI)'
+        Write-Host '  Aspire Dashboard: http://localhost:18888  (up, but not receiving telemetry in Full mode)'
+    }
+    'Aspire' {
+        Write-Host '  Aspire Dashboard: http://localhost:18888  (logs, metrics, traces)'
+    }
+    'None' {
+        Write-Host '  Observability:    none - otel-collector/aspire-dashboard are not running, services drop their telemetry.'
+    }
 }
 Write-Host "`nStop the backend with: .\stop-stack.ps1"
 Write-Host "Stop the frontends by closing their windows (or Ctrl+C in each)."

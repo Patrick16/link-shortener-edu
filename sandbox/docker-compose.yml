@@ -320,7 +320,15 @@ services:
     image: rabbitmq:3-management-alpine
     ports:
       - "5672:5672"   # AMQP
-      - "15672:15672" # management UI (guest/guest)
+      # Management UI (guest/guest). Unlike pgweb/redisinsight/mongo-express (separate containers,
+      # so start-stack's menu can just not start them), the management UI is the *same* rabbitmq
+      # container and can't be split out without a custom image - so the toggle here works by
+      # publishing or not publishing this one host port instead. `-` (not `:-`) is deliberate: it
+      # only substitutes the default when the variable is entirely unset, not when start-stack sets
+      # it to an explicit empty string to skip - Compose then drops `published:` for this port
+      # entirely (verified live via `docker compose config`), leaving the broker and the plugin
+      # itself running, just unreachable from the host.
+      - "${RABBITMQ_UI_PORT-15672}:15672"
       - "15692:15692" # Prometheus metrics (rabbitmq_prometheus plugin, enabled below) - scraped by prometheus (observability profile) at infra/prometheus/prometheus.yml's rabbitmq job
     volumes:
       # rabbitmq_prometheus is actually already on by default in the rabbitmq:3-management-alpine
@@ -423,6 +431,9 @@ services:
 
   mongo-express:
     logging: *default-logging
+    # See redisinsight's identical comment - own profile. mongo-init (below, unprofiled) still runs
+    # regardless, since traffic-service needs the replica set initiated whether or not this viewer is up.
+    profiles: ["ui-mongo"]
     image: mongo-express:latest
     ports:
       - "8085:8081"
@@ -437,6 +448,10 @@ services:
 
   redisinsight:
     logging: *default-logging
+    # Gated behind its own profile (see pgweb/mongo-express below, and otel/observability above) so
+    # start-stack's per-UI menu can skip it - nothing else depends on it, so leaving it out of the
+    # active profile set is enough to not start it at all.
+    profiles: ["ui-redis"]
     image: redis/redisinsight:latest
     ports:
       - "5540:5540"
@@ -451,6 +466,8 @@ services:
 
   pgweb:
     logging: *default-logging
+    # See redisinsight's identical comment - own profile, nothing else depends on it.
+    profiles: ["ui-postgres"]
     image: sosedoff/pgweb:latest
     ports:
       - "8084:8081"
@@ -474,6 +491,9 @@ services:
   # dropped or the image's flag behavior changes.
   link-api-fallback-viewer:
     logging: *default-logging
+    # See pgweb/redisinsight/mongo-express's identical profile comment - own profile, nothing else
+    # depends on it (link-api itself doesn't need this viewer running to use its own fallback file).
+    profiles: ["ui-sqlite"]
     image: coleifer/sqlite-web:latest
     command: ["sqlite_web", "-H", "0.0.0.0", "-x", "-r", "/data/rabbitmq-fallback.db"]
     ports:
@@ -485,6 +505,8 @@ services:
 
   redirect-api-fallback-viewer:
     logging: *default-logging
+    # See link-api-fallback-viewer's identical comment - same profile.
+    profiles: ["ui-sqlite"]
     image: coleifer/sqlite-web:latest
     command: ["sqlite_web", "-H", "0.0.0.0", "-x", "-r", "/data/rabbitmq-fallback.db"]
     ports:
@@ -496,6 +518,12 @@ services:
 
   aspire-dashboard:
     logging: *default-logging
+    # Gated behind its own profile so start-stack's observability menu can skip telemetry entirely
+    # ("None" option) - otel-collector (below) shares this same profile. Backend services no longer
+    # depends_on otel-collector (see their own comments) specifically so this pair can be left out of
+    # `up` altogether without Compose rejecting the file for a depends_on pointing at an inactive
+    # profile's service.
+    profiles: ["otel"]
     image: mcr.microsoft.com/dotnet/aspire-dashboard:latest
     ports:
       - "18888:18888" # dashboard UI
@@ -513,6 +541,8 @@ services:
   # See both files' own headers for why they're mutually exclusive rather than always-all-of-it.
   otel-collector:
     logging: *default-logging
+    # See aspire-dashboard's identical comment - same profile, so the two always start/stop together.
+    profiles: ["otel"]
     image: otel/opentelemetry-collector:latest
     volumes:
       - ./infra/otel-collector/${OTEL_COLLECTOR_CONFIG:-otel-collector-config.yaml}:/etc/otelcol/config.yaml:ro
@@ -721,8 +751,11 @@ services:
     depends_on:
       pgcat:
         condition: service_healthy
-      otel-collector:
-        condition: service_started
+      # No otel-collector dependency here on purpose - it's behind the "otel" profile now
+      # (start-stack's observability menu can skip it entirely), and Compose rejects a depends_on
+      # pointing at a service whose profile isn't active. The OTEL SDK already tolerates an
+      # unreachable collector (drops/retries in the background) rather than failing startup, so this
+      # is only an ordering hint lost, not a correctness one.
     # /health/ready (not /health/live, which runs zero checks and is Healthy the instant the
     # process starts listening) - service_healthy is what nginx's own depends_on gates on for
     # link-api/redirect-api below, so it needs to mean "can actually reach Postgres/RabbitMQ", not
@@ -792,8 +825,7 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      otel-collector:
-        condition: service_started
+      # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
@@ -840,8 +872,7 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      otel-collector:
-        condition: service_started
+      # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
@@ -901,8 +932,7 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-      otel-collector:
-        condition: service_started
+      # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
@@ -943,8 +973,7 @@ services:
         condition: service_healthy
       mongo-init:
         condition: service_completed_successfully
-      otel-collector:
-        condition: service_started
+      # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s

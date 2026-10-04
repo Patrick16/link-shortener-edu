@@ -20,7 +20,7 @@ sandbox/
 │   └── architecture-map/   Educational interactive diagram of the running system — click a
 │                            node for details/metrics, drive live chaos/load controls. Always
 │                            shows the whole graph — no per-scenario switcher.
-├── scripts/     start-stack.ps1 / stop-stack.ps1 / dump-db.ps1 / restore-db.ps1.
+├── scripts/     start-stack / stop-stack / dump-db / restore-db — .ps1 (Windows) and .sh (Linux/macOS).
 └── docs/        How to run and observe each scenario (01-minimal.md, 02-async.md, ...),
                  plus the target architecture.md.
 

@@ -136,7 +136,8 @@ implementation status are in [`sandbox/docs/architecture.md`](sandbox/docs/archi
 
 - **Docker Desktop** (or Docker Engine with the Compose plugin), running.
 - **Node.js** — a version supported by Vite 8 (20.19+ or 22.12+) — and npm, for the two frontends.
-- **PowerShell** to run the helper scripts (Windows PowerShell or PowerShell 7+).
+- **PowerShell** (Windows PowerShell or PowerShell 7+) or **bash** to run the helper scripts under
+  `sandbox/scripts/` — each one has a `.ps1` and a `.sh` version with the same flags/prompts.
 - **Free RAM / CPU:** the stack runs a few dozen containers (databases, replicas, Sentinel, Mongo
   replica set, five .NET services, exporters). Plan for roughly **16 GB of RAM** available to
   Docker, more if you enable the full observability stack and run load tests.
@@ -147,13 +148,20 @@ implementation status are in [`sandbox/docs/architecture.md`](sandbox/docs/archi
 ## Quick start
 
 ```powershell
-# from the repository root
+# from the repository root (Windows)
 sandbox\scripts\start-stack.ps1
 ```
 
+```bash
+# from the repository root (Linux/macOS)
+./sandbox/scripts/start-stack.sh
+```
+
 The script starts the backend via Docker Compose, installs frontend dependencies on first run,
-launches both frontend dev servers and opens them in the browser. It will ask which observability
-stack to use (Aspire Dashboard by default; `Full` for load-test runs).
+launches both frontend dev servers and opens them in the browser. Anything not passed as a flag is
+asked interactively: which observability stack to use (`Full` — Prometheus/Jaeger/Loki/Grafana — by
+default, `Aspire` for a lighter dashboard, or `None`), and whether to start each browser UI
+(Postgres/Redis/Mongo/SQLite fallback-queue/RabbitMQ) and the product frontend (all default to yes).
 
 Once it is up:
 
@@ -163,17 +171,23 @@ Once it is up:
 | Sandbox architecture map | http://localhost:5174 |
 | AuthApi / LinkApi / RedirectApi docs (Scalar) | http://localhost:8081/scalar/v1 · :8082 · :8083 |
 | RabbitMQ UI | http://localhost:15672 (`guest` / `guest`) |
+| pgweb (Postgres) | http://localhost:8084 |
+| RedisInsight | http://localhost:5540 |
+| Mongo Express | http://localhost:8085 |
+| SQLite fallback-queue viewers (LinkApi / RedirectApi) | http://localhost:8086 · :8087 |
 | Aspire Dashboard | http://localhost:18888 |
-| Grafana, Prometheus, Jaeger (`-Observability Full`) | http://localhost:3000 · :9090 · :16686 |
+| Grafana, Prometheus, Jaeger (`Full`, the default) | http://localhost:3000 · :9090 · :16686 |
 
-Useful variants:
+Useful variants (PowerShell; the `.sh` scripts take the same options as `--kebab-case` flags, e.g.
+`--build`, `--observability Full`, `--wipe`):
 
 ```powershell
-sandbox\scripts\start-stack.ps1 -Build                  # rebuild backend images after .NET code changes
-sandbox\scripts\start-stack.ps1 -SkipFrontend           # backend only
-sandbox\scripts\start-stack.ps1 -Observability Full     # Prometheus + Jaeger + Loki + Grafana
-sandbox\scripts\stop-stack.ps1                          # stop everything
-sandbox\scripts\stop-stack.ps1 -Wipe                    # also drop the Postgres volume
+sandbox\scripts\start-stack.ps1 -Build                         # rebuild backend images after .NET code changes
+sandbox\scripts\start-stack.ps1 -SkipFrontend                  # backend only
+sandbox\scripts\start-stack.ps1 -Observability None            # skip otel-collector/aspire-dashboard entirely
+sandbox\scripts\start-stack.ps1 -SkipPostgresUi -SkipMongoUi    # skip pgweb and Mongo Express
+sandbox\scripts\stop-stack.ps1                                 # stop everything
+sandbox\scripts\stop-stack.ps1 -Wipe                            # also drop the Postgres volume
 ```
 
 **Where to go first:** open the product frontend, create a link and click it; then open the

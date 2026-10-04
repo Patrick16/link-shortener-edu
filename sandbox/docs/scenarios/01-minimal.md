@@ -78,6 +78,10 @@ created in the first place):
 .\scripts\start-stack.ps1
 ```
 
+On Linux/macOS, `./scripts/start-stack.sh` is the same script with the same interactive prompts
+(observability tier, which browser UIs to start, the product frontend) - every `.ps1` under
+`scripts/` has a `.sh` twin.
+
 Backend comes up via `docker compose`, the frontend dev server opens in its own window, and a
 browser tab opens to `http://localhost:5173`. `.\scripts\stop-stack.ps1` shuts the backend down
 (`-Wipe` also drops the Postgres volume, for a clean-slate restart).
