@@ -1,0 +1,2 @@
+# Shell scripts are bind-mounted into Linux containers; CRLF (autocrlf on Windows) breaks them.
+*.sh text eol=lf
