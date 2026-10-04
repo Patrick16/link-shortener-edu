@@ -40,8 +40,7 @@ public async Task PublishAsync(...)
 **Effect, measured on the same 4-replica/300-VU test: 2742 → 6052 RPS, avg latency 83ms → 37ms,
 p95 205ms → 23ms.**
 
-(see review-reports/2026-09-18-0049-0e50bf9-click-tracking-jwt-validation.md, F1 — fixed in
-`57945c6`; full numbers in `.notes/PLAN.md`, the 2026-09-25 "10k RPS load-testing pass" entry)
+(fixed in `57945c6`)
 
 ## Relatives
 

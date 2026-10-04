@@ -36,8 +36,7 @@ builder.Services.AddPooledDbContextFactory<DatabaseContext>(options =>
 await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 ```
 
-(see review-reports/2026-09-17-1631-b09788d-pooled-dbcontext-scalar.md, F1 — fixed same day in
-`d88ce9f`)
+(fixed same day in `d88ce9f`)
 
 ## Relatives
 

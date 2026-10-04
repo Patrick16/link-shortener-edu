@@ -46,7 +46,7 @@ private async Task<IConnection> GetConnectionAsync(CancellationToken ct)
 }
 ```
 
-(see review-reports/2026-09-17-1627-22bcacf-linkapi-rabbitmq-publisher.md, F1 — fixed in `ce8310d`)
+(fixed in `ce8310d`)
 
 ## Relatives
 

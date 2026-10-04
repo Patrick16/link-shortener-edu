@@ -98,10 +98,10 @@ Short version of what's real today:
 - **Scenario 3 (Postgres replicas / read scaling) is substantially built** — PgCat routes reads
   across the primary + 2 Postgres replicas (`query_parser_read_write_splitting`), Redis runs
   master + 2 replicas + 3 Sentinels with real automatic failover, Mongo runs a 3-node replica set.
-  Not written up here yet in the same level of detail as scenarios 1-2 above — the day-by-day
-  build notes (including two real bugs found getting failover to actually work) live in
-  `.notes/PLAN.md` under "Scenario 3" until `scenarios/03-replicas.md` exists (tracked, not done —
-  see the TODO below).
+  Not written up here yet in the same level of detail as scenarios 1-2 above — a dedicated
+  `scenarios/03-replicas.md` is still to be written (see the TODO below); until then, the
+  pitfall docs under `scenarios/pitfalls/` cover the real bugs found getting failover to actually
+  work.
 
 ## TODO
 

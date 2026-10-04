@@ -65,7 +65,7 @@ column-rename migration, a refresh-token cleanup worker, internal API-key auth) 
 also carry this one `.csproj` hunk. The two snippets above are that isolated hunk, not the full
 commit diff.
 
-(see review-reports/2026-09-17-0153-3674b1b-linkapi-dbcontext-redis.md, F4 — fixed in `3c79e80`)
+(fixed in `3c79e80`)
 
 ## Relatives
 

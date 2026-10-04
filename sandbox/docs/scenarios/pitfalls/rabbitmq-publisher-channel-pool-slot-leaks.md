@@ -147,7 +147,7 @@ private async Task ReleaseChannelAsync(IChannel channel, bool healthy)
 }
 ```
 
-(see review-reports/2026-09-25-2109-57945c6-rabbitmq-channel-pooling.md, F1/F2 — fixed in `dd6ac13`)
+(fixed in `dd6ac13`)
 
 ## Relatives
 

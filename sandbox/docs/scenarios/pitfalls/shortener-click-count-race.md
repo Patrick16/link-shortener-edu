@@ -49,9 +49,7 @@ This needed a test-infrastructure change too: EF Core's InMemory provider (what 
 used) doesn't support `ExecuteUpdate` at all — the test fixture moved to a real SQLite in-memory
 connection instead.
 
-(see review-reports/2026-09-22-1339-b25f4bf-click-tracking-user-links.md, F2 — fixed in `86c760c`;
-full before/after throughput numbers in `.notes/PLAN.md`, the 2026-09-25 "10k RPS load-testing
-pass" entry, Bug #3)
+(fixed in `86c760c`)
 
 ## Relatives
 

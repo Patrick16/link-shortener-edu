@@ -47,7 +47,7 @@ A slot (over `wal_keep_size`) was the deliberate choice — it retains exactly t
 replica still needs rather than guessing a size, and persists on the primary across restarts of
 either side.
 
-(see review-reports/2026-09-22-2106-8aa895a-postgres-redis-replication.md, F2 — fixed in `3c79e80`)
+(fixed in `3c79e80`)
 
 ## Relatives
 

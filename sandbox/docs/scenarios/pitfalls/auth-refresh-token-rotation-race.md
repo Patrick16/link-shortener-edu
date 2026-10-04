@@ -105,7 +105,7 @@ useEffect(() => {
 }, [applyToken])
 ```
 
-(see review-reports/2026-09-22-1228-dd23e59-refresh-token-rotation.md, F1/F2 — fixed in `dd6ac13`)
+(fixed in `dd6ac13`)
 
 ## Relatives
 

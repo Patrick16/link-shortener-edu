@@ -85,8 +85,6 @@ own description of the code, not a real diff; the report's cited resolution hash
 out not to touch this file at all (confirmed via `git log`) — the actual fix landed together with
 the race-condition rewrite itself in commit `e89e26e`.
 
-(see review-reports/2026-09-29-1238-rabbitmq-healthcheck-pgcat-fix.md, F1)
-
 ## Relatives
 
 ### Nodes

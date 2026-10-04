@@ -77,10 +77,8 @@ standalone finding (a later report reviewing the same commit only flagged the fi
 coverage, see [the health check channel leak pitfall](pitfall:rabbitmq-healthcheck-loser-channel-leak)
 for another instance of that pattern). Before/after above is the real diff from the fix commit.
 
-(fixed in `86c760c` — see `.notes/PLAN.md`, the 2026-09-25 "10k RPS load-testing pass" entry, Bug
-#2, for the full before/after throughput numbers; regression test added one commit later,
-`Infrastructure.Tests/IpApiGeoIpResolverTests.cs`, per
-review-reports/2026-09-25-2140-86c760c-click-count-atomic-update.md, F1)
+(fixed in `86c760c`; regression test added one commit later,
+`Infrastructure.Tests/IpApiGeoIpResolverTests.cs`)
 
 ## Relatives
 

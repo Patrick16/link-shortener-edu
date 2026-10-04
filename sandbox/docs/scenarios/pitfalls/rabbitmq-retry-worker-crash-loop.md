@@ -59,7 +59,7 @@ The same commit also capped `GetPendingAsync`'s query (`LIMIT 500`) — unbounde
 entire pending table into memory on every tick, serially republishing one row at a time, so a long
 RabbitMQ outage made each tick run longer than the poll interval itself.
 
-(see review-reports/2026-09-17-1656-c03d2a3-rabbitmq-retry-worker.md, F1/F2 — fixed in `dd6ac13`)
+(fixed in `dd6ac13`)
 
 ## Relatives
 

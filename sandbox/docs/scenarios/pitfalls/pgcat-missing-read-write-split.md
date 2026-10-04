@@ -39,7 +39,7 @@ a dedicated `ConnectionStrings:PostgresPrimary` — belt and suspenders, since D
 query-classifying pooler is inherently a bit fragile regardless of this specific flag.
 
 (fixed live before being committed — no separate buggy commit exists to diff; reconstructed from
-`.notes/PLAN.md`'s description of the incident, the 2026-09-22 "resilience pass" entry. Confirmed
+the incident notes of the 2026-09-22 resilience pass. Confirmed
 against `sandbox/infra/pgcat/pgcat.toml.example` at HEAD, which has the flag.)
 
 ## Relatives

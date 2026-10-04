@@ -23,9 +23,8 @@ affected queries) all give back some of what read-replica routing was built to g
 place. Worth demonstrating deliberately in the sandbox before it gets "fixed" one way or another —
 see the open question already tracked for this.
 
-(not yet fixed — see `.notes/PLAN.md`, Scenario 3's Backend section, "Consistency-sensitive reads
-right after a write"; also tracked as an open question under "Scenario 3: how to demo the
-read-your-writes problem (on purpose?) or do we skip it?")
+(not yet fixed — tracked as an open question: whether to demo the read-your-writes problem on
+purpose in the sandbox, or to skip it)
 
 ## Relatives
 

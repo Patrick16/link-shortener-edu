@@ -19,8 +19,6 @@ fetches fresh.
 Worth knowing if this is ever demonstrated live: joiners share the first caller's
 `CancellationToken`, so one caller cancelling cancels the fetch for everyone still waiting on it.
 
-(see review-reports/2026-09-17-0153-3674b1b-linkapi-dbcontext-redis.md, F3)
-
 ## Relatives
 
 ### Nodes

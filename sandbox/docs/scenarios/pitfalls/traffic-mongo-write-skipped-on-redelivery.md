@@ -65,8 +65,6 @@ fix predates the later batch-processing refactor (`HandleBatchAsync` today), but
 carries through: the current code still attempts the Mongo write for every click in a batch, even
 ones already present in Postgres.
 
-(see review-reports/2026-09-22-1339-b25f4bf-click-tracking-user-links.md, F1)
-
 ## Relatives
 
 ### Nodes

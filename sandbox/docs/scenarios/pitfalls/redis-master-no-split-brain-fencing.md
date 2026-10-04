@@ -39,7 +39,7 @@ redis-replica1:
   command: ["redis-server", "--replicaof", "redis-master", "6379", "--min-replicas-to-write", "1", "--min-replicas-max-lag", "10"]
 ```
 
-(see review-reports/2026-09-22-2106-8aa895a-postgres-redis-replication.md, F3 — fixed in `834576c`)
+(fixed in `834576c`)
 
 ## Relatives
 

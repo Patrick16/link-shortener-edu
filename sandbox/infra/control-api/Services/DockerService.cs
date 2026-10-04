@@ -210,7 +210,7 @@ public class DockerService : IDockerService
         // across every user's links, which a per-user token couldn't grant even if control-api
         // somehow had one. Header name/config key are duplicated as plain strings rather than a
         // shared reference, deliberately - sandbox/ (this tool) and src/ (the product) are kept
-        // decoupled on purpose (see docs/README.md); the docker-compose.yml internal-api-key anchor
+        // decoupled on purpose (see docs/repository-map.md); the docker-compose.yml internal-api-key anchor
         // is what actually keeps the two sides' secret value in sync, not a shared constant.
         if (configuration["Internal:ApiKey"] is { } internalApiKey)
         {

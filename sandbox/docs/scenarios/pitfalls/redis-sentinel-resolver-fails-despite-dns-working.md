@@ -54,7 +54,7 @@ own config — only a config that's still the pristine template gets re-resolved
 
 (fixed live before being committed, then refined further in `8aa895a`/`834576c` — no single clean
 diff for the original resolve-hostnames→IP-based transition; reconstructed from
-`.notes/PLAN.md`'s description of the incident, the 2026-09-22 "resilience pass" entry. The
+the incident notes of the 2026-09-22 resilience pass. The
 CONFIG-REWRITE-header refinement is visible at HEAD in `redis-sentinel-1`'s entrypoint.)
 
 ## Relatives

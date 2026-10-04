@@ -121,9 +121,7 @@ was asked to fix.
 
 ## Symptom 5: `RabbitMqHealthCheck`'s `Task.WhenAny` fix leaked the losing channel
 
-Caught by a `feature-review` agent pass on the fix itself (report:
-[`.notes/review-reports/2026-09-29-1238-rabbitmq-healthcheck-pgcat-fix.md`](../../.notes/review-reports/2026-09-29-1238-rabbitmq-healthcheck-pgcat-fix.md)),
-not by load-test numbers — this one wouldn't show up as latency at all.
+Caught by a code-review pass on the fix itself, not by load-test numbers — this one wouldn't show up as latency at all.
 
 When `Task.WhenAny(channelTask, Task.Delay(Timeout, cancellationToken))` picked the delay (RabbitMQ
 still slow), the method returned `Unhealthy` immediately and never touched `channelTask` again. If
@@ -351,7 +349,7 @@ to avg 70ms/0% failed on fresh containers.
 
 ## What this means for scenario 5 (not built yet)
 
-Scenario 5's own plan (`.notes/PLAN.md`) already calls for "3× pgcat behind a TCP load balancer,
+Scenario 5's plan already calls for "3× pgcat behind a TCP load balancer,
 demonstrating correct pool_size sizing" and a TODO to "calculate and document the real
 `pool_size × instances` relative to Postgres `max_connections`" — this investigation is effectively
 that calculation for the *current* single-pgcat setup: `pool_size × 3 database pools` must stay under

@@ -84,7 +84,7 @@ volume), but the fix wasn't applied until later, bundled into commit `3c79e80` �
 grab-bag commit (frontend test additions, a `Sault`→`Salt` migration, a refresh-token cleanup
 worker, internal API-key auth). The snippets above are the isolated hunk, not the full commit diff.
 
-(see review-reports/2026-09-26-0313-cc25af8-pgweb-sqlite-fallback-viewers.md, F1 — fixed in `3c79e80`)
+(fixed in `3c79e80`)
 
 ## Relatives
 

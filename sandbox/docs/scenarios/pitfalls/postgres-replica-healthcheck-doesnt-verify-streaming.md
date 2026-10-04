@@ -39,7 +39,7 @@ streaming connection to the primary dies, it just stops receiving new WAL.
 combining both is what actually distinguishes a healthy standby from one whose replication has
 silently died.
 
-(see review-reports/2026-09-22-2106-8aa895a-postgres-redis-replication.md, F1 — fixed in `3c79e80`)
+(fixed in `3c79e80`)
 
 ## Relatives
 

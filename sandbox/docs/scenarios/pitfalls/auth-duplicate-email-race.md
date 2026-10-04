@@ -39,8 +39,6 @@ catch (DbUpdateException)
 }
 ```
 
-(see review-reports/2026-09-17-2003-85d9570-auth-jwt-register-login.md, F1)
-
 ## Relatives
 
 ### Nodes

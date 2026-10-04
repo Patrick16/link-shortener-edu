@@ -42,7 +42,7 @@ tangled up with the learning harness built around it.
 - Want the target architecture? [`sandbox/docs/architecture.md`](../sandbox/docs/architecture.md).
 - Want to read or change product code? `src/backend/LinkShortener.sln` and `src/frontend/app/`.
 
-## Doc layers (see `.notes/documentation-plan.md`)
+## Doc layers
 
 Two kinds of documentation live in this repo, and they follow different rules:
 
@@ -57,6 +57,6 @@ Two kinds of documentation live in this repo, and they follow different rules:
   references and code snippets belong here, not in the explanation layer.
 
 **Current implementation status** (what's actually built vs. planned) lives in
-`.notes/PLAN.md` (product) and `.notes/control-plane-plan.md` (control-plane tooling) — not
-duplicated into explanation-layer docs, which go stale the moment a status claim is copied out of
-the one place that's actually kept up to date.
+[`sandbox/docs/architecture.md`](../sandbox/docs/architecture.md) — not duplicated into
+explanation-layer docs, which go stale the moment a status claim is copied out of the one place
+that's actually kept up to date.

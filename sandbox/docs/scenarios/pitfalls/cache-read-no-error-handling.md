@@ -42,7 +42,7 @@ public async Task<T?> GetCachedAsync(string id, CancellationToken cancellationTo
 }
 ```
 
-(see review-reports/2026-09-17-0153-3674b1b-linkapi-dbcontext-redis.md, F1 — fixed in `055b39c`)
+(fixed in `055b39c`)
 
 ## Relatives
 

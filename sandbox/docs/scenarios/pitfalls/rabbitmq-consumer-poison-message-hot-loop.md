@@ -96,7 +96,7 @@ applied until much later, bundled into commit `3c79e80` — a large, unrelated g
 (frontend test additions, a `Sault`→`Salt` migration, a refresh-token cleanup worker, internal
 API-key auth). The snippets above are the isolated hunk, not the full commit diff.
 
-(see review-reports/2026-09-17-1925-d88ce9f-rabbitmq-consumer.md, F1 — fixed in `3c79e80`)
+(fixed in `3c79e80`)
 
 ## Relatives
 

@@ -112,7 +112,7 @@ wasn't applied until later, bundled into commit `3c79e80` — a large, unrelated
 (frontend test additions, a `Sault`→`Salt` migration, a refresh-token cleanup worker, internal
 API-key auth). The snippets above are the isolated hunk, not the full commit diff.
 
-(see review-reports/2026-09-25-2109-57945c6-rabbitmq-channel-pooling.md, F3 — fixed in `3c79e80`)
+(fixed in `3c79e80`)
 
 ## Relatives
 
