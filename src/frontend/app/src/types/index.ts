@@ -40,3 +40,18 @@ export type LinksPage = {
   totalCount: number
   totalPages: number
 }
+
+// Mirrors ReportingApi's ClickSummary/CountBucket (src/backend/Shared/Common/Models/ClickSummary.cs).
+export type CountBucket = {
+  key: string
+  count: number
+}
+
+export type ClickSummary = {
+  hash: string
+  totalClicks: number
+  byDay: CountBucket[]
+  byCountry: CountBucket[]
+  byDevice: CountBucket[]
+  byBrowser: CountBucket[]
+}

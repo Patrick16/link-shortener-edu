@@ -141,7 +141,7 @@
         ],
         "port": 5672,
         "managementPort": 15672,
-        "topology": "topic exchange \"events\"; queue \"shortener-service.link-created\" bound to routing key \"link.created\"; ClickTracked events fan out to two independent queues bound to \"click.tracked\" - \"shortener-service.click-tracked\" (bumps the display click count) and \"traffic-service.click-tracked\" (the durable click record + Mongo metadata) - both declared by the app itself, not a static definitions.json",
+        "topology": "topic exchange \"events\"; queue \"shortener-service.link-created\" bound to routing key \"link.created\"; ClickTracked events fan out to three independent queues bound to \"click.tracked\" - \"shortener-service.click-tracked\" (bumps the display click count), \"traffic-service.click-tracked\" (the durable click record + Mongo metadata), and \"reporting-service.click-tracked\" (the CQRS read model in ClickHouse) - all declared by the app itself, not a static definitions.json",
         "links": {
           "config": "sandbox/infra/rabbitmq/definitions.json (unused placeholder, see its own comment)",
           "publisher": "src/backend/Shared/Infrastructure/RabbitMqPublisher.cs",
@@ -472,6 +472,65 @@
           "entrypoint": "sandbox/infra/postgres/replica-entrypoint.sh"
         }
       }
+    },
+    {
+      "id": "reporting-service",
+      "name": "ReportingService",
+      "type": "worker",
+      "icon": "📈",
+      "description": "CQRS read side: a third, independent consumer of ClickTrackedEvent - builds its own denormalized read model in ClickHouse, straight from the raw event, never from traffic-service's own Postgres/Mongo writes",
+      "capabilities": ["scalable"],
+      "details": {
+        "purpose": "Owns reports_db in ClickHouse (the only writer) - parses the same raw UserAgent/geo-IP as traffic-service does independently, then does one bulk insert per consumed batch; single-row inserts are a real ClickHouse anti-pattern this service specifically avoids",
+        "technologies": [
+          ".NET 10 Worker Service",
+          "RabbitMQ.Client",
+          "ClickHouse.Driver"
+        ],
+        "links": {
+          "code": "src/backend/Services/ReportingService/",
+          "dockerfile": "src/backend/Services/ReportingService/Dockerfile"
+        }
+      }
+    },
+    {
+      "id": "reporting-api",
+      "name": "ReportingApi",
+      "type": "service",
+      "icon": "📑",
+      "description": "Read-only query side of the CQRS split - queries ClickHouse directly for the frontend's per-link stats panel, never touches the write path",
+      "capabilities": [],
+      "details": {
+        "purpose": "GET /reports/{hash}/summary aggregates total clicks plus by-day/country/device/browser breakdowns via raw parameterized SQL against ClickHouse - no ORM, since this is the one place meant to show what a columnar OLAP query actually looks like",
+        "technologies": [
+          "ASP.NET Core Minimal Hosting",
+          "ClickHouse.Driver"
+        ],
+        "port": 8088,
+        "links": {
+          "code": "src/backend/Services/ReportingApi/",
+          "dockerfile": "src/backend/Services/ReportingApi/Dockerfile"
+        }
+      }
+    },
+    {
+      "id": "clickhouse",
+      "name": "ClickHouse",
+      "type": "infrastructure",
+      "icon": "🧱",
+      "description": "Columnar OLAP store holding reports_db.clicks - a third, independent sink for the same click data already living in Postgres (clicks_db) and Mongo (clicks_meta_db), each teaching a different \"right tool for the job\" lesson",
+      "capabilities": [],
+      "details": {
+        "purpose": "clicks is a ReplacingMergeTree table ordered by (hash, id) - a redelivered event eventually collapses to one row during a background merge instead of reporting-service needing to query first (ClickHouse is specifically bad at point lookups), so a query right after a redelivery can briefly still double-count until the next merge runs",
+        "technologies": [
+          "ClickHouse"
+        ],
+        "port": 8123,
+        "links": {
+          "compose": "sandbox/docker-compose.yml#clickhouse",
+          "init": "sandbox/infra/clickhouse/init.sql"
+        }
+      }
     }
   ],
   "connections": [
@@ -595,6 +654,38 @@
       "label": "Consume ClickTrackedEvent",
       "protocol": "AMQP 0-9-1",
       "synchronous": false
+    },
+    {
+      "from": "rabbitmq",
+      "to": "reporting-service",
+      "label": "Consume ClickTrackedEvent (CQRS fan-out)",
+      "protocol": "AMQP 0-9-1",
+      "synchronous": false,
+      "notes": "A third, independent queue bound to the same click.tracked routing key traffic-service already consumes - redirect-api's publish side is unchanged; this is fan-out, not a chain."
+    },
+    {
+      "from": "reporting-service",
+      "to": "clickhouse",
+      "label": "Bulk insert click facts",
+      "protocol": "ClickHouse HTTP wire",
+      "format": "one InsertBinaryAsync call per consumed batch - never per row",
+      "synchronous": true
+    },
+    {
+      "from": "reporting-api",
+      "to": "clickhouse",
+      "label": "Aggregate query for a link's stats",
+      "protocol": "ClickHouse HTTP wire",
+      "format": "raw parameterized SQL, GROUP BY day/country/device/browser",
+      "synchronous": true
+    },
+    {
+      "from": "frontend-app",
+      "to": "reporting-api",
+      "label": "View stats for a link",
+      "protocol": "HTTP (fetch)",
+      "format": "JSON",
+      "synchronous": true
     },
     {
       "from": "traffic-service",

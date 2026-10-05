@@ -177,6 +177,37 @@ main {
   font-weight: 600;
 }
 
+.link-stats-toggle {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  margin-top: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--accent-bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.stats-panel {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.stats-panel dt {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.stats-panel dd {
+  margin: 0 0 6px;
+  color: var(--text);
+}
+
 .pagination {
   display: flex;
   align-items: center;

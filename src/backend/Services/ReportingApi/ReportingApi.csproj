@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\Shared\Contracts\Contracts.csproj" />
+		<ProjectReference Include="..\..\Shared\Infrastructure\Infrastructure.csproj" />
+		<ProjectReference Include="..\..\Shared\Common\Common.csproj" />
+		<ProjectReference Include="..\..\Shared\ServiceDefaults\ServiceDefaults.csproj" />
+		<ProjectReference Include="..\..\Shared\WebDefaults\WebDefaults.csproj" />
+	</ItemGroup>
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+</Project>

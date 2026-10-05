@@ -1,5 +1,7 @@
 using Common;
 using Infrastructure;
+using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace TrafficService;
 
@@ -13,10 +15,19 @@ public static class TrafficServiceExtensions
         var mongoConnectionString = builder.Configuration.GetConnectionString(Constants.MongoDbConnectionString);
         builder.Services.AddSingleton<IClickMetaStore>(_ => new MongoClickMetaStore(mongoConnectionString!));
         builder.Services.AddSingleton<IUserAgentParser, UaParserUserAgentParser>();
-        builder.Services.AddHttpClient<IGeoIpResolver, IpApiGeoIpResolver>(client =>
+
+        // IGeoIpResolver is CachingGeoIpResolver wrapping the real IpApiGeoIpResolver - see its own
+        // comment. ReportingService registers the identical wrapping, pointed at the same Redis
+        // instance/InstanceName (Redis__InstanceName=GeoIpCache in docker-compose.yml), so the two
+        // independent click.tracked consumers share one cache instead of each hitting ip-api.com's
+        // rate-limited endpoint separately for the same click.
+        builder.AddRedisDistributedCache();
+        builder.Services.AddHttpClient<IpApiGeoIpResolver>(client =>
         {
             client.BaseAddress = new Uri("http://ip-api.com");
         });
+        builder.Services.AddSingleton<IGeoIpResolver>(sp => new CachingGeoIpResolver(
+            sp.GetRequiredService<IpApiGeoIpResolver>(), sp.GetRequiredService<IDistributedCache>()));
 
         builder.Services.AddHostedService<ClickTrackedConsumer>();
         return builder;

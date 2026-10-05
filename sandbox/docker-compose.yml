@@ -957,6 +957,13 @@ services:
       # SetMongoReadPreferenceAsync. MongoClickMetaStore itself needs no code change; it already
       # just takes whatever connection string it's given.
       ConnectionStrings__Mongo: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/clicks_meta_db?replicaSet=rs0&readPreference=${MONGO_READ_PREFERENCE:-primary}"
+      # Geo-IP cache only (see CachingGeoIpResolver) - this service has no other use for Redis.
+      # Same InstanceName as reporting-service's identical block, deliberately: both are independent
+      # click.tracked consumers that each resolve geo-IP for the same click, so they share one cache
+      # keyspace instead of each hitting ip-api.com's rate-limited endpoint separately (found during
+      # review - see .notes/review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md).
+      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      Redis__InstanceName: "GeoIpCache"
       RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
       RabbitMq__BatchSize: "${RABBITMQ_BATCH_SIZE:-100}"
       RabbitMq__BatchTimeoutMs: "${RABBITMQ_BATCH_TIMEOUT_MS:-500}"
@@ -973,7 +980,103 @@ services:
         condition: service_healthy
       mongo-init:
         condition: service_completed_successfully
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
       # See auth-api's identical comment - no otel-collector dependency on purpose.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # CQRS read side: a third, independent consumer of click.tracked (fan-out from the same topic
+  # traffic-service already consumes - redirect-api's publish side is untouched). Owns its own
+  # ClickHouse database (reports_db) - see sandbox/infra/clickhouse/init.sql for the schema, which
+  # no app code ever creates or migrates (no EF provider exists for ClickHouse).
+  clickhouse:
+    logging: *default-logging
+    image: clickhouse/clickhouse-server:latest
+    # Recent images disable network access entirely for the `default` user unless a password (or
+    # this flag) is set - caught live, not guessed: ReportingService's own ClickHouse health check
+    # failed with "Authentication failed" even though the user/password were correct, because the
+    # entrypoint had silently restricted `default` to localhost-only. Matches this stack's existing
+    # no-auth dev posture for Postgres/Mongo rather than inventing credentials nothing else uses.
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+    ports:
+      - "8123:8123" # HTTP interface - exposed for local inspection (curl / a GUI), same spirit as postgres's 5432
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./infra/clickhouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      # Not just /ping: that answers as soon as the server process binds, which can be before
+      # /docker-entrypoint-initdb.d/init.sql has finished creating reports_db.clicks on a genuinely
+      # fresh volume - the same healthcheck-passes-before-truly-ready race this project already hit
+      # once with RabbitMQ's AMQP listener (see scenario 1 in .notes/PLAN.md). Querying the table
+      # directly means reporting-service/reporting-api's depends_on: service_healthy can't pass
+      # until the schema init script has actually completed.
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1 FROM reports_db.clicks LIMIT 0"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  reporting-service:
+    logging: *default-logging
+    build:
+      context: ..
+      dockerfile: src/backend/Services/ReportingService/Dockerfile
+    environment:
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Database=reports_db"
+      # Geo-IP cache only (see CachingGeoIpResolver) - same InstanceName as traffic-service's
+      # identical block, deliberately: both are independent click.tracked consumers that each
+      # resolve geo-IP for the same click, so they share one cache keyspace instead of each hitting
+      # ip-api.com's rate-limited endpoint separately (found during review - see
+      # .notes/review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md).
+      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      Redis__InstanceName: "GeoIpCache"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      OTEL_BSP_SCHEDULE_DELAY: "1000"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis-sentinel-1:
+        condition: service_healthy
+      redis-sentinel-2:
+        condition: service_healthy
+      redis-sentinel-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  reporting-api:
+    logging: *default-logging
+    build:
+      context: ..
+      dockerfile: src/backend/Services/ReportingApi/Dockerfile
+    ports:
+      - "8088:8080" # No nginx fronting this yet (read-only, low-traffic reporting endpoint) - direct port like control-api's pattern, not load-balanced like link-api/redirect-api.
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Database=reports_db"
+      Cors__AllowedOrigins__0: "http://localhost:5173"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
@@ -1043,3 +1146,4 @@ volumes:
   control-api-data:
   link-api-data:
   redirect-api-data:
+  clickhouse-data:

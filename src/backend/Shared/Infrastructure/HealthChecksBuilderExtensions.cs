@@ -1,6 +1,7 @@
 using Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Infrastructure;
 
@@ -25,4 +26,11 @@ public static class HealthChecksBuilderExtensions
 
     public static IHealthChecksBuilder AddMongoHealthCheck(this IHealthChecksBuilder builder)
         => builder.AddCheck<MongoHealthCheck>("mongo", tags: ReadyTags);
+
+    // One generic method for any IPingable (IClickFactStore in ReportingService,
+    // IClickFactQueryService in ReportingApi) - same shape as AddPostgresHealthCheck<TContext>
+    // above, resolving TPingable straight from DI instead of a per-interface registration method.
+    public static IHealthChecksBuilder AddClickHouseHealthCheck<TPingable>(this IHealthChecksBuilder builder)
+        where TPingable : class, IPingable
+        => builder.AddCheck<ClickHouseHealthCheck<TPingable>>("clickhouse", tags: ReadyTags);
 }
