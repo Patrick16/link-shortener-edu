@@ -1,0 +1,18 @@
+<Project>
+
+	<!-- Applies to every project under src/backend. Static-analysis settings only - no behavior change. -->
+	<PropertyGroup>
+		<EnableNETAnalyzers>true</EnableNETAnalyzers>
+		<AnalysisLevel>latest-recommended</AnalysisLevel>
+		<!-- obj/ is gitignored; run-code-analysis.ps1 collects these into one report. -->
+		<ErrorLog>$(MSBuildProjectDirectory)/obj/analysis.sarif,version=2.1</ErrorLog>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="SonarAnalyzer.CSharp" Version="10.35.0.4138">
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+			<PrivateAssets>all</PrivateAssets>
+		</PackageReference>
+	</ItemGroup>
+
+</Project>
