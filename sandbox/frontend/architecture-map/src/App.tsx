@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 import architectureData from './data/architecture.json'
 import { useLiveStack } from './hooks/useLiveStack'
@@ -6,6 +6,7 @@ import { useTrafficRun } from './hooks/useTrafficRun'
 import { useTrafficConfig } from './hooks/useTrafficConfig'
 import { useResizableWidth } from './hooks/useResizableWidth'
 import { useInfraTopology } from './hooks/useInfraTopology'
+import { useInfraStatus } from './hooks/useInfraStatus'
 import { usePinnedMetrics } from './hooks/usePinnedMetrics'
 import { Diagram } from './components/Diagram'
 import { NodePanel } from './components/NodePanel'
@@ -14,6 +15,8 @@ import { K6ConfigPanel } from './components/K6ConfigPanel'
 import { TrafficResultPanel } from './components/TrafficResultPanel'
 import { RunHistoryPanel } from './components/RunHistoryPanel'
 import { PresetsModal } from './components/PresetsModal'
+import { TopologyPanel } from './components/TopologyPanel'
+import { filterArchitecture } from './utils/topologyFilter'
 import { resolveServiceId } from './utils/resolveServiceId'
 import { applySystemConfig, runRequestToScenario } from './utils/reuseRunConfig'
 import type { ArchitectureData } from './types/architecture'
@@ -38,14 +41,30 @@ type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index
 function App() {
   const { containers, resourceHistory, connected, loading, error } = useLiveStack()
   const roles = useInfraTopology()
+  const infraStatus = useInfraStatus()
   const trafficRun = useTrafficRun()
   const trafficConfig = useTrafficConfig()
   const pins = usePinnedMetrics()
   const [selection, setSelection] = useState<Selection>(null)
   const [presetsOpen, setPresetsOpen] = useState(false)
+  const [topologyOpen, setTopologyOpen] = useState(false)
   const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1, true)
 
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
+
+  // Closes the sidebar's selection if the selected node/connection just became invisible under
+  // the Topology-driven filter (e.g. pgcat was open, then someone bypassed it from the panel) -
+  // a stale panel for a node that's no longer on the graph would be confusing to leave open.
+  useEffect(() => {
+    if (!selection) return
+    const visible = filterArchitecture(data, infraStatus.status)
+    if (selection.kind === 'component' && !visible.components.some((c) => c.id === selection.id)) {
+      setSelection(null)
+    }
+    if (selection.kind === 'connection' && !visible.connections.some((c) => c.originalIndex === selection.index)) {
+      setSelection(null)
+    }
+  }, [infraStatus.status, selection])
 
   const selectedComponent = selection?.kind === 'component' ? metaById.get(selection.id) : undefined
   const selectedConnection = selection?.kind === 'connection' ? data.connections[selection.index] : undefined
@@ -62,6 +81,7 @@ function App() {
       if (failed.length > 0) {
         console.warn('Some system settings could not be reapplied from this run:', failed.join(', '))
       }
+      infraStatus.refresh()
     })
     setSelection({ kind: 'component', id: 'k6' })
     sidebar.expand()
@@ -86,13 +106,21 @@ function App() {
           {loading && <p>Loading containers...</p>}
           {error && <p className="service-card-error">{error}</p>}
         </div>
+        <button className="app-header-presets-btn" onClick={() => setTopologyOpen(true)}>
+          Topology
+        </button>
         <button className="app-header-presets-btn" onClick={() => setPresetsOpen(true)}>
           Presets
         </button>
         <TrafficResultPanel {...trafficRun} fallbackTotalSeconds={trafficConfig.totalDuration} />
       </header>
 
-      {presetsOpen && <PresetsModal onClose={() => setPresetsOpen(false)} onLoadScenario={loadScenarioFromPreset} />}
+      {presetsOpen && (
+        <PresetsModal onClose={() => setPresetsOpen(false)} onLoadScenario={loadScenarioFromPreset} onInfraChanged={infraStatus.refresh} />
+      )}
+      {topologyOpen && (
+        <TopologyPanel status={infraStatus.status} onClose={() => setTopologyOpen(false)} onApplied={infraStatus.refresh} />
+      )}
 
       <div className="app-body">
         <aside className="app-sidebar-left" style={{ width: sidebar.width, padding: sidebar.collapsed ? 0 : undefined }}>
@@ -157,6 +185,7 @@ function App() {
             containers={containers}
             roles={roles}
             trafficActive={trafficRun.running}
+            infraStatus={infraStatus.status}
             selectedConnectionIndex={selection?.kind === 'connection' ? selection.index : null}
             onSelectComponent={(id) => {
               setSelection({ kind: 'component', id })

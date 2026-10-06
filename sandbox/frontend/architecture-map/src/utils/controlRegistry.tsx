@@ -2,16 +2,12 @@ import type { ComponentType } from 'react'
 import type { ArchComponent } from '../types/architecture'
 import type { ManagedContainer } from '../types/controlApi'
 import { ScaleCapabilityControl } from '../components/ScaleCapabilityControl'
-import { NginxToggleControl } from '../components/NginxToggleControl'
-import { PgcatToggleControl } from '../components/PgcatToggleControl'
-import { CacheToggleControl } from '../components/CacheToggleControl'
 import { FlushCacheControl } from '../components/FlushCacheControl'
 import { PgcatPoolControl } from '../components/PgcatPoolControl'
 import { NpgsqlPoolSizeControl } from '../components/NpgsqlPoolSizeControl'
 import { SentinelConfigControl } from '../components/SentinelConfigControl'
 import { RabbitMqPrefetchControl } from '../components/RabbitMqPrefetchControl'
 import { MongoReadPreferenceControl } from '../components/MongoReadPreferenceControl'
-import { MessagingModeControl } from '../components/MessagingModeControl'
 import { ReplicationLagControl } from '../components/ReplicationLagControl'
 import { PgcatConnectionsPanel } from '../components/PgcatConnectionsPanel'
 import { PostgresConnectionsPanel } from '../components/PostgresConnectionsPanel'
@@ -21,18 +17,17 @@ export type { CapabilityControlProps }
 
 // One entry per capability string from architecture.json - NodePanel no longer decides which
 // control to render per serviceId, it just looks each of a node's capabilities up here.
+// nginx-toggle/pgcat-toggle/cache-toggle/messaging-mode used to live here (one per node) - all 4
+// moved into the global TopologyPanel (see App.tsx), which stages and saves all of them at once
+// instead of applying immediately from a single node's panel.
 const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> = {
   scalable: ScaleCapabilityControl,
-  'nginx-toggle': NginxToggleControl,
-  'pgcat-toggle': PgcatToggleControl,
-  'cache-toggle': CacheToggleControl,
   'flush-cache': FlushCacheControl,
   'pgcat-pool': PgcatPoolControl,
   'npgsql-pool-size': NpgsqlPoolSizeControl,
   'sentinel-config': SentinelConfigControl,
   'rabbitmq-prefetch': RabbitMqPrefetchControl,
   'mongo-read-preference': MongoReadPreferenceControl,
-  'messaging-mode': MessagingModeControl,
   'replication-lag': ReplicationLagControl,
   'pgcat-connections': PgcatConnectionsPanel,
   'postgres-connections': PostgresConnectionsPanel,

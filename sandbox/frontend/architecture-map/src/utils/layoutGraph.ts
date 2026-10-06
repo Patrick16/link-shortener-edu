@@ -7,8 +7,8 @@ import type { ArchComponent, ArchConnection } from '../types/architecture'
 // each side, with nothing enforcing it: a resize on one side with no matching edit on the other
 // left dagre laying out with a stale half-width, so every node rendered visibly off-center from
 // the edges dagre routed for it, with no compiler or test error to flag the mismatch.
-export const NODE_WIDTH = 170
-export const NODE_HEIGHT = 40
+export const NODE_WIDTH = 180
+export const NODE_HEIGHT = 46
 
 // Hand-picked x/y per component stopped scaling once the graph passed ~15 nodes - every new HA
 // cluster (Postgres replicas, Redis Sentinel, Mongo's replica set) meant re-eyeballing the whole
@@ -18,10 +18,13 @@ export const NODE_HEIGHT = 40
 // automatically, sized to whatever's actually in the graph.
 export function computeLayout(components: ArchComponent[], connections: ArchConnection[]): Record<string, { x: number; y: number }> {
   const graph = new dagre.graphlib.Graph()
-  // ranksep is generous specifically because edge labels (e.g. "Streaming replication (WAL)") sit
-  // along the horizontal segment between two columns - too little space and the label overlaps the
-  // next column's nodes instead of the connector it's actually labeling.
-  graph.setGraph({ rankdir: 'LR', nodesep: 70, ranksep: 220, marginx: 20, marginy: 20 })
+  // Compact on purpose: labels are hidden until hover/selection now (see Diagram.tsx's edge CSS),
+  // so they no longer need standing room between columns, and a smaller overall canvas means
+  // fitView doesn't have to zoom out as far - every per-node Handle offset (see ServiceNode's
+  // multi-handle fan-out) stays a bigger fraction of a screen pixel at the zoom level people
+  // actually look at the graph at, instead of shrinking into an indistinguishable single line the
+  // way it did at the previous, more zoomed-out size.
+  graph.setGraph({ rankdir: 'LR', nodesep: 55, ranksep: 150, marginx: 20, marginy: 20 })
   graph.setDefaultEdgeLabel(() => ({}))
 
   for (const component of components) {

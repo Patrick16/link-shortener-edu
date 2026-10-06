@@ -250,12 +250,12 @@ button:disabled {
 .service-node {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--bg);
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 6px 10px;
+  font-size: 14px;
   color: var(--text-h);
 }
 
@@ -270,15 +270,39 @@ button:disabled {
 
 .service-node-label {
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .service-node-badge {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-h);
   background: var(--accent-bg);
   border-radius: 999px;
-  padding: 1px 6px;
+  padding: 1px 7px;
+}
+
+/* Capability badge (e.g. "LB"/"gRPC" on nginx) - which job(s) a node is currently doing, distinct
+   from the leader/follower cluster-role badge below both visually (accent border instead of a
+   solid fill) and semantically (a capability a node opts into via the Topology panel, not an
+   elected/failover state it has no control over). See utils/roleBadges.ts. */
+.service-node-capability-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+/* React Flow's default Handle dot, bumped slightly so several stacked along one node's edge stay
+   individually visible (see ServiceNode's multi-handle fan-out, added so parallel edges leave from
+   distinct points instead of merging into one bundle) without dominating these compact nodes. */
+.react-flow__handle {
+  width: 7px;
+  height: 7px;
 }
 
 /* Live cluster role (Redis Sentinel master/replica, Mongo replica-set primary/secondary) - see
@@ -291,7 +315,32 @@ button:disabled {
   letter-spacing: 0.03em;
   text-transform: uppercase;
   border-radius: 999px;
-  padding: 1px 6px;
+  padding: 0 6px;
+}
+
+/* Edge labels (e.g. "Streaming replication (WAL)") default to invisible - with ~40 edges in the
+   full graph, every label on at once buried the lines themselves under a wall of overlapping text
+   pills, which was the actual complaint (not the label styling itself). A label reveals on hover
+   (quick peek without clicking), on `.selected` (react-flow's own class, driven by the `selected`
+   field Diagram.tsx now sets per edge), and on `.animated` (a live traffic run highlights the
+   edges it's actually flowing through - worth labeling those without an extra click). `:hover`
+   targets the edge's own <g>, not the text itself, so the label's own `pointer-events: none`
+   below doesn't prevent the hover from triggering - the edge's invisible wider interaction stroke
+   (react-flow's own hit-test path, unaffected by any of this) is what's actually under the cursor. */
+.react-flow__edge .react-flow__edge-text,
+.react-flow__edge .react-flow__edge-textbg {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.react-flow__edge:hover .react-flow__edge-text,
+.react-flow__edge:hover .react-flow__edge-textbg,
+.react-flow__edge.selected .react-flow__edge-text,
+.react-flow__edge.selected .react-flow__edge-textbg,
+.react-flow__edge.animated .react-flow__edge-text,
+.react-flow__edge.animated .react-flow__edge-textbg {
+  opacity: 1;
 }
 
 .service-node-role-leader {

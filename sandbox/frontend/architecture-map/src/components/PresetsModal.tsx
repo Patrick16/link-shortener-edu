@@ -6,6 +6,10 @@ import type { CustomScenario, InfraConfigSnapshot, Preset } from '../types/contr
 interface Props {
   onClose: () => void
   onLoadScenario: (scenario: CustomScenario) => void
+  // Lets App.tsx's shared useInfraStatus refetch once a preset's apply touches nginx/pgcat/cache/
+  // messaging settings, so Diagram's "only show active participants" filter updates too - without
+  // this, applying a preset here would silently leave the graph showing the pre-apply topology.
+  onInfraChanged: () => void
 }
 
 // Which preset (if any) the "preview & apply" flow is currently working on - distinct from the
@@ -16,7 +20,7 @@ type View = { kind: 'list' } | { kind: 'save' } | { kind: 'preview'; preset: Pre
 // Global (not node-scoped) modal - a preset reconfigures many nodes at once, so unlike every
 // other control here it needs to be reachable regardless of what's selected on the graph. Opened
 // from a header button in App.tsx rather than from inside NodePanel/RunHistoryPanel.
-export function PresetsModal({ onClose, onLoadScenario }: Props) {
+export function PresetsModal({ onClose, onLoadScenario, onInfraChanged }: Props) {
   const [presets, setPresets] = useState<Preset[] | null>(null)
   const [scenarios, setScenarios] = useState<CustomScenario[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -91,7 +95,10 @@ export function PresetsModal({ onClose, onLoadScenario }: Props) {
               onLoadScenario(scenario)
               onClose()
             }}
-            onApplied={refresh}
+            onApplied={() => {
+              refresh()
+              onInfraChanged()
+            }}
             onBack={() => setView({ kind: 'list' })}
           />
         )}
