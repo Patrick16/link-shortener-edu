@@ -247,7 +247,42 @@ button:disabled {
   background: var(--code-bg);
 }
 
+/* Swimlane backdrop behind a region's nodes (see layoutGraph.ts's compound dagre layout +
+   RegionNode.tsx) - deliberately understated (a faint fill + hairline border, not the accent
+   color) so it reads as organizational structure sitting behind the real nodes, not as content
+   competing with them. Sized/positioned exactly to the dagre-computed bounding box, so no padding
+   here - layoutGraph.ts's REGION_PADDING/REGION_LABEL_HEIGHT already account for label clearance
+   and spacing from the nodes inside. */
+.region-node {
+  width: 100%;
+  height: 100%;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.region-node-label {
+  position: absolute;
+  top: 8px;
+  left: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
 .service-node {
+  /* Fills the full NODE_WIDTH/NODE_HEIGHT box React Flow sized this node's wrapper at (see
+     layoutGraph.ts/Diagram.tsx) instead of shrink-wrapping to its own content - without this, a
+     short label like "PgCat" rendered a visibly narrower box than a long one like
+     "ShortenerService", even though dagre laid out every node (and routed every edge's endpoint)
+     assuming the exact same NODE_WIDTH for all of them - arrows ended up pointing at a boundary
+     well past where the visible box actually ended. box-sizing: border-box keeps the border/padding
+     inside that same fixed box rather than growing past it. */
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   gap: 6px;

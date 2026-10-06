@@ -2,10 +2,12 @@ import { useEffect, useMemo, useRef } from 'react'
 import { ReactFlow, ReactFlowProvider, Background, Controls, Panel, MarkerType, useNodesState, useReactFlow, type Node, type Edge } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { ServiceNode, type ServiceNodeData } from './ServiceNode'
+import { RegionNode, type RegionNodeData } from './RegionNode'
+import { OrthogonalEdge, type OrthogonalEdgeData } from './OrthogonalEdge'
 import { PinnedMetrics } from './PinnedMetrics'
 import { resolveServiceId } from '../utils/resolveServiceId'
 import { isTrafficFlowEdge } from '../utils/trafficFlow'
-import { computeLayout, NODE_HEIGHT, NODE_WIDTH } from '../utils/layoutGraph'
+import { computeLayout, edgeKey, NODE_HEIGHT, NODE_WIDTH } from '../utils/layoutGraph'
 import { filterArchitecture, type VisibleConnection } from '../utils/topologyFilter'
 import { getRoleBadges } from '../utils/roleBadges'
 import type { ArchComponent, ArchitectureData } from '../types/architecture'
@@ -26,7 +28,8 @@ interface Props {
   onUnpinMetric: (componentId: string) => void
 }
 
-const nodeTypes = { service: ServiceNode }
+const nodeTypes = { service: ServiceNode, region: RegionNode }
+const edgeTypes = { orthogonal: OrthogonalEdge }
 
 // There used to be a "scenario" teaching-progression filter here (a "1. Minimal stack" /
 // "2. Click tracking" switcher hiding parts of the graph), and it was removed because hiding
@@ -94,7 +97,27 @@ function DiagramInner({
   // change re-lays-out the remaining nodes without leaving gaps where hidden ones used to be.
   const layout = useMemo(() => computeLayout(visible.components, visible.connections), [visible.components, visible.connections])
 
-  const computedNodes: Node[] = useMemo(
+  // Background swimlane boxes (see layoutGraph.ts's compound dagre layout + utils/regions.ts) -
+  // zIndex -1 and non-interactive so they never intercept a click meant for a real node sitting on
+  // top, and listed first in computedNodes below so they paint behind everything else regardless.
+  const regionNodes: Node[] = useMemo(
+    () =>
+      layout.regions.map((region) => ({
+        id: region.id,
+        type: 'region',
+        position: { x: region.x, y: region.y },
+        width: region.width,
+        height: region.height,
+        zIndex: -1,
+        draggable: false,
+        selectable: false,
+        connectable: false,
+        data: { label: region.label } satisfies RegionNodeData,
+      })),
+    [layout.regions],
+  )
+
+  const serviceNodes: Node[] = useMemo(
     () =>
       visible.components.map((component) => {
         const serviceId = resolveServiceId(component, knownServiceIds)
@@ -102,7 +125,7 @@ function DiagramInner({
         return {
           id: component.id,
           type: 'service',
-          position: layout[component.id] ?? { x: 0, y: 0 },
+          position: layout.positions[component.id] ?? { x: 0, y: 0 },
           // Explicit dimensions skip React Flow's async ResizeObserver-based measurement step -
           // a reasonable perf win regardless, and edges need a node's size to compute a path.
           // Shared with layoutGraph.ts's own NODE_WIDTH/NODE_HEIGHT, not duplicated - dagre lays
@@ -123,6 +146,8 @@ function DiagramInner({
       }),
     [visible.components, containers, knownServiceIds, layout, roles, infraStatus, edgesByNode],
   )
+
+  const computedNodes: Node[] = useMemo(() => [...regionNodes, ...serviceNodes], [regionNodes, serviceNodes])
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(computedNodes)
 
@@ -168,18 +193,33 @@ function DiagramInner({
         // Which of the node's several Handles (see edgesByNode above) this specific edge attaches
         // to - its position within the same from/to-grouped list ServiceNode used to decide how
         // many Handles to render, so the two always agree on indices.
-        const sourceHandleIndex = edgesByNode.outgoing.get(connection.from)?.indexOf(connection) ?? 0
-        const targetHandleIndex = edgesByNode.incoming.get(connection.to)?.indexOf(connection) ?? 0
+        const outgoingSiblings = edgesByNode.outgoing.get(connection.from) ?? [connection]
+        const incomingSiblings = edgesByNode.incoming.get(connection.to) ?? [connection]
+        const sourceHandleIndex = outgoingSiblings.indexOf(connection)
+        const targetHandleIndex = incomingSiblings.indexOf(connection)
+        // Only matters for a cross-region edge (OrthogonalEdge falls back to a synthetic midpoint
+        // x when it has no dagre waypoints of its own - see that file) - nudges that midpoint so
+        // several such edges converging on the same node don't all land on the exact same x and
+        // merge back into one line. Keyed off whichever end actually has more than one sibling
+        // edge (usually the target, since fan-in is the common shape here) so a plain 1-in-1-out
+        // edge gets no nudge at all.
+        const laneCount = incomingSiblings.length > 1 ? incomingSiblings.length : outgoingSiblings.length
+        const laneIndex = incomingSiblings.length > 1 ? targetHandleIndex : sourceHandleIndex
+        const laneOffset = laneCount > 1 ? (laneIndex - (laneCount - 1) / 2) * 16 : 0
         return {
           id: `${connection.from}-${connection.to}-${index}`,
           source: connection.from,
           target: connection.to,
           sourceHandle: `source-${sourceHandleIndex}`,
           targetHandle: `target-${targetHandleIndex}`,
-          // Orthogonal, right-angle routing instead of the default bezier curve - with this many
-          // nodes, curved edges crossing at odd angles were a big part of why the graph read as a
-          // tangle rather than a topology.
-          type: 'step',
+          // Custom orthogonal routing via dagre's own interior waypoints (see
+          // layoutGraph.ts's computeLayout and OrthogonalEdge.tsx) instead of React Flow's
+          // built-in 'step' type, which only ever looks at one edge's own two endpoints - several
+          // edges running through the same column gap in parallel used to collapse into one
+          // indistinguishable bundle for most of their length because of that; dagre's own
+          // edge-routing points already keep them in separate lanes.
+          type: 'orthogonal',
+          data: { wayPoints: layout.edgePaths[edgeKey(connection.from, connection.to)], laneOffset } satisfies OrthogonalEdgeData,
           label: connection.label,
           animated: isFlowing,
           // Drives the CSS `.selected` class react-flow adds to the edge's own <g> (not used for
@@ -215,7 +255,7 @@ function DiagramInner({
           labelBgBorderRadius: 4,
         }
       }),
-    [visible.connections, trafficActive, selectedConnectionIndex, roles, edgesByNode],
+    [visible.connections, trafficActive, selectedConnectionIndex, roles, edgesByNode, layout],
   )
 
   return (
@@ -225,7 +265,14 @@ function DiagramInner({
         edges={edges}
         onNodesChange={onNodesChange}
         nodeTypes={nodeTypes}
-        onNodeClick={(_, node) => onSelectComponent(node.id)}
+        edgeTypes={edgeTypes}
+        onNodeClick={(_, node) => {
+          // Region backdrops are selectable: false (see regionNodes above), which already stops
+          // react-flow's own click-to-select behavior, but onNodeClick still fires for any node -
+          // guard explicitly rather than relying on onSelectComponent to no-op for an unknown id.
+          if (node.type === 'region') return
+          onSelectComponent(node.id)
+        }}
         onEdgeClick={(_, edge) => {
           const index = data.connections.findIndex((c, i) => `${c.from}-${c.to}-${i}` === edge.id)
           if (index >= 0) onSelectConnection(index)
