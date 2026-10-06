@@ -155,7 +155,17 @@ export function computeLayout(components: ArchComponent[], connections: ArchConn
   const groupMembers = new Map<string, ArchComponent[]>()
   const groupIdOf = new Map<string, string>()
   for (const component of components) {
-    const groupId = getRegionId(component.id) ?? component.id
+    const regionId = getRegionId(component.id)
+    // regions.ts's COMPONENT_REGION is a hand-maintained map, not derived from architecture.json -
+    // nothing else enforces the two stay in sync, so a component added to architecture.json without
+    // a matching regions.ts entry would otherwise lose its swimlane with zero visible symptom (see
+    // the fallback below). Warning here, not throwing: the fallback itself is still correct and
+    // intentional for a genuinely unregioned component (e.g. in a test fixture), this just makes a
+    // real architecture.json gap loud instead of a silent missing region box.
+    if (regionId === undefined) {
+      console.warn(`computeLayout: no region mapped for component "${component.id}" - add it to COMPONENT_REGION in regions.ts`)
+    }
+    const groupId = regionId ?? component.id
     groupIdOf.set(component.id, groupId)
     const members = groupMembers.get(groupId)
     if (members) members.push(component)

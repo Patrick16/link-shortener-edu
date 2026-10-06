@@ -31,6 +31,13 @@ interface Props {
 const nodeTypes = { service: ServiceNode, region: RegionNode }
 const edgeTypes = { orthogonal: OrthogonalEdge }
 
+// Pixel nudge for one end of an edge among its siblings on that same end (see laneOffset below) -
+// centered around 0 so the group of siblings straddles the node's own midpoint rather than all
+// shifting to one side.
+function laneNudge(index: number, count: number): number {
+  return count > 1 ? (index - (count - 1) / 2) * 16 : 0
+}
+
 // There used to be a "scenario" teaching-progression filter here (a "1. Minimal stack" /
 // "2. Click tracking" switcher hiding parts of the graph), and it was removed because hiding
 // future-curriculum steps caused "what's hidden right now?" confusion. The filter below is a
@@ -176,12 +183,17 @@ function DiagramInner({
     })
   }, [computedNodes, layout, setNodes])
 
-  // The visible node count only changes when a toggle in the Topology panel flips (not on every
-  // live container-status poll, since that never adds/removes components) - re-fit the viewport
-  // then, since React Flow's own `fitView` prop only fits once on initial mount.
+  // Keyed off `layout`, not `visible.components.length` - a topology change can swap a node's
+  // entire edge set without changing which nodes are visible at all (nginx keeping only its gRPC
+  // fan-out edges once nginxBypassed flips while messagingMode is already 'grpc' is exactly this
+  // case - see the layoutRef comment above), and `layout`'s own [visible.components,
+  // visible.connections] deps already catch that. `infraStatus` itself only changes via an explicit
+  // refresh() (Topology Save / Presets apply / reuse-a-run, see useInfraStatus) - never a live poll
+  // tick - so `layout`'s reference changing here still means "topology changed", not "container
+  // status refreshed". Re-fits since React Flow's own `fitView` prop only fits once on initial mount.
   useEffect(() => {
     fitView({ duration: 300 })
-  }, [visible.components.length, fitView])
+  }, [layout, fitView])
 
   const edges: Edge[] = useMemo(
     () =>
@@ -200,12 +212,13 @@ function DiagramInner({
         // Only matters for a cross-region edge (OrthogonalEdge falls back to a synthetic midpoint
         // x when it has no dagre waypoints of its own - see that file) - nudges that midpoint so
         // several such edges converging on the same node don't all land on the exact same x and
-        // merge back into one line. Keyed off whichever end actually has more than one sibling
-        // edge (usually the target, since fan-in is the common shape here) so a plain 1-in-1-out
-        // edge gets no nudge at all.
-        const laneCount = incomingSiblings.length > 1 ? incomingSiblings.length : outgoingSiblings.length
-        const laneIndex = incomingSiblings.length > 1 ? targetHandleIndex : sourceHandleIndex
-        const laneOffset = laneCount > 1 ? (laneIndex - (laneCount - 1) / 2) * 16 : 0
+        // merge back into one line. Combines an independent nudge from each end rather than picking
+        // whichever end has more siblings - a node can fan out AND fan in at once (e.g. frontend-app
+        // -> nginx has 5 outgoing siblings at the source and 4 incoming at the target simultaneously),
+        // and picking only one side left the other side's edges free to collapse back together.
+        // laneNudge is 0 whenever an end has no more than 1 sibling, so a plain 1-in-1-out edge still
+        // gets no nudge at all, and an edge fanning on only one end behaves exactly as before.
+        const laneOffset = laneNudge(sourceHandleIndex, outgoingSiblings.length) + laneNudge(targetHandleIndex, incomingSiblings.length)
         return {
           id: `${connection.from}-${connection.to}-${index}`,
           source: connection.from,

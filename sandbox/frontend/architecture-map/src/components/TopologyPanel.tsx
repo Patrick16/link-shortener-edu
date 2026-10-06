@@ -75,8 +75,13 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
       const applyResult = await applyInfraConfig({ infra: draft, replicas: [] })
       setResult(applyResult)
       onApplied()
-    } catch {
-      setError('Failed to apply - see the console for details.')
+    } catch (err) {
+      // applyInfraConfig catches each setting's own error internally (see its step() helper) and
+      // reports them via `result.failed` instead of throwing - this branch only fires for something
+      // genuinely unexpected outside that per-step handling, so it's worth surfacing the real detail
+      // rather than a generic message, same as the per-node toggle controls this panel replaced used to.
+      console.error('TopologyPanel: applyInfraConfig failed unexpectedly', err)
+      setError(`Failed to apply: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setBusy(false)
     }
@@ -98,7 +103,7 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
 
         <InfraToggleControl
           label="Load balancing (nginx)"
-          description="Off removes nginx from the path entirely - the app and the load generator both talk straight to a single link-api/redirect-api container instead."
+          description="Off reroutes the load generator (k6) straight to a single link-api/redirect-api container, bypassing nginx - nginx itself keeps running, so the real app UI is unaffected. The diagram's direct frontend-app edges illustrate the broader 'entry point removed' topology this toggle implies, not a literal trace of today's backend behavior - see architecture.json's own note on those edges."
           enabled={!draft.nginxBypassed}
           busy={busy}
           onToggle={(enabled) => setDraft({ ...draft, nginxBypassed: !enabled })}

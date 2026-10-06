@@ -79,7 +79,12 @@ export async function applyInfraConfig(config: InfraConfigSnapshot): Promise<App
     try {
       await run()
       applied.push(label)
-    } catch {
+    } catch (err) {
+      // Logged here, not just pushed into `failed` - `failed` only ever carries the label (surfaced
+      // in the UI as "X failed"), so without this the actual reason (a ControlApiError's status/body,
+      // a network failure, ...) was discarded entirely. TopologyPanel's own catch tells the user to
+      // "see the console for details" - this is what makes that claim true.
+      console.error(`applyInfraConfig: "${label}" failed`, err)
       failed.push(label)
     }
   }
