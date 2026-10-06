@@ -1086,6 +1086,88 @@ public class DockerService : IDockerService
         return new PostgresConnectionStats(byDatabase, byDatabase.Values.Sum());
     }
 
+    // --formatter=json instead of parsing rabbitmqctl's plain-text table (unlike SHOW POOLS/
+    // pg_stat_activity above) - rabbitmqctl's default text output interleaves an informational
+    // "Listing queues for vhost ..." banner with the data on the same stream depending on version,
+    // where psql's `-tAc` flag reliably strips that noise for the Postgres-based reads above. JSON
+    // is the one format rabbitmqctl guarantees won't change shape across 3.x point releases.
+    internal sealed record RabbitMqQueueInfo(string Name, int Messages);
+    private static readonly JsonSerializerOptions RabbitMqJsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    // rabbitmqctl's json formatter emits newline-delimited JSON objects for list_queues (one row per
+    // line), not a single wrapped array - but that shape isn't documented as a stable guarantee
+    // across versions, so this tolerates a real array too rather than assuming one or the other.
+    internal static List<RabbitMqQueueInfo> ParseRabbitMqQueueList(string output)
+    {
+        var trimmed = output.TrimStart();
+        if (trimmed.StartsWith('['))
+        {
+            return JsonSerializer.Deserialize<List<RabbitMqQueueInfo>>(trimmed, RabbitMqJsonOptions) ?? [];
+        }
+
+        var result = new List<RabbitMqQueueInfo>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!line.StartsWith('{'))
+            {
+                continue;
+            }
+
+            // A line starting with '{' can still be malformed/truncated - e.g. the 10s ExecTimeout
+            // above cutting rabbitmqctl off mid-stream. Skipping just that line keeps this read-only
+            // status query "fails safely" like every other ExecAsync-based read in this class (see
+            // the comment above ExecAsync), instead of taking the whole panel down with an uncaught
+            // JsonException over one bad line.
+            try
+            {
+                var queue = JsonSerializer.Deserialize<RabbitMqQueueInfo>(line, RabbitMqJsonOptions);
+                if (queue is not null)
+                {
+                    result.Add(queue);
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return result;
+    }
+
+    public async Task<DeadLetterQueueStats?> GetDeadLetterQueueStatsAsync(CancellationToken ct)
+    {
+        var container = await FindAsync("rabbitmq", ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        // Needs the exit code, unlike the other ExecAsync-based reads in this class - those read
+        // config/status where "empty/unparseable output" already fails safely as itself (see
+        // ExecAsync's own comment), but here an empty result is indistinguishable from the real
+        // "zero dead-lettered messages" success case. Without checking the exit code, a failed
+        // rabbitmqctl invocation (e.g. a transient auth/cookie mismatch right after the container
+        // restarts) would silently report "all clear" instead of surfacing the failure - exactly the
+        // kind of false negative this panel exists to avoid.
+        var (exitCode, output) = await ExecWithExitCodeAsync(container.ID, ["rabbitmqctl", "list_queues", "name", "messages", "--formatter=json"], ct);
+        if (exitCode != 0)
+        {
+            throw new InvalidOperationException($"rabbitmqctl exited {exitCode}: {output}");
+        }
+
+        var allQueues = ParseRabbitMqQueueList(output);
+
+        // ".dead" is RabbitMqConsumer's own DeadQueueName convention ("{queueName}.dead") - matching
+        // on the suffix instead of a hardcoded queue list means a new consumer's dead-letter queue
+        // shows up here automatically, with nothing to keep in sync by hand.
+        var deadQueues = allQueues
+            .Where(q => q.Name.EndsWith(".dead", StringComparison.Ordinal))
+            .Select(q => new DeadLetterQueueDepth(q.Name, q.Messages))
+            .ToList();
+
+        return new DeadLetterQueueStats(deadQueues, deadQueues.Sum(q => q.MessageCount));
+    }
+
     // Redis Sentinel can fail over on its own (see infra/redis/sentinel.conf) - "redis-master" is
     // only a hostname/label in architecture.json, not a guarantee that container is still the one
     // actually serving writes. ROLE is asked of each of the three data nodes directly, not read off

@@ -133,7 +133,7 @@
       "type": "infrastructure",
       "icon": "🐰",
       "description": "Durable queue between the two APIs and their workers",
-      "capabilities": ["rabbitmq-prefetch", "messaging-mode"],
+      "capabilities": ["rabbitmq-prefetch", "messaging-mode", "dlq-stats"],
       "activeWhen": { "messagingMode": "rabbitmq" },
       "details": {
         "purpose": "Decouples each API's synchronous response from the actual Postgres/Mongo writes it triggers",

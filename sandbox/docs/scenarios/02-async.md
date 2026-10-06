@@ -91,8 +91,17 @@ spans into `ShortenerService` (see `docs/scenarios/01-minimal.md#observability`)
 
 ## What's still missing from the target design
 
-- **Dead-letter handling** — a message that fails processing every time just requeues forever.
-  No DLQ, no poison-message limit.
+- **Dead-letter handling** — built, partially: `RabbitMqConsumer` dead-letters a message to
+  `{queue}.dead` three ways, not just one — a *batch-wide* handler exception nacks-and-requeues up
+  to 5 times (`MaxDeliveryAttempts`) before giving up, but a single message that fails to
+  *deserialize*, or one a handler explicitly flags as a business rejection (`PoisonMessageIds`),
+  dead-letters immediately on its first delivery, no retries at all. A non-zero count on the live
+  per-queue counter (architecture-map's RabbitMQ node panel, 2026-10-06) can be any of the three —
+  check the message's own `x-dead-reason` header (`deserialize-failed`/`business-rejected`/exhausted
+  retries, see `RabbitMqConsumer.PublishDeadLetterAsync`) before assuming it survived 5 attempts.
+  What's still missing is anything *reading* those
+  queues otherwise — no consumer, no alerting, and no way to inspect or re-publish a dead-lettered
+  message short of the RabbitMQ management UI itself.
 - **Frontend** — no UI shows click counts yet (`DashboardPage` is still a stub).
 - **Geo accuracy in local dev** — the client IP `RedirectApi` sees is whatever's on the connection
   (docker-internal address behind `nginx`, not a real `X-Forwarded-For` chain), so it's almost

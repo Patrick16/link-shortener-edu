@@ -22,6 +22,7 @@ public sealed class CapabilityFactory
         ["mongo-read-preference"] = (docker, loggerFactory) => new MongoReadPreferenceCapability(docker, loggerFactory.CreateLogger<MongoReadPreferenceCapability>()),
         ["replication-lag"] = (docker, loggerFactory) => new ReplicationLagCapability(docker, loggerFactory.CreateLogger<ReplicationLagCapability>()),
         ["flush-cache"] = (docker, _) => new FlushCacheCapability(docker),
+        ["dlq-stats"] = (docker, loggerFactory) => new DlqStatsCapability(docker, loggerFactory.CreateLogger<DlqStatsCapability>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

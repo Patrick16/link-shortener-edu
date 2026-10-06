@@ -111,4 +111,9 @@ public interface IDockerService
     // server-pool-size half of. Recreates the same DbTouchingServices set the pgcat toggle does.
     int GetNpgsqlPoolSize();
     Task<int> SetNpgsqlPoolSizeAsync(int poolSize, CancellationToken ct);
+
+    // Live depth of every "{queue}.dead" queue, read directly off RabbitMQ via `rabbitmqctl
+    // list_queues` in a Docker exec (same approach as FlushRedisAsync) - not polled/cached, a fresh
+    // snapshot on every call. Null means the rabbitmq container isn't running.
+    Task<DeadLetterQueueStats?> GetDeadLetterQueueStatsAsync(CancellationToken ct);
 }

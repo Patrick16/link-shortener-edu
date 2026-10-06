@@ -226,6 +226,19 @@ export interface PostgresConnectionStats {
   total: number
 }
 
+// One row per "{queue}.dead" queue RabbitMQ currently knows about - see ControlApi's
+// DeadLetterQueueStats. Nothing consumes these queues today, so a non-zero count means a message
+// exhausted its retries (or failed to deserialize) and is sitting there unread.
+export interface DeadLetterQueueDepth {
+  queueName: string
+  messageCount: number
+}
+
+export interface DeadLetterQueueStats {
+  queues: DeadLetterQueueDepth[]
+  totalMessages: number
+}
+
 // Which physical container is actually playing which role right now - Redis Sentinel and MongoDB's
 // replica set can both re-elect a leader with zero involvement from this app, so architecture.json's
 // static node ids/labels can't be trusted for this the way they can for everything else. role is

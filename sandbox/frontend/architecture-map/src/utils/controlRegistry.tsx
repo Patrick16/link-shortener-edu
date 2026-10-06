@@ -11,6 +11,7 @@ import { MongoReadPreferenceControl } from '../components/MongoReadPreferenceCon
 import { ReplicationLagControl } from '../components/ReplicationLagControl'
 import { PgcatConnectionsPanel } from '../components/PgcatConnectionsPanel'
 import { PostgresConnectionsPanel } from '../components/PostgresConnectionsPanel'
+import { DlqStatsPanel } from '../components/DlqStatsPanel'
 import type { CapabilityControlProps } from './capabilityControlProps'
 
 export type { CapabilityControlProps }
@@ -31,6 +32,7 @@ const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> 
   'replication-lag': ReplicationLagControl,
   'pgcat-connections': PgcatConnectionsPanel,
   'postgres-connections': PostgresConnectionsPanel,
+  'dlq-stats': DlqStatsPanel,
 }
 
 export function renderCapabilityControls(component: ArchComponent, serviceId: string, instances: ManagedContainer[]) {
