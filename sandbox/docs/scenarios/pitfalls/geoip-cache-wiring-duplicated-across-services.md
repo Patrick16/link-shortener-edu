@@ -88,3 +88,9 @@ HEAD)
 ### Patterns
 
 - [Caching](pattern:caching) — the shared cache this wiring backs
+
+### Pitfalls
+
+- [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
+  — same "services must agree on cache config, not just cache code" lesson, found later for a
+  different shared cache (`LinkCacheService`'s `InstanceName` instead of this one's DI wiring)

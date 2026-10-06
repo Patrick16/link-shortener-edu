@@ -52,6 +52,10 @@ other is disposable.
   (architecture-bug) — known limitation
 - ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)
   (performance) — fixed
+- 🐛 [A read immediately after a write can land on a lagging replica](pitfall:pgcat-read-your-writes-race)
+  (race-condition) — fixed; this node's cache-first read is what the fix relies on
+- 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
+  (coupling) — fixed; this node's own cache reads were invisible to LinkApi/ShortenerService's writes
 
 ## Relatives
 

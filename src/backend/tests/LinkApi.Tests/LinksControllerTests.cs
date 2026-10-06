@@ -84,6 +84,46 @@ public class LinksControllerTests
     }
 
     [Fact]
+    public async Task CreateLink_Success_WritesOptimisticCacheEntryWithShortTtl()
+    {
+        // Closes the PgCat read-your-writes race (sandbox/docs/scenarios/pitfalls/
+        // pgcat-read-your-writes-race.md): RedirectApi is cache-first, so this is what lets an
+        // immediate redirect right after create resolve without ever touching Postgres.
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out _, out var hashGenerator);
+        hashGenerator.Setup(x => x.Generate("https://example.com")).Returns("abc12345");
+
+        await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
+
+        cache.Verify(
+            x => x.CacheAsync(
+                It.Is<Link>(l => l.Hash == "abc12345" && l.OriginalLink == "https://example.com" && l.ShortenLink == "abc12345"),
+                "abc12345",
+                It.IsAny<CancellationToken>(),
+                60),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateLink_DispatchThrows_NeverCaches()
+    {
+        // Ordering matters: in sync/gRPC mode a failed dispatch means the link was never created at
+        // all, and the request fails outright - caching first would leave a ghost entry for a hash
+        // that will never resolve anywhere.
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out var dispatcher, out var hashGenerator);
+        hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
+        dispatcher
+            .Setup(x => x.DispatchAsync(It.IsAny<LinkCreatedEvent>(), Topics.LinkCreated, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("downstream unreachable"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None));
+
+        cache.Verify(x => x.CacheAsync(It.IsAny<Link>(), It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<int>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CreateLink_EmptyOriginalLink_ReturnsBadRequestWithoutPublishing()
     {
         await using var context = NewContext();

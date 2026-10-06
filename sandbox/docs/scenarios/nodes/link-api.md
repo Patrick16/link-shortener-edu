@@ -27,7 +27,13 @@ public async Task<ActionResult<LinkResponse>> CreateLink(
 {
     var hash = _hashGenerator.Generate(request.OriginalLink);
     var linkCreatedEvent = new LinkCreatedEvent { Hash = hash, OriginalLink = request.OriginalLink, /* ... */ };
-    await _publisher.PublishAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
+    await _dispatcher.DispatchAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
+
+    // Optimistic cache write, short TTL - closes the PgCat read-your-writes race for an
+    // immediate redirect. See this node's Pitfalls for why.
+    await _service.CacheAsync(new Link(hash, request.OriginalLink, hash, createdAt, userId),
+        hash, cancellationToken, OptimisticCacheTtlSeconds);
+
     return new LinkResponse(hash, createdAt); // returns before ShortenerService has persisted anything
 }
 ```
@@ -35,6 +41,10 @@ public async Task<ActionResult<LinkResponse>> CreateLink(
 The hash comes from `IHashGenerator` (`Sha256Base62HashGenerator` — SHA-256 of the original URL,
 Base62-encoded, truncated), a pure function with no database dependency, which is what makes the
 synchronous-return/async-persist split possible in the first place.
+
+`DispatchAsync` goes through `IEventDispatcher`, not a direct publisher call — see
+[Async messaging](pattern:async-messaging) for the RabbitMQ/gRPC transport toggle this abstracts
+over. The cache write only happens after it succeeds, not before (see this node's Pitfalls).
 
 A Bearer token is read *optionally* — `CreateLink` has no `[Authorize]`, so anonymous callers work
 identically to authenticated ones; the only difference is whether `Link.UserId` ends up populated
@@ -45,6 +55,10 @@ either a valid Bearer token or control-api's internal API key scheme, and always
 
 - ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)
   (performance) — fixed
+- 🐛 [A read immediately after a write can land on a lagging replica](pitfall:pgcat-read-your-writes-race)
+  (race-condition) — fixed; this node writes the optimistic cache entry that closes it
+- 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
+  (coupling) — fixed; found while verifying the fix above
 
 ## Relatives
 

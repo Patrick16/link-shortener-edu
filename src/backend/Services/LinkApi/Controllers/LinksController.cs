@@ -24,6 +24,17 @@ public class LinksController(
 {
     private const int PageSize = 50;
 
+    // Closes the PgCat read-your-writes race (see sandbox/docs/scenarios/pitfalls/
+    // pgcat-read-your-writes-race.md): RedirectApi's lookup is cache-first, so populating Redis here
+    // means an immediate redirect right after create never touches Postgres at all - sidestepping
+    // both replica lag AND the async publish/consume gap before ShortenerService persists the row.
+    // 60s balances two opposing risks: long enough that normal async-consume latency (including
+    // under a RabbitMQ backlog from load testing) finishes well within it, short enough to bound how
+    // long this entry can be wrong if the persist genuinely never happens. ShortenerService
+    // overwrites this same cache key with the full TTL once it actually persists
+    // (LinkCreatedConsumer.cs) - last-write-wins, no coordination needed.
+    private const int OptimisticCacheTtlSeconds = 60;
+
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _service = service;
     private readonly IEventDispatcher _dispatcher = dispatcher;
@@ -75,6 +86,14 @@ public class LinksController(
         // CreateLink latency. In gRPC/sync mode, this instead awaits ShortenerService persisting
         // the row before returning - see IEventDispatcher's own comment for why.
         await _dispatcher.DispatchAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
+
+        // Optimistic, short-TTL cache entry - see OptimisticCacheTtlSeconds. Written only after
+        // DispatchAsync succeeds, not before: in sync/gRPC mode a failed dispatch means the link was
+        // never created at all, and this request fails outright (see GlobalExceptionHandler's
+        // RpcException mapping) - writing the cache entry first would leave a ghost entry for a hash
+        // that will never resolve anywhere, for up to a minute, for no reason.
+        var link = new Link(hash, request.OriginalLink, hash, createdAt, userId);
+        await _service.CacheAsync(link, hash, cancellationToken, OptimisticCacheTtlSeconds);
 
         // Debug, not Information - this fires on every CreateLink call, including under a k6 load
         // test hammering this endpoint at hundreds of req/s. Flip LinkApi to Debug locally when you

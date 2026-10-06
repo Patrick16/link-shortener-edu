@@ -57,6 +57,9 @@ assumed it would only ever run as one instance.
   (race-condition) — fixed
 - ⚠️ [Point-to-point RPC dispatch silently breaks pub/sub fan-out to the other consumers](pitfall:sync-dispatch-breaks-pubsub-fanout)
   (architecture-bug) — known limitation
+- 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
+  (coupling) — fixed; this node's own Redis pre-warm (`LinkCreatedConsumer.cs`, not shown in the
+  snippet above) never actually reached RedirectApi's cache before this fix
 
 ## Relatives
 
