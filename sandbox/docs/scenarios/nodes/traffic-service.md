@@ -22,6 +22,18 @@ rather than failing the click). Mongo is schema-less on purpose: this data grows
 the core record, and neither store is transactional with the other — see this node's Pitfalls for
 what that non-transactionality cost before it was handled correctly.
 
+**Why no transactional outbox here.** The textbook answer to a non-transactional dual-write is an
+outbox table plus a relay worker, so this is a deliberate choice, not an oversight. Three things
+already in place cover the failure modes an outbox would also cover: the Postgres write runs first
+and is retried-safe (skipped if the `Id` is already stored), the Mongo write is unconditional *and*
+idempotent (upsert by `Id`, see this node's Pitfalls), and RabbitMQ itself requeues a message whose
+consumer connection drops before it's acked — so "the process dies between the two writes" already
+results in redelivery, not loss, via the broker rather than app code. The only gap an outbox would
+still close is a consumer that hangs *without* dropping its AMQP connection (e.g. a stuck thread) —
+rare, and not meaningfully improved by adding an outbox either, since that scenario would hang the
+outbox relay just as easily. Net: here, ordering + idempotency + broker redelivery already buy what
+an outbox buys, without the extra table, relay worker, and latency.
+
 This is a **separate consumer** from [ShortenerService](node:shortener-service)'s own
 `ClickTrackedEvent` consumer, which only maintains `Links.ClickCount` as a fast display counter —
 two consumers on the same event, for two different, deliberately independent reasons (a display
