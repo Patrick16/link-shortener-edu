@@ -48,6 +48,12 @@ two real bugs found in this exact code path.
   (concurrency) — fixed
 - 🐛 [Shared `Common` library pulled in the full Redis client just for one interface](pitfall:common-lib-full-redis-client-dependency)
   (coupling) — fixed
+- ⚠️ [Two independent event consumers doubled load on a shared rate-limited external API](pitfall:geoip-dual-consumer-rate-limit-doubling)
+  (architecture-bug) — fixed
+- ⚠️ [Shared-cache DI wiring copy-pasted across two independently deployed services](pitfall:geoip-cache-wiring-duplicated-across-services)
+  (coupling) — fixed
+- ⚠️ [A side-effect cache failure took down an entire gRPC request, not just the caching optimization](pitfall:geoip-cache-write-failure-fails-grpc-request)
+  (resilience-gap) — fixed
 
 ## Relatives
 
@@ -56,7 +62,10 @@ two real bugs found in this exact code path.
 - [Redis](node:redis-master)
 - [LinkApi](node:link-api)
 - [RedirectApi](node:redirect-api)
+- [TrafficService](node:traffic-service) — a second, independent cache (geo-IP lookups via
+  `CachingGeoIpResolver`) using the same cache-aside idea, not `EntityCacheService`
 
 ### Patterns
 
-None yet.
+- [Async messaging](pattern:async-messaging) — one of this pattern's own fan-out pitfalls was
+  fixed by sharing a cache between two independent consumers

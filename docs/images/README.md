@@ -1,10 +1,12 @@
-# Screenshots for the root README
+# Images for the root README
 
-The root [`README.md`](../../README.md) references these files. They are retina (2x) captures,
-cropped to the relevant area, taken with the stack running and a load test in progress.
+The root [`README.md`](../../README.md) references these files. The screenshots (`.png`) are
+retina (2x) captures, cropped to the relevant area, taken with the stack running and a load test
+in progress; the logo (`.svg`) is hand-authored vector art.
 
 | File | What it shows |
 |---|---|
+| `logo.svg` / `logo-dark.svg` | Project logo (light/dark-mode variants, switched via `<picture>`) |
 | `architecture-map.png` | Sandbox (http://localhost:5174): the whole graph under load |
 | `node-panel.png` | The `pgcat` node panel: pooling, read/write splitting, pool sizes, connections |
 | `load-testing.png` | A k6 run in progress: endpoint steps, test data, VU / iteration charts |

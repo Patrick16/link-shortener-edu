@@ -55,6 +55,8 @@ assumed it would only ever run as one instance.
   (connection-pooling) — fixed
 - 🐛 [Click-count increment raced once the consumer became scalable](pitfall:shortener-click-count-race)
   (race-condition) — fixed
+- ⚠️ [Point-to-point RPC dispatch silently breaks pub/sub fan-out to the other consumers](pitfall:sync-dispatch-breaks-pubsub-fanout)
+  (architecture-bug) — known limitation
 
 ## Relatives
 

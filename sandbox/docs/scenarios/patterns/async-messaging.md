@@ -63,6 +63,14 @@ different reasons — see [ShortenerService](node:shortener-service)).
   (connection-pooling) — fixed
 - 🐛 [Shutting down the publisher only disposed idle channels, not ones still in flight](pitfall:rabbitmq-publisher-dispose-misses-in-flight-channels)
   (memory-leak) — fixed
+- ⚠️ [Click counter incremented before the dispatch it should depend on](pitfall:click-counter-incremented-before-dispatch)
+  (resilience-gap) — fixed
+- ⚠️ [Point-to-point RPC dispatch silently breaks pub/sub fan-out to the other consumers](pitfall:sync-dispatch-breaks-pubsub-fanout)
+  (architecture-bug) — known limitation
+- ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)
+  (performance) — fixed
+- ⚠️ [Two independent event consumers doubled load on a shared rate-limited external API](pitfall:geoip-dual-consumer-rate-limit-doubling)
+  (architecture-bug) — fixed
 
 ## Relatives
 
@@ -76,4 +84,5 @@ different reasons — see [ShortenerService](node:shortener-service)).
 
 ### Patterns
 
-None yet.
+- [Caching](pattern:caching) — the fix for one fan-out pitfall above is a cache shared between two
+  independent consumers of the same event

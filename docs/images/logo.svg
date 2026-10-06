@@ -1,0 +1,16 @@
+<svg width="640" height="200" viewBox="0 0 640 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="linkshort — high-load patterns playground">
+  <g transform="translate(40,40) scale(1.2)">
+    <g transform="translate(35,50) rotate(-45)">
+      <rect x="-28" y="-13" width="56" height="26" rx="13" fill="#16213E"/>
+    </g>
+    <g transform="translate(65,50) rotate(-45)">
+      <rect x="-28" y="-13" width="56" height="26" rx="13" fill="none" stroke="#2DD4BF" stroke-width="5"/>
+      <line x1="-16" y1="0" x2="16" y2="0" stroke="#2DD4BF" stroke-width="3"/>
+      <circle cx="-16" cy="0" r="5" fill="#2DD4BF"/>
+      <circle cx="0" cy="0" r="5.5" fill="#2DD4BF"/>
+      <circle cx="16" cy="0" r="5" fill="#2DD4BF"/>
+    </g>
+  </g>
+  <text x="188" y="95" font-family="'Segoe UI', Arial, sans-serif" font-weight="700" font-size="40" fill="#16213E">linkshort<tspan font-family="Consolas, 'Courier New', monospace" font-weight="600" font-size="22" fill="#2DD4BF" dx="4" dy="-4">{edu}</tspan></text>
+  <text x="188" y="128" font-family="Consolas, 'Courier New', monospace" font-weight="500" font-size="14" fill="#64748B" letter-spacing="0.3">high-load patterns playground</text>
+</svg>

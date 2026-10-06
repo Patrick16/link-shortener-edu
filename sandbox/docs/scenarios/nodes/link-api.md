@@ -43,7 +43,8 @@ either a valid Bearer token or control-api's internal API key scheme, and always
 
 ## Pitfalls
 
-None yet.
+- ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)
+  (performance) — fixed
 
 ## Relatives
 

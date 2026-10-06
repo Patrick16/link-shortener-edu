@@ -58,6 +58,12 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
   (resilience-gap) — fixed
 - 🐛 [Docker-internal IPs were misclassified as public, hitting a real external API on every click](pitfall:traffic-geoip-dualstack-misclassified)
   (cpu-leak) — fixed
+- ⚠️ [Two independent event consumers doubled load on a shared rate-limited external API](pitfall:geoip-dual-consumer-rate-limit-doubling)
+  (architecture-bug) — fixed
+- ⚠️ [Shared-cache DI wiring copy-pasted across two independently deployed services](pitfall:geoip-cache-wiring-duplicated-across-services)
+  (coupling) — fixed
+- ⚠️ [A side-effect cache failure took down an entire gRPC request, not just the caching optimization](pitfall:geoip-cache-write-failure-fails-grpc-request)
+  (resilience-gap) — fixed
 
 ## Relatives
 

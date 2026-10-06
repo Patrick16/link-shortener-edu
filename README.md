@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/logo-dark.svg">
+    <img src="docs/images/logo.svg" alt="linkshort — high-load patterns playground" width="420">
+  </picture>
+</p>
+
 # Link Shortener — a high-load patterns playground
 
 An **educational project** built around a deliberately simple product — a link shortener — whose
@@ -11,6 +18,19 @@ previous one, and you can watch it work (and break) live.
 > given pattern can be applied — not a claim that it is the only correct way, or even the best one
 > for your case. Trade-offs, alternatives and the mistakes made along the way are part of the
 > material; treat the code as a starting point for discussion, not a reference implementation.
+
+## Agenda
+
+New to the project? Start with the **[User Guide](sandbox/docs/user-guide.md)** — a complete
+walkthrough of the sandbox.
+
+- [What makes this project different](#what-makes-this-project-different)
+- [A look inside](#a-look-inside)
+- [Scenarios](#scenarios)
+- [Tech stack](#tech-stack)
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Documentation](#documentation)
 
 ## What makes this project different
 
@@ -198,3 +218,4 @@ architecture map, click through the nodes, and start a small load test.
 - [Repository map](docs/repository-map.md) — how the repository is laid out and why.
 - [`sandbox/docs/`](sandbox/docs/) — scenarios, node and pattern explanations, pitfalls.
 - [`src/docs/`](src/docs/) — documentation of the product's own code (API shapes, DB schema).
+- [User Guide](sandbox/docs/user-guide.md) — a complete, screenshot-led walkthrough of the sandbox.
