@@ -26,7 +26,7 @@
       "description": "External entry point for LinkApi and RedirectApi - the only reason either can have more than one replica",
       "capabilities": ["nginx-toggle"],
       "details": {
-        "purpose": "Reverse proxy in front of link-api/redirect-api; re-resolves their service name against Docker's embedded DNS on a short TTL so it picks up replicas added/removed via Scale without a config reload",
+        "purpose": "Reverse proxy in front of link-api/redirect-api; re-resolves their service name against Docker's embedded DNS on a short TTL so it picks up replicas added/removed via Scale without a config reload. Also internally fans out gRPC calls (messaging-mode=grpc) to shortener-service/traffic-service on ports 9090/9091 - not published to the host, same resolve-based upstream pattern as its HTTP reverse-proxying. ReportingService has no gRPC endpoint to fan out to (see the redirect-api → nginx edge's own notes)",
         "technologies": [
           "nginx"
         ],
@@ -132,7 +132,7 @@
       "type": "infrastructure",
       "icon": "🐰",
       "description": "Durable queue between the two APIs and their workers",
-      "capabilities": ["rabbitmq-prefetch"],
+      "capabilities": ["rabbitmq-prefetch", "messaging-mode"],
       "details": {
         "purpose": "Decouples each API's synchronous response from the actual Postgres/Mongo writes it triggers",
         "technologies": [
@@ -574,6 +574,22 @@
       "synchronous": true
     },
     {
+      "from": "nginx",
+      "to": "shortener-service",
+      "label": "Fan out gRPC calls across replicas",
+      "protocol": "gRPC",
+      "synchronous": true,
+      "notes": "Only active in messaging-mode=grpc. Internal port 9090, not published to the host - same `resolve`-based upstream pattern nginx already uses for link-api/redirect-api, so scaling shortener-service's replica count stays transport-agnostic."
+    },
+    {
+      "from": "nginx",
+      "to": "traffic-service",
+      "label": "Fan out gRPC calls across replicas",
+      "protocol": "gRPC",
+      "synchronous": true,
+      "notes": "Only active in messaging-mode=grpc. Internal port 9091, not published to the host."
+    },
+    {
       "from": "auth-api",
       "to": "pgcat",
       "label": "Write / read user",
@@ -604,7 +620,16 @@
       "protocol": "AMQP 0-9-1",
       "format": "{ hash, originalLink, shortenLink, createdAt, userId? } → JSON, routing key \"link.created\"",
       "synchronous": false,
-      "notes": "Falls back to a local SQLite queue if the broker is unreachable; retried every 30s."
+      "notes": "Falls back to a local SQLite queue if the broker is unreachable; retried every 30s. Only active in messaging-mode=rabbitmq (the default) - see the alternative gRPC edge below."
+    },
+    {
+      "from": "link-api",
+      "to": "nginx",
+      "label": "Dispatch LinkCreatedEvent (sync)",
+      "protocol": "gRPC",
+      "format": "PublishRequest { messageId, topic: \"link.created\", payload } - payload is the same JSON the RabbitMQ publish would send",
+      "synchronous": true,
+      "notes": "Only active in messaging-mode=grpc (control-api's messaging-mode toggle, on the rabbitmq node) - the alternative to the AMQP edge above. CreateLink's HTTP response doesn't return until ShortenerService has actually persisted the row; a failed call fails the request (502/503) instead of falling back to a queue - see SyncGrpcDispatcher's own comment for why that's deliberate."
     },
     {
       "from": "rabbitmq",
@@ -646,7 +671,16 @@
       "protocol": "AMQP 0-9-1",
       "format": "{ id, hash, inboundLink, outboundLink, clickedAt, userAgent, referrer, ipAddress } → JSON, routing key \"click.tracked\"",
       "synchronous": false,
-      "notes": "Published right before the 302 response; falls back to the same SQLite-queue pattern as LinkApi if the broker is unreachable. A 404 never publishes anything."
+      "notes": "Published right before the 302 response; falls back to the same SQLite-queue pattern as LinkApi if the broker is unreachable. A 404 never publishes anything. Only active in messaging-mode=rabbitmq (the default) - see the alternative gRPC edge below."
+    },
+    {
+      "from": "redirect-api",
+      "to": "nginx",
+      "label": "Dispatch ClickTrackedEvent (sync)",
+      "protocol": "gRPC",
+      "format": "PublishRequest { messageId, topic: \"click.tracked\", payload }",
+      "synchronous": true,
+      "notes": "Only active in messaging-mode=grpc - the alternative to the AMQP edge above. Targets TrafficService only - nothing is ever published to RabbitMQ in this mode, so the other two fan-out consumers of click.tracked (ShortenerService's click-count bump, ReportingService's ClickHouse write) never receive the event either; both go stale while gRPC mode is active, a known asymmetry of point-to-point RPC vs. pub/sub fan-out for this v1. The redirect itself doesn't return until TrafficService has persisted the click - the hottest path in the whole system becomes coupled to a downstream analytics write's availability, which is the entire point of this mode."
     },
     {
       "from": "rabbitmq",

@@ -11,6 +11,11 @@ namespace ControlApi.Models;
 // control-api restart these two fields could in principle drift from the containers' actual last
 // setting; a real restart during an experiment is rare enough for a local sandbox tool that this is
 // an accepted, documented limitation rather than something worth reconciling on startup.
-public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled);
+// MessagingMode ("rabbitmq" or "grpc") is the fourth real-container-state toggle, same category as
+// PgcatEnabled/CacheEnabled above (same drift-on-restart caveat applies) - see
+// MessagingToggleCapability/DockerService.SetMessagingModeAsync.
+public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode);
 
 public record InfraToggleRequest(bool Enabled);
+
+public record MessagingModeRequest(string Mode);

@@ -46,12 +46,13 @@ public interface IDockerService
     // running.
     Task<string?> FlushRedisAsync(CancellationToken ct);
 
-    // The three standing infra toggles - see InfraStatus for what each one actually does and why
-    // they're not all implemented the same way (one's an in-memory flag, two recreate containers).
+    // The four standing infra toggles - see InfraStatus for what each one actually does and why
+    // they're not all implemented the same way (one's an in-memory flag, three recreate containers).
     InfraStatus GetInfraStatus();
     InfraStatus SetNginxBypass(bool bypassed);
     Task<InfraStatus> SetPgcatEnabledAsync(bool enabled, CancellationToken ct);
     Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct);
+    Task<InfraStatus> SetMessagingModeAsync(string mode, CancellationToken ct);
 
     // The real routes a traffic run's step sequence can be built from - see EndpointDefinition and
     // k6-scripts/flow.js.

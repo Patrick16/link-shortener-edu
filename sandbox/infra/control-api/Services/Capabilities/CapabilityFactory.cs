@@ -15,6 +15,7 @@ public sealed class CapabilityFactory
         ["npgsql-pool-size"] = (docker, loggerFactory) => new NpgsqlPoolSizeCapability(docker, loggerFactory.CreateLogger<NpgsqlPoolSizeCapability>()),
         ["pgcat-toggle"] = (docker, loggerFactory) => new PgcatToggleCapability(docker, loggerFactory.CreateLogger<PgcatToggleCapability>()),
         ["cache-toggle"] = (docker, loggerFactory) => new CacheToggleCapability(docker, loggerFactory.CreateLogger<CacheToggleCapability>()),
+        ["messaging-mode"] = (docker, loggerFactory) => new MessagingToggleCapability(docker, loggerFactory.CreateLogger<MessagingToggleCapability>()),
         ["nginx-toggle"] = (docker, _) => new NginxToggleCapability(docker),
         ["sentinel-config"] = (docker, loggerFactory) => new SentinelConfigCapability(docker, loggerFactory.CreateLogger<SentinelConfigCapability>()),
         ["rabbitmq-prefetch"] = (docker, loggerFactory) => new RabbitMqPrefetchCapability(docker, loggerFactory.CreateLogger<RabbitMqPrefetchCapability>()),

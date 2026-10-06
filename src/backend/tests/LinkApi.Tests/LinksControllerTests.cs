@@ -28,15 +28,15 @@ public class LinksControllerTests
     private static LinksController NewController(
         DatabaseContext context,
         out Mock<IEntityCacheService<Link>> cache,
-        out Mock<ILocalPublishQueue> publishQueue,
+        out Mock<IEventDispatcher> dispatcher,
         out Mock<IHashGenerator> hashGenerator,
         ClaimsPrincipal? user = null)
     {
         cache = new Mock<IEntityCacheService<Link>>();
-        publishQueue = new Mock<ILocalPublishQueue>();
+        dispatcher = new Mock<IEventDispatcher>();
         hashGenerator = new Mock<IHashGenerator>();
 
-        var controller = new LinksController(context, cache.Object, publishQueue.Object, hashGenerator.Object, NullLogger<LinksController>.Instance)
+        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, NullLogger<LinksController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -50,7 +50,7 @@ public class LinksControllerTests
     public async Task CreateLink_AnonymousCaller_PublishesEventWithNullUserId()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var publishQueue, out var hashGenerator);
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator);
         hashGenerator.Setup(x => x.Generate("https://example.com")).Returns("abc12345");
 
         var result = await sut.CreateLink(
@@ -59,8 +59,8 @@ public class LinksControllerTests
 
         var response = Assert.IsType<LinkResponse>(result.Value);
         Assert.Equal("abc12345", response.ShortenLink);
-        publishQueue.Verify(
-            x => x.EnqueueAsync(
+        dispatcher.Verify(
+            x => x.DispatchAsync(
                 It.Is<LinkCreatedEvent>(e => e.Hash == "abc12345" && e.OriginalLink == "https://example.com" && e.UserId == null),
                 Topics.LinkCreated,
                 It.IsAny<CancellationToken>()),
@@ -73,13 +73,13 @@ public class LinksControllerTests
         var userId = Guid.NewGuid();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var publishQueue, out var hashGenerator, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, new ClaimsPrincipal(identity));
         hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
 
         await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
 
-        publishQueue.Verify(
-            x => x.EnqueueAsync(It.Is<LinkCreatedEvent>(e => e.UserId == userId), Topics.LinkCreated, It.IsAny<CancellationToken>()),
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.Is<LinkCreatedEvent>(e => e.UserId == userId), Topics.LinkCreated, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -87,15 +87,15 @@ public class LinksControllerTests
     public async Task CreateLink_EmptyOriginalLink_ReturnsBadRequestWithoutPublishing()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var publishQueue, out var hashGenerator);
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator);
 
         var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "" }, CancellationToken.None);
 
         var objectResult = Assert.IsType<ObjectResult>(result.Result);
         Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
         hashGenerator.Verify(x => x.Generate(It.IsAny<string>()), Times.Never);
-        publishQueue.Verify(
-            x => x.EnqueueAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -109,14 +109,14 @@ public class LinksControllerTests
         // later calls Redirect(link.OriginalLink) on it verbatim - an open redirect out of a trusted
         // short-link domain to an arbitrary scheme.
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var publishQueue, out _);
+        var sut = NewController(context, out _, out var dispatcher, out _);
 
         var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = originalLink }, CancellationToken.None);
 
         var objectResult = Assert.IsType<ObjectResult>(result.Result);
         Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
-        publishQueue.Verify(
-            x => x.EnqueueAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 

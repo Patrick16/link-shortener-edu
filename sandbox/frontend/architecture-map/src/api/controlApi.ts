@@ -7,6 +7,7 @@ import type {
   InfraStatus,
   InfraTopology,
   ManagedContainer,
+  MessagingMode,
   PgcatConnectionStats,
   PgcatPoolSettings,
   MongoReadPreference,
@@ -94,6 +95,7 @@ export const controlApi = {
   setNginxEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/nginx', 'POST', { enabled }),
   setPgcatEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/pgcat', 'POST', { enabled }),
   setCacheEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/cache', 'POST', { enabled }),
+  setMessagingMode: (mode: MessagingMode) => request<InfraStatus>('/api/infra/messaging-mode', 'POST', { mode }),
 
   listScenarios: () => request<CustomScenario[]>('/api/scenarios'),
   saveScenario: (scenario: CustomScenario) => request<CustomScenario>('/api/scenarios', 'POST', scenario),

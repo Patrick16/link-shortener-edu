@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+option csharp_namespace = "Infrastructure.Grpc";
+
+package messaging;
+
+// Single generic RPC, not one per event type - mirrors the existing (topic, payload) shape
+// FallbackMessage already models for the RabbitMQ transport, so switching transports changes
+// nothing about how an event is addressed, only how it's delivered.
+service MessagingService {
+  rpc Publish (PublishRequest) returns (PublishAck);
+}
+
+message PublishRequest {
+  string message_id = 1;
+  string topic = 2;
+  // JSON-serialized event payload - same System.Text.Json.Serialize(message) the RabbitMQ
+  // publisher already produces, so a gRPC server's handler deserializes it exactly the same way
+  // a batch consumer's delivery payload already is.
+  string payload = 3;
+}
+
+message PublishAck {
+  bool success = 1;
+}

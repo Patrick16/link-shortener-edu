@@ -6,7 +6,15 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<!-- One shared contract for every service, same spirit as MessagingConstants for the RabbitMQ
+		     topology - client (LinkApi/RedirectApi) and server (ShortenerService/TrafficService/
+		     ReportingService) stubs are both generated here so neither side can drift from the other. -->
+		<Protobuf Include="Grpc\messaging.proto" GrpcServices="Both" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="ClickHouse.Driver" Version="1.5.0" />
+		<PackageReference Include="Grpc.AspNetCore" Version="2.84.0" />
 		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.12" />
 		<PackageReference Include="RabbitMQ.Client" Version="7.2.2" />
 		<PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />

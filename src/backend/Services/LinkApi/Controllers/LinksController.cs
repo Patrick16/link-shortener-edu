@@ -18,7 +18,7 @@ namespace LinkApi.Controllers;
 public class LinksController(
     DatabaseContext context,
     IEntityCacheService<Link> service,
-    ILocalPublishQueue publishQueue,
+    IEventDispatcher dispatcher,
     IHashGenerator hashGenerator,
     ILogger<LinksController> logger) : Controller
 {
@@ -26,7 +26,7 @@ public class LinksController(
 
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _service = service;
-    private readonly ILocalPublishQueue _publishQueue = publishQueue;
+    private readonly IEventDispatcher _dispatcher = dispatcher;
     private readonly IHashGenerator _hashGenerator = hashGenerator;
     private readonly ILogger<LinksController> _logger = logger;
 
@@ -69,10 +69,12 @@ public class LinksController(
             UserId = userId
         };
 
-        // Enqueued, not awaited-to-completion - LocalPublishQueueWorker does the actual
-        // IMessagePublisher.PublishAsync call off this request's critical path, so a slow or
-        // reconnecting RabbitMQ connection never shows up as CreateLink latency.
-        await _publishQueue.EnqueueAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
+        // In the default (async/bus) messaging mode, this enqueues and returns in microseconds -
+        // LocalPublishQueueWorker does the actual IMessagePublisher.PublishAsync call off this
+        // request's critical path, so a slow or reconnecting RabbitMQ connection never shows up as
+        // CreateLink latency. In gRPC/sync mode, this instead awaits ShortenerService persisting
+        // the row before returning - see IEventDispatcher's own comment for why.
+        await _dispatcher.DispatchAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
 
         // Debug, not Information - this fires on every CreateLink call, including under a k6 load
         // test hammering this endpoint at hundreds of req/s. Flip LinkApi to Debug locally when you

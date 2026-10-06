@@ -797,6 +797,11 @@ services:
       # to false so the app skips Redis entirely (see EntityCacheService), a clean "no caching"
       # demo rather than every request eating a failed-connection timeout against a stopped redis.
       Cache__Enabled: "${CACHE_ENABLED:-true}"
+      # Messaging transport toggle - rabbitmq (default, async) or grpc (sync). TargetUrl points at
+      # nginx's internal gRPC fan-out for shortener-service (port 9090, see nginx.conf), not at
+      # shortener-service directly - see nginx.conf's own comment for why (replica load-balancing).
+      Messaging__Mode: "${MESSAGING_MODE:-rabbitmq}"
+      Messaging__Grpc__TargetUrl: "http://nginx:9090"
     volumes:
       - link-api-data:/data
     # LinkApi.csproj turns on Server GC, which sizes one heap per logical core it detects - with no
@@ -852,6 +857,13 @@ services:
       # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
       OTEL_BSP_SCHEDULE_DELAY: "1000"
       Cache__Enabled: "${CACHE_ENABLED:-true}"
+      # Messaging transport toggle - rabbitmq (default, async) or grpc (sync). TargetUrl points at
+      # nginx's internal gRPC fan-out for traffic-service (port 9091, see nginx.conf) only -
+      # ReportingService doesn't host a messaging-mode gRPC endpoint at all (see its Program.cs
+      # comment), so in gRPC mode its ClickHouse read model and ShortenerService's click count
+      # both go stale (see RedirectController's own comment for the full asymmetry).
+      Messaging__Mode: "${MESSAGING_MODE:-rabbitmq}"
+      Messaging__Grpc__TargetUrl: "http://nginx:9091"
     volumes:
       - redirect-api-data:/data
     # See link-api's identical limit above - same reasoning, same Server GC setting in
@@ -892,6 +904,12 @@ services:
         condition: service_healthy
       redirect-api:
         condition: service_healthy
+      # Deliberately NOT also waiting on shortener-service/traffic-service here - their
+      # grpc_pass upstreams below use `resolve`, same as link_api_upstream/
+      # redirect_api_upstream above, which already tolerates a backend not existing yet (or scaling
+      # up/down later). Gating nginx's own startup on them would slow down every stack bring-up
+      # (including the default rabbitmq mode, where they're not even on the request path) for no
+      # correctness benefit.
 
   shortener-service:
     logging: *default-logging

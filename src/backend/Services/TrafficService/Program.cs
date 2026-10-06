@@ -5,10 +5,14 @@ using WebDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
+builder.AddGrpcKestrelEndpoint();
 
 builder.AddPostgresDbContextFactory<DatabaseContext>();
 builder.AddRabbitMqConsumer();
 builder.AddClickTracking();
+// Always hosted - see GrpcMessagingExtensions.AddMessagingGrpcServer's own comment for why this
+// isn't itself gated on Messaging:Mode.
+builder.AddMessagingGrpcServer();
 
 builder.Services.AddHealthChecks()
     .AddPostgresFactoryHealthCheck<DatabaseContext>()
@@ -20,8 +24,10 @@ var app = builder.Build();
 // This service owns clicks_db.
 await app.MigratePostgresAsync<DatabaseContext>();
 
-// The only reason this service has an HTTP listener at all - it doesn't serve any other endpoint.
-// Ready means it can actually consume from RabbitMQ and write to Postgres right now.
+// The only reason this service has an HTTP listener at all beyond health/gRPC - it doesn't serve
+// any other REST endpoint. Ready means it can actually consume from RabbitMQ and write to Postgres
+// right now.
 app.MapHealthEndpoints();
+app.MapGrpcService<MessagingGrpcService>();
 
 await app.RunAsync();

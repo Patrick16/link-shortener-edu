@@ -25,11 +25,11 @@ public class RedirectControllerTests
     private static RedirectController NewController(
         DatabaseContext context,
         out Mock<IEntityCacheService<Link>> cache,
-        out Mock<ILocalPublishQueue> publishQueue,
+        out Mock<IEventDispatcher> dispatcher,
         out Mock<IClickCounterService> clickCounter)
     {
         cache = new Mock<IEntityCacheService<Link>>();
-        publishQueue = new Mock<ILocalPublishQueue>();
+        dispatcher = new Mock<IEventDispatcher>();
         clickCounter = new Mock<IClickCounterService>();
 
         var httpContext = new DefaultHttpContext();
@@ -37,7 +37,7 @@ public class RedirectControllerTests
         httpContext.Request.Host = new HostString("short.example");
         httpContext.Request.Path = "/abc12345";
 
-        return new RedirectController(context, cache.Object, publishQueue.Object, clickCounter.Object, NullLogger<RedirectController>.Instance)
+        return new RedirectController(context, cache.Object, dispatcher.Object, clickCounter.Object, NullLogger<RedirectController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext },
         };
@@ -64,14 +64,14 @@ public class RedirectControllerTests
     {
         await using var context = NewContext();
         var link = new Link("abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, null);
-        var sut = NewController(context, out var cache, out var publishQueue, out _);
+        var sut = NewController(context, out var cache, out var dispatcher, out _);
         cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(link);
 
         await sut.RedirectToOrigin("abc12345", CancellationToken.None);
 
-        publishQueue.Verify(
-            x => x.EnqueueAsync(
+        dispatcher.Verify(
+            x => x.DispatchAsync(
                 It.Is<ClickTrackedEvent>(e => e.Hash == "abc12345" && e.OutboundLink == "https://example.com/target" && e.Id != Guid.Empty),
                 Topics.ClickTracked,
                 It.IsAny<CancellationToken>()),
@@ -133,15 +133,15 @@ public class RedirectControllerTests
     public async Task RedirectToOrigin_LinkNotFound_ReturnsNotFoundAndDoesNotPublishOrIncrement()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out var cache, out var publishQueue, out var clickCounter);
+        var sut = NewController(context, out var cache, out var dispatcher, out var clickCounter);
         cache.Setup(x => x.GetOrFetch("missing", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Link?)null);
 
         var result = await sut.RedirectToOrigin("missing", CancellationToken.None);
 
         Assert.IsType<NotFoundResult>(result);
-        publishQueue.Verify(
-            x => x.EnqueueAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         clickCounter.Verify(x => x.IncrementAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }

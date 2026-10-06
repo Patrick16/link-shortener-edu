@@ -16,6 +16,12 @@ public static class Constants
     public const string MongoDbConnectionString = "Mongo";
     public const string ClickHouseConnectionString = "ClickHouse";
 
+    // Messaging transport toggle (RabbitMQ/async vs gRPC/sync) - read once at Program.cs startup
+    // by the client side (LinkApi/RedirectApi); the server side (ShortenerService/TrafficService/
+    // ReportingService) always hosts the gRPC endpoint regardless of this value.
+    public const string MessagingModeSection = "Messaging:Mode";
+    public const string MessagingGrpcTargetUrlSection = "Messaging:Grpc:TargetUrl";
+
     // Tag on the health checks that /health/ready runs (dependency reachability), as opposed to
     // /health/live, which runs none.
     public const string ReadyHealthCheckTag = "ready";

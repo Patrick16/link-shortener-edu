@@ -1,6 +1,5 @@
 using Common;
 using Infrastructure;
-using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace TrafficService;
@@ -16,20 +15,16 @@ public static class TrafficServiceExtensions
         builder.Services.AddSingleton<IClickMetaStore>(_ => new MongoClickMetaStore(mongoConnectionString!));
         builder.Services.AddSingleton<IUserAgentParser, UaParserUserAgentParser>();
 
-        // IGeoIpResolver is CachingGeoIpResolver wrapping the real IpApiGeoIpResolver - see its own
-        // comment. ReportingService registers the identical wrapping, pointed at the same Redis
-        // instance/InstanceName (Redis__InstanceName=GeoIpCache in docker-compose.yml), so the two
-        // independent click.tracked consumers share one cache instead of each hitting ip-api.com's
-        // rate-limited endpoint separately for the same click.
-        builder.AddRedisDistributedCache();
-        builder.Services.AddHttpClient<IpApiGeoIpResolver>(client =>
-        {
-            client.BaseAddress = new Uri("http://ip-api.com");
-        });
-        builder.Services.AddSingleton<IGeoIpResolver>(sp => new CachingGeoIpResolver(
-            sp.GetRequiredService<IpApiGeoIpResolver>(), sp.GetRequiredService<IDistributedCache>()));
+        // See GeoIpExtensions.AddGeoIpResolution's own comment - shared with ReportingService so
+        // both independent click.tracked consumers hit one Redis-backed cache instead of each
+        // hitting ip-api.com's rate-limited endpoint separately for the same click.
+        builder.AddGeoIpResolution();
 
-        builder.Services.AddHostedService<ClickTrackedConsumer>();
+        // Registered as itself first, then wrapped as the IHostedService - see
+        // ShortenerServiceExtensions's identical comment: MessagingGrpcService (gRPC mode's server
+        // side) also needs to resolve ClickTrackedConsumer directly.
+        builder.Services.AddSingleton<ClickTrackedConsumer>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ClickTrackedConsumer>());
         return builder;
     }
 }

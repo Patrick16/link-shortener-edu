@@ -42,6 +42,12 @@ public class DockerService : IDockerService
     // service/traffic-service/auth-api have no cache to disable.
     private static readonly IReadOnlyList<string> CacheUsingServices = ["link-api", "redirect-api"];
 
+    // Only these two actually branch on Messaging:Mode (IEventDispatcher's DI registration) -
+    // shortener-service/traffic-service/reporting-service always host their gRPC endpoint
+    // regardless of mode (see GrpcMessagingExtensions.AddMessagingGrpcServer's own comment), so
+    // they never need recreating when this toggle flips, unlike every other DB-touching toggle.
+    private static readonly IReadOnlyList<string> MessagingUsingServices = ["link-api", "redirect-api"];
+
     // The two standbys recovery_min_apply_delay can be set on - not the primary, which has no
     // concept of replay delay.
     private static readonly IReadOnlyList<string> PostgresReplicas = ["postgres-replica1", "postgres-replica2"];
@@ -154,6 +160,7 @@ public class DockerService : IDockerService
     private bool _nginxBypassed;
     private bool _pgcatEnabled = true;
     private bool _cacheEnabled = true;
+    private string _messagingMode = "rabbitmq";
 
     // Mirrors pgcat.toml's shipped defaults. Raised from the original 10 after a 200-VU/20-replica
     // load test showed pgcat's pool - not the app or RabbitMQ - as the actual bottleneck: pool_size
@@ -186,6 +193,7 @@ public class DockerService : IDockerService
         ["DB_HOST"] = _pgcatEnabled ? "pgcat" : "postgres",
         ["DB_PORT"] = _pgcatEnabled ? "6432" : "5432",
         ["CACHE_ENABLED"] = _cacheEnabled ? "true" : "false",
+        ["MESSAGING_MODE"] = _messagingMode,
         ["NPGSQL_MAX_POOL_SIZE"] = _npgsqlPoolSize.ToString(),
         ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString(),
         ["MONGO_READ_PREFERENCE"] = _mongoReadPreference,
@@ -1521,7 +1529,7 @@ public class DockerService : IDockerService
         }
     }
 
-    public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled);
+    public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode);
 
     public InfraStatus SetNginxBypass(bool bypassed)
     {
@@ -1584,6 +1592,40 @@ public class DockerService : IDockerService
             }
 
             _cacheEnabled = enabled;
+            return GetInfraStatus();
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
+    }
+
+    public async Task<InfraStatus> SetMessagingModeAsync(string mode, CancellationToken ct)
+    {
+        if (mode is not ("rabbitmq" or "grpc"))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode), mode, "Messaging mode must be 'rabbitmq' or 'grpc'.");
+        }
+
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var env = CurrentStandingEnv();
+            env["MESSAGING_MODE"] = mode;
+            // Only link-api/redirect-api branch on this (see MessagingUsingServices's own comment) -
+            // unlike every other DB-touching toggle, the 3 worker services never need recreating
+            // here, since their gRPC endpoint is always listening regardless of mode.
+            var scaleArgs = await BuildPreserveScaleArgsAsync(MessagingUsingServices, ct);
+
+            _logger.LogWarning("Switching Messaging__Mode for {Services} to {Mode}", string.Join(", ", MessagingUsingServices), mode);
+            var (exitCode, output) = await RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. MessagingUsingServices], env, ct);
+            if (exitCode != 0)
+            {
+                _logger.LogWarning("Toggling messaging mode failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _messagingMode = mode;
             return GetInfraStatus();
         }
         finally

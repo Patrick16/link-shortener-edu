@@ -32,7 +32,7 @@ public class PresetStoreTests : IDisposable
     private static Preset NewPreset(string name = "smoke-test") => new(
         Name: name,
         Config: new InfraConfigSnapshot(
-            Infra: new InfraStatus(NginxBypassed: false, PgcatEnabled: true, CacheEnabled: true),
+            Infra: new InfraStatus(NginxBypassed: false, PgcatEnabled: true, CacheEnabled: true, MessagingMode: "rabbitmq"),
             Replicas: [new ReplicaCount("link-api", 1), new ReplicaCount("redirect-api", 1)]));
 
     [Fact]

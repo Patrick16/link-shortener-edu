@@ -11,6 +11,7 @@ import { NpgsqlPoolSizeControl } from '../components/NpgsqlPoolSizeControl'
 import { SentinelConfigControl } from '../components/SentinelConfigControl'
 import { RabbitMqPrefetchControl } from '../components/RabbitMqPrefetchControl'
 import { MongoReadPreferenceControl } from '../components/MongoReadPreferenceControl'
+import { MessagingModeControl } from '../components/MessagingModeControl'
 import { ReplicationLagControl } from '../components/ReplicationLagControl'
 import { PgcatConnectionsPanel } from '../components/PgcatConnectionsPanel'
 import { PostgresConnectionsPanel } from '../components/PostgresConnectionsPanel'
@@ -31,6 +32,7 @@ const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> 
   'sentinel-config': SentinelConfigControl,
   'rabbitmq-prefetch': RabbitMqPrefetchControl,
   'mongo-read-preference': MongoReadPreferenceControl,
+  'messaging-mode': MessagingModeControl,
   'replication-lag': ReplicationLagControl,
   'pgcat-connections': PgcatConnectionsPanel,
   'postgres-connections': PostgresConnectionsPanel,

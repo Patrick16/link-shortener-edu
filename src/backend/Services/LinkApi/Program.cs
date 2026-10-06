@@ -10,14 +10,30 @@ builder.AddWebApiDefaults();
 
 builder.AddPostgresDbContextPool<DatabaseContext>();
 builder.AddRedisDistributedCache();
-builder.AddRabbitMqPublisher();
+
+// RabbitMQ's publish side (connection, SQLite fallback, warmup/retry workers, health check) is
+// only needed in the default async/bus mode - in messaging-mode=grpc nothing ever resolves
+// ILocalPublishQueue/IMessagePublisher (see AddEventDispatcher below), so skip the connection and
+// its background workers entirely instead of paying their startup cost for an unused transport
+// (found during review).
+var isGrpcMode = builder.Configuration.IsMessagingGrpcMode();
+if (!isGrpcMode)
+{
+    builder.AddRabbitMqPublisher();
+}
+// LinksController depends on IEventDispatcher, not ILocalPublishQueue directly - which concrete
+// class backs it (AsyncQueueDispatcher vs SyncGrpcDispatcher) is Messaging:Mode's whole job.
+builder.AddEventDispatcher();
 builder.AddLinkServices();
 builder.AddJwtAndInternalApiKeyAuthentication();
 builder.Services.AddFrontendCors(builder.Configuration);
 
-builder.Services.AddHealthChecks()
-    .AddPostgresHealthCheck<DatabaseContext>()
-    .AddRabbitMqHealthCheck();
+var healthChecks = builder.Services.AddHealthChecks()
+    .AddPostgresHealthCheck<DatabaseContext>();
+if (!isGrpcMode)
+{
+    healthChecks.AddRabbitMqHealthCheck();
+}
 
 var app = builder.Build();
 

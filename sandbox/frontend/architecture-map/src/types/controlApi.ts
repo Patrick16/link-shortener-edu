@@ -123,7 +123,10 @@ export interface InfraStatus {
   nginxBypassed: boolean
   pgcatEnabled: boolean
   cacheEnabled: boolean
+  messagingMode: MessagingMode
 }
+
+export type MessagingMode = 'rabbitmq' | 'grpc'
 
 export interface LatencyStats {
   avg: number
