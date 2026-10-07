@@ -26,6 +26,7 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - run: dotnet build sandbox/infra/control-api/ControlApi.csproj --configuration Release
+      - run: dotnet test sandbox/infra/tests/ControlApi.Tests/ControlApi.Tests.csproj --configuration Release
 
   frontend-app:
     runs-on: ubuntu-latest

@@ -4,6 +4,7 @@ updates:
     directories:
       - /src/backend
       - /sandbox/infra/control-api
+      - /sandbox/infra/tests/ControlApi.Tests
     schedule:
       interval: weekly
     groups:
