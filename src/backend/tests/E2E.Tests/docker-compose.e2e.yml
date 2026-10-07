@@ -1,0 +1,170 @@
+# Trimmed stack for AsyncFlowE2ETests: only what the register -> create link -> click -> stats
+# walk through the RabbitMQ async pipeline actually needs. No pgcat (direct postgres instead - same
+# DB_HOST/DB_PORT override the pgcat-toggle control already uses), no Redis Sentinel (a single
+# redis - see link-api's own comment: "no code change needed for this vs. a plain host:port
+# string"), no Postgres replicas, no nginx (single instance each, hit directly), single-node Mongo
+# with no replicaSet param (MongoClickMetaStore takes whatever connection string it's given).
+#
+# Images are referenced by tag, not rebuilt here (no `build:` blocks) - run
+# `docker compose -f sandbox/docker-compose.yml build auth-api link-api redirect-api
+# shortener-service traffic-service` first (the same images the real sandbox stack uses; CI's
+# docker-build job already does this). Testcontainers' ComposeBuilder runs `docker compose` inside
+# a helper container with only this file's own directory copied in - a `build: {context: ...}`
+# reaching up to the repo root wouldn't resolve there, which is why this file deliberately doesn't
+# build anything itself.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mongo:
+    image: mongo:7
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand('ping')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  auth-api:
+    image: ${AUTH_API_IMAGE:-sandbox-auth-api:latest}
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
+      Jwt__SigningKey: "dev-only-signing-key-do-not-use-in-production-1234567890"
+    ports:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  link-api:
+    image: ${LINK_API_IMAGE:-sandbox-link-api:latest}
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
+      Jwt__SigningKey: "dev-only-signing-key-do-not-use-in-production-1234567890"
+      Internal__ApiKey: "dev-only-internal-api-key-do-not-use-in-production-1234567890"
+    volumes:
+      - link-api-data:/data
+    ports:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  redirect-api:
+    image: ${REDIRECT_API_IMAGE:-sandbox-redirect-api:latest}
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
+    volumes:
+      - redirect-api-data:/data
+    ports:
+      - "8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  shortener-service:
+    image: ${SHORTENER_SERVICE_IMAGE:-sandbox-shortener-service:latest}
+    environment:
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
+      ConnectionStrings__Redis: "redis:6379"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  traffic-service:
+    image: ${TRAFFIC_SERVICE_IMAGE:-sandbox-traffic-service:latest}
+    environment:
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=clicks_db;Username=postgres;Password=postgres"
+      ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=clicks_db;Username=postgres;Password=postgres"
+      ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
+      # No replicaSet param, unlike the real stack's 3-node set - a single standalone mongod answers
+      # readPreference=primary the same way, and MongoClickMetaStore doesn't care either way.
+      ConnectionStrings__Mongo: "mongodb://mongo:27017/clicks_meta_db?readPreference=primary"
+      ConnectionStrings__Redis: "redis:6379"
+      Redis__InstanceName: "GeoIpCache"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  link-api-data:
+  redirect-api-data:

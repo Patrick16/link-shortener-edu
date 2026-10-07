@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<IsPackable>false</IsPackable>
+		<!-- Opt-in only: this project boots real containers (Testcontainers) and is NOT part of the
+		     fast `dotnet test` suite the rest of src/backend/tests relies on being Docker-free - see
+		     CLAUDE.md. Run explicitly via `dotnet test src/backend/tests/E2E.Tests` with Docker running. -->
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="coverlet.collector" Version="6.0.4" />
+		<PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+		<PackageReference Include="Npgsql" Version="9.0.3" />
+		<PackageReference Include="Testcontainers" Version="4.15.0" />
+		<PackageReference Include="xunit" Version="2.9.3" />
+		<PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<Using Include="Xunit" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- Copied to the output directory so ComposeBuilder can find it without a repo-root-relative
+		     path assumption at test-run time. -->
+		<None Include="docker-compose.e2e.yml" CopyToOutputDirectory="PreserveNewest" />
+		<None Include="init-databases.sql" CopyToOutputDirectory="PreserveNewest" />
+	</ItemGroup>
+
+</Project>
