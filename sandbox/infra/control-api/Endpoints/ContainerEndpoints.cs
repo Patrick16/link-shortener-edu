@@ -29,7 +29,7 @@ public static class ContainerEndpoints
             return result is null ? Results.NotFound() : Results.Ok(result);
         });
 
-        app.MapPost("/api/containers/{serviceId}/degrade", async (string serviceId, ChaosRequest request, IDockerService docker, CancellationToken ct) =>
+        app.MapPost("/api/containers/{serviceId}/degrade", async (string serviceId, ChaosRequest request, IChaosService chaos, CancellationToken ct) =>
         {
             if (request.DurationSeconds is < 1 or > 300)
             {
@@ -46,12 +46,12 @@ public static class ContainerEndpoints
                 return Results.BadRequest(new { error = "amount (loss %) must be between 1 and 100" });
             }
 
-            var result = await docker.DegradeAsync(serviceId, request, ct);
+            var result = await chaos.DegradeAsync(serviceId, request, ct);
             return result is null ? Results.NotFound() : Results.Ok(result);
         });
 
-        app.MapPost("/api/containers/{serviceId}/heal", async (string serviceId, IDockerService docker, CancellationToken ct) =>
-            Results.Ok(new { stopped = await docker.HealAsync(serviceId, ct) }));
+        app.MapPost("/api/containers/{serviceId}/heal", async (string serviceId, IChaosService chaos, CancellationToken ct) =>
+            Results.Ok(new { stopped = await chaos.HealAsync(serviceId, ct) }));
 
         app.MapGet("/api/containers/{containerId}/stats/history", (string containerId, ResourceStatsStore store) =>
             Results.Ok(store.GetHistory(containerId)));

@@ -6,22 +6,21 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ControlApi.Models;
-using Docker.DotNet;
 using Docker.DotNet.Models;
 
 namespace ControlApi.Services;
 
-// Every lookup filters on both the compose service label AND the compose project label, so this
-// can never reach a container outside the sandbox stack it's meant to control - even if a caller
-// passes an unexpected serviceId, Docker's own label filter (exact match) just returns nothing.
+// Lifecycle/scaling of the compose services control-api manages, k6 traffic runs, and the "standing
+// infra toggle" group (pgcat/cache/messaging-mode/npgsql-pool-size/rabbitmq-prefetch/mongo-read-
+// preference/nginx-bypass). Everything else that used to live here (chaos, pgcat pool/connections,
+// postgres, Redis Sentinel/topology, Mongo topology, RabbitMQ DLQ stats) has moved to its own
+// focused service under Services/ - see IContainerRuntime for the shared Docker/exec/compose
+// primitives those now build on. The toggle group stays together deliberately: every handler below
+// recreates a container shared with at least one other toggle, so splitting these further would
+// reintroduce the exact "one toggle silently reverts another" bug CurrentStandingEnv() exists to
+// prevent - see that method's own comment.
 public class DockerService : IDockerService
 {
-    // gaiadocker/iproute2 is Pumba's own default tc-image (has the `tc` binary Pumba needs inside
-    // the target's network namespace) - pinned explicitly rather than relying on Pumba's default
-    // so the image we pre-pull always matches the one Pumba will actually ask Docker to run.
-    private const string PumbaImage = "gaiaadm/pumba:latest";
-    private const string TcImage = "gaiadocker/iproute2:latest";
-    private const string ChaosTargetLabel = "control-api.chaos-target";
     private const string K6Image = "grafana/k6:latest";
 
     // link-api/redirect-api scale because nginx fronts them (see sandbox/infra/nginx/nginx.conf);
@@ -47,22 +46,6 @@ public class DockerService : IDockerService
     // regardless of mode (see GrpcMessagingExtensions.AddMessagingGrpcServer's own comment), so
     // they never need recreating when this toggle flips, unlike every other DB-touching toggle.
     private static readonly IReadOnlyList<string> MessagingUsingServices = ["link-api", "redirect-api"];
-
-    // The two standbys recovery_min_apply_delay can be set on - not the primary, which has no
-    // concept of replay delay.
-    private static readonly IReadOnlyList<string> PostgresReplicas = ["postgres-replica1", "postgres-replica2"];
-
-    // SENTINEL SET is local to whichever Sentinel instance receives it - not gossiped to the other
-    // two - so every config change loops over all three to keep them in sync.
-    private static readonly IReadOnlyList<string> SentinelContainers = ["redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3"];
-
-    // The three Redis data-plane containers whose actual replication role (see GetRedisTopologyAsync)
-    // can change on its own via Sentinel failover, independent of anything this app does.
-    private static readonly IReadOnlyList<string> RedisDataNodes = ["redis-master", "redis-replica1", "redis-replica2"];
-
-    // The three-node Mongo replica set whose primary (see GetMongoTopologyAsync) is elected among
-    // themselves, same "can change with no app involvement" story as Redis Sentinel above.
-    private static readonly IReadOnlyList<string> MongoNodes = ["mongo1", "mongo2", "mongo3"];
 
     // The two RabbitMQ consumers - workers that each run a LinkCreatedConsumer and/or
     // ClickTrackedConsumer, all sharing RabbitMqConsumer's own _prefetchCount field.
@@ -116,12 +99,9 @@ public class DockerService : IDockerService
     // (a fresh instance per call risks socket exhaustion under load, which is ironic for a load
     // testing tool to hit).
     private readonly HttpClient _httpClient = new();
-    private readonly DockerClient _client;
-    private readonly string _composeProject;
-    private readonly string _composeNetwork;
+    private readonly IContainerRuntime _runtime;
     private readonly string _composeFile;
     private readonly string _k6ScriptsDir;
-    private readonly string _pgcatConfigDir;
     private readonly ILogger<DockerService> _logger;
 
     // `docker compose up --scale`/`up --force-recreate` isn't designed to be run concurrently
@@ -162,12 +142,6 @@ public class DockerService : IDockerService
     private bool _cacheEnabled = true;
     private string _messagingMode = "rabbitmq";
 
-    // Mirrors pgcat.toml's shipped defaults. Raised from the original 10 after a 200-VU/20-replica
-    // load test showed pgcat's pool - not the app or RabbitMQ - as the actual bottleneck: pool_size
-    // didn't scale with replica count, so requests (including the DB health check, which shares this
-    // same pool) queued for 10+ seconds behind it. See sandbox/docs/pgcat-pool-sizing.md.
-    private PgcatPoolSettings _pgcatPoolSettings = new("transaction", true, 40);
-
     // Mirrors RabbitMqConsumer's own hardcoded-turned-configurable default.
     private int _rabbitMqPrefetch = 10;
 
@@ -199,18 +173,12 @@ public class DockerService : IDockerService
         ["MONGO_READ_PREFERENCE"] = _mongoReadPreference,
     };
 
-    public DockerService(IConfiguration configuration, ILogger<DockerService> logger)
+    public DockerService(IConfiguration configuration, IContainerRuntime runtime, ILogger<DockerService> logger)
     {
+        _runtime = runtime;
         _logger = logger;
-        _composeProject = configuration["Docker:ComposeProject"] ?? "sandbox";
-        _composeNetwork = configuration["Docker:ComposeNetwork"] ?? $"{_composeProject}_default";
         _composeFile = configuration["Docker:ComposeFile"] ?? "/workspace/docker-compose.yml";
         _k6ScriptsDir = configuration["K6:ScriptsDir"] ?? Path.Combine(AppContext.BaseDirectory, "k6-scripts");
-        _pgcatConfigDir = configuration["Pgcat:ConfigDir"] ?? "/pgcat-config";
-
-        var endpoint = configuration["Docker:Endpoint"]
-            ?? (OperatingSystem.IsWindows() ? "npipe://./pipe/docker_engine" : "unix:///var/run/docker.sock");
-        _client = new DockerClientConfiguration(new Uri(endpoint)).CreateClient();
 
         // LinkApi's GET /Links requires either a per-user Bearer token or this shared secret (see
         // src/backend/Shared/WebDefaults/InternalApiKeyAuthenticationHandler.cs) - control-api has
@@ -228,12 +196,12 @@ public class DockerService : IDockerService
 
     public async Task<IReadOnlyList<ManagedContainer>> ListContainersAsync(CancellationToken ct)
     {
-        var containers = await _client.Containers.ListContainersAsync(new ContainersListParameters
+        var containers = await _runtime.Client.Containers.ListContainersAsync(new ContainersListParameters
         {
             All = true,
             Filters = new Dictionary<string, IDictionary<string, bool>>
             {
-                ["label"] = new Dictionary<string, bool> { [$"com.docker.compose.project={_composeProject}"] = true },
+                ["label"] = new Dictionary<string, bool> { [$"com.docker.compose.project={_runtime.ComposeProject}"] = true },
             },
         }, ct);
 
@@ -246,110 +214,41 @@ public class DockerService : IDockerService
 
     public async Task<ManagedContainer?> StopAsync(string serviceId, CancellationToken ct)
     {
-        var container = await FindAsync(serviceId, ct);
+        var container = await _runtime.FindAsync(serviceId, ct);
         if (container is null)
         {
             return null;
         }
 
         _logger.LogWarning("Stopping container {ServiceId} ({ContainerId})", serviceId, container.ID);
-        await _client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
-        return await FindAsync(serviceId, ct) is { } updated ? ToStatus(updated) : null;
+        await _runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
+        return await _runtime.FindAsync(serviceId, ct) is { } updated ? ToStatus(updated) : null;
     }
 
     public async Task<ManagedContainer?> StartAsync(string serviceId, CancellationToken ct)
     {
-        var container = await FindAsync(serviceId, ct);
+        var container = await _runtime.FindAsync(serviceId, ct);
         if (container is null)
         {
             return null;
         }
 
         _logger.LogWarning("Starting container {ServiceId} ({ContainerId})", serviceId, container.ID);
-        await _client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
-        return await FindAsync(serviceId, ct) is { } updated ? ToStatus(updated) : null;
+        await _runtime.Client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
+        return await _runtime.FindAsync(serviceId, ct) is { } updated ? ToStatus(updated) : null;
     }
 
     public async Task<ManagedContainer?> RestartAsync(string serviceId, CancellationToken ct)
     {
-        var container = await FindAsync(serviceId, ct);
+        var container = await _runtime.FindAsync(serviceId, ct);
         if (container is null)
         {
             return null;
         }
 
         _logger.LogWarning("Restarting container {ServiceId} ({ContainerId})", serviceId, container.ID);
-        await _client.Containers.RestartContainerAsync(container.ID, new ContainerRestartParameters { WaitBeforeKillSeconds = 10 }, ct);
-        return await FindAsync(serviceId, ct) is { } updated ? ToStatus(updated) : null;
-    }
-
-    public async Task<ChaosAction?> DegradeAsync(string serviceId, ChaosRequest request, CancellationToken ct)
-    {
-        var target = await FindAsync(serviceId, ct);
-        if (target is null)
-        {
-            return null;
-        }
-
-        await EnsureImageAsync(PumbaImage, ct);
-        await EnsureImageAsync(TcImage, ct);
-
-        var netemArgs = request.Type switch
-        {
-            ChaosType.Delay => new[] { "delay", "--time", request.Amount.ToString() },
-            ChaosType.Loss => new[] { "loss", "--percent", request.Amount.ToString() },
-            ChaosType.Partition => new[] { "loss", "--percent", "100" },
-            _ => throw new ArgumentOutOfRangeException(nameof(request)),
-        };
-
-        var cmd = new List<string> { "netem", "--tc-image", TcImage, "--duration", $"{request.DurationSeconds}s" };
-        cmd.AddRange(netemArgs);
-        cmd.Add(target.ID);
-
-        var created = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
-        {
-            Image = PumbaImage,
-            Cmd = cmd,
-            Labels = new Dictionary<string, string>
-            {
-                ["com.docker.compose.project"] = _composeProject,
-                [ChaosTargetLabel] = serviceId,
-            },
-            HostConfig = new HostConfig
-            {
-                Binds = ["/var/run/docker.sock:/var/run/docker.sock"],
-                AutoRemove = true,
-            },
-        }, ct);
-
-        _logger.LogWarning(
-            "Starting {ChaosType} chaos against {ServiceId} for {Duration}s (pumba container {PumbaId})",
-            request.Type, serviceId, request.DurationSeconds, created.ID);
-        await _client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
-
-        return new ChaosAction(serviceId, created.ID, request.Type, request.DurationSeconds, DateTimeOffset.UtcNow);
-    }
-
-    public async Task<int> HealAsync(string serviceId, CancellationToken ct)
-    {
-        var chaosContainers = await _client.Containers.ListContainersAsync(new ContainersListParameters
-        {
-            All = true,
-            Filters = new Dictionary<string, IDictionary<string, bool>>
-            {
-                ["label"] = new Dictionary<string, bool> { [$"{ChaosTargetLabel}={serviceId}"] = true },
-            },
-        }, ct);
-
-        foreach (var chaos in chaosContainers)
-        {
-            _logger.LogWarning("Healing {ServiceId} early - stopping chaos container {ChaosId}", serviceId, chaos.ID);
-            // Pumba's netem handler traps SIGTERM to tear down the tc rule before exiting, so a
-            // plain stop (not a kill) is what lets the target's network actually recover.
-            await _client.Containers.StopContainerAsync(chaos.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
-        }
-
-        return chaosContainers.Count;
+        await _runtime.Client.Containers.RestartContainerAsync(container.ID, new ContainerRestartParameters { WaitBeforeKillSeconds = 10 }, ct);
+        return await _runtime.FindAsync(serviceId, ct) is { } updated ? ToStatus(updated) : null;
     }
 
     // k6 picks the elapsed-time format by the *total configured test duration*, not the current
@@ -398,7 +297,7 @@ public class DockerService : IDockerService
             return null;
         }
 
-        await EnsureImageAsync(K6Image, ct);
+        await _runtime.EnsureImageAsync(K6Image, ct);
 
         // A requested data pool is fetched from the real app now, before k6 even starts, and
         // reported through the same onProgress callback as the run itself (Phase "preparing") so
@@ -479,7 +378,7 @@ public class DockerService : IDockerService
             env.Add($"POOL_JSON={JsonSerializer.Serialize(pool, StepJsonOptions)}");
         }
 
-        var created = await _client.Containers.CreateContainerAsync(new CreateContainerParameters
+        var created = await _runtime.Client.Containers.CreateContainerAsync(new CreateContainerParameters
         {
             Image = K6Image,
             // grafana/k6's image runs as a non-root user by default, which can't write
@@ -490,8 +389,8 @@ public class DockerService : IDockerService
             User = "0:0",
             Cmd = cmd,
             Env = env,
-            Labels = new Dictionary<string, string> { ["com.docker.compose.project"] = _composeProject },
-            HostConfig = new HostConfig { NetworkMode = _composeNetwork },
+            Labels = new Dictionary<string, string> { ["com.docker.compose.project"] = _runtime.ComposeProject },
+            HostConfig = new HostConfig { NetworkMode = _runtime.ComposeNetwork },
         }, ct);
 
         // Everything from here on has a running (or about to run) k6 container on its hands - a
@@ -507,7 +406,7 @@ public class DockerService : IDockerService
                 // The destination itself must already exist for the Docker API to accept the
                 // extraction - "/" always does, and the tar entry's own "scripts/scenario.js" path
                 // makes the extraction create that subdirectory as it unpacks.
-                await _client.Containers.ExtractArchiveToContainerAsync(
+                await _runtime.Client.Containers.ExtractArchiveToContainerAsync(
                     created.ID,
                     new ContainerPathStatParameters { Path = "/" },
                     tarStream,
@@ -520,14 +419,14 @@ public class DockerService : IDockerService
                 targetIterations is { } t ? $", {t} iterations" : request.Stages is { Count: > 0 } s ? $", {totalSeconds}s, {s.Count} stages" : $", {totalSeconds}s",
                 created.ID);
 
-            await _client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
+            await _runtime.Client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
 
             var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, targetIterations, onProgress, ct);
 
-            var inspect = await _client.Containers.InspectContainerAsync(created.ID, ct);
+            var inspect = await _runtime.Client.Containers.InspectContainerAsync(created.ID, ct);
             var stepIds = resolvedSteps.Select(s => s.Id).Distinct().ToList();
             var report = await ReadSummaryAsync(created.ID, request.Scenario, stepIds, inspect.State.ExitCode, output, ct);
-            await _client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
+            await _runtime.Client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
 
             return report;
         }
@@ -548,7 +447,7 @@ public class DockerService : IDockerService
     {
         try
         {
-            await _client.Containers.StopContainerAsync(
+            await _runtime.Client.Containers.StopContainerAsync(
                 containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, CancellationToken.None);
         }
         catch (Exception ex)
@@ -558,7 +457,7 @@ public class DockerService : IDockerService
 
         try
         {
-            await _client.Containers.RemoveContainerAsync(
+            await _runtime.Client.Containers.RemoveContainerAsync(
                 containerId, new ContainerRemoveParameters { Force = true }, CancellationToken.None);
         }
         catch (Exception ex)
@@ -665,7 +564,7 @@ public class DockerService : IDockerService
 
     private async Task<string> StreamLogsWithProgressAsync(string containerId, int totalSeconds, int? targetIterations, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
-        using var logStream = await _client.Containers.GetContainerLogsAsync(
+        using var logStream = await _runtime.Client.Containers.GetContainerLogsAsync(
             containerId,
             tty: false,
             new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true },
@@ -775,7 +674,7 @@ public class DockerService : IDockerService
             // populated (two samples internally), which is what the CPU% formula below needs -
             // same as what `docker stats --no-stream` does under the hood.
             ContainerStatsResponse? stats = null;
-            var statsTask = _client.Containers.GetContainerStatsAsync(
+            var statsTask = _runtime.Client.Containers.GetContainerStatsAsync(
                 container.ContainerId,
                 new ContainerStatsParameters { Stream = false },
                 new Progress<ContainerStatsResponse>(s => stats = s),
@@ -859,7 +758,7 @@ public class DockerService : IDockerService
     {
         try
         {
-            var output = await ExecAsync(containerId, ["sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c :"], ct);
+            var output = await _runtime.ExecAsync(containerId, ["sh", "-c", "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | grep -c :"], ct);
             return int.TryParse(output.Trim(), out var count) ? count : 0;
         }
         catch (Exception ex)
@@ -932,7 +831,7 @@ public class DockerService : IDockerService
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
-            foreach (var arg in new[] { "compose", "-p", _composeProject, "-f", _composeFile }.Concat(args))
+            foreach (var arg in new[] { "compose", "-p", _runtime.ComposeProject, "-f", _composeFile }.Concat(args))
             {
                 psi.ArgumentList.Add(arg);
             }
@@ -955,575 +854,6 @@ public class DockerService : IDockerService
         finally
         {
             _composeGate.Release();
-        }
-    }
-
-    public async Task<string?> FlushRedisAsync(CancellationToken ct)
-    {
-        // FLUSHALL against the master alone is enough - Redis propagates it to redis-replica1/2 via
-        // normal command replication, no need to flush each node separately.
-        var container = await FindAsync("redis-master", ct);
-        if (container is null)
-        {
-            return null;
-        }
-
-        var output = await ExecAsync(container.ID, ["redis-cli", "FLUSHALL"], ct);
-        _logger.LogWarning("Flushed Redis cache: {Output}", output.Trim());
-        return output.Trim();
-    }
-
-    // Runs a command inside a container via Docker's exec API and returns whichever of
-    // stdout/stderr actually has content - shared by FlushRedisAsync and the connection-stats
-    // queries below, all of which are "shell out to a CLI already inside the target container"
-    // rather than adding a new client library dependency (Npgsql, StackExchange.Redis) to
-    // control-api just to run one read-only command.
-    // A netem-partitioned or paused target (chaos testing this very tool enables) can leave a
-    // command like mongosh blocked on its own server-selection timeout for tens of seconds - and
-    // with no bound here at all, a truly stuck exec would freeze whichever poller called this for
-    // the rest of the process's life. 10s is generous for the read-only status/config commands this
-    // is used for (normally under a second) without masking a real hang as "just slow".
-    private static readonly TimeSpan ExecTimeout = TimeSpan.FromSeconds(10);
-
-    private async Task<string> ExecAsync(string containerId, IList<string> cmd, CancellationToken ct)
-    {
-        var (_, output) = await ExecWithExitCodeAsync(containerId, cmd, ct);
-        return output;
-    }
-
-    // Callers that only read status/config (the other ~10 call sites) go through ExecAsync above
-    // and don't care whether the command itself succeeded inside the container - a read returning
-    // empty/unparseable output already fails safely on its own. The two write-paths that mutate
-    // container state (SetReplicationLagAsync's ALTER SYSTEM, SetSentinelConfigAsync's SENTINEL
-    // SET) need the actual exit code: docker exec always succeeds at *starting* the command, so a
-    // failed ALTER SYSTEM/SENTINEL SET only shows up in this exit code, never as an exception.
-    private async Task<(long ExitCode, string Output)> ExecWithExitCodeAsync(string containerId, IList<string> cmd, CancellationToken ct)
-    {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ExecTimeout);
-        try
-        {
-            var exec = await _client.Exec.ExecCreateContainerAsync(containerId, new ContainerExecCreateParameters
-            {
-                Cmd = cmd,
-                AttachStdout = true,
-                AttachStderr = true,
-            }, timeoutCts.Token);
-
-            using var stream = await _client.Exec.StartAndAttachContainerExecAsync(exec.ID, false, timeoutCts.Token);
-            var (stdout, stderr) = await stream.ReadOutputToEndAsync(timeoutCts.Token);
-            var output = string.IsNullOrWhiteSpace(stdout) ? stderr : stdout;
-
-            var inspect = await _client.Exec.InspectContainerExecAsync(exec.ID, timeoutCts.Token);
-            return (inspect.ExitCode, output);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            // Our own CancelAfter fired, not the caller's token - surface this as a plain failure
-            // (TimeoutException), not OperationCanceledException, so callers/pollers that
-            // deliberately let a real shutdown cancellation propagate don't mistake this timeout
-            // for one and let it kill the whole poller instead of just failing this one tick.
-            throw new TimeoutException($"docker exec timed out after {ExecTimeout} for container {containerId}");
-        }
-    }
-
-    // `SHOW POOLS` columns (unaligned, pipe-separated): database|user|pool_mode|cl_idle|cl_active|
-    // cl_waiting|cl_cancel_req|sv_active|sv_idle|sv_used|sv_tested|sv_login|maxwait|maxwait_us -
-    // confirmed against a real pgcat before parsing anything, same discipline as everywhere else
-    // this session dealt with an external tool's text output.
-    public async Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(CancellationToken ct)
-    {
-        var container = await FindAsync("pgcat", ct);
-        if (container is null)
-        {
-            return null;
-        }
-
-        var output = await ExecAsync(container.ID, ["sh", "-c", "PGPASSWORD=admin_pass psql -h 127.0.0.1 -p 6432 -U admin_user pgcat -tAc \"SHOW POOLS\""], ct);
-        var pools = new List<PoolConnectionStats>();
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var f = line.Split('|');
-            if (f.Length < 10)
-            {
-                continue;
-            }
-
-            pools.Add(new PoolConnectionStats(
-                f[0],
-                int.Parse(f[3], CultureInfo.InvariantCulture),
-                int.Parse(f[4], CultureInfo.InvariantCulture),
-                int.Parse(f[5], CultureInfo.InvariantCulture),
-                int.Parse(f[7], CultureInfo.InvariantCulture),
-                int.Parse(f[8], CultureInfo.InvariantCulture),
-                int.Parse(f[9], CultureInfo.InvariantCulture)));
-        }
-
-        return new PgcatConnectionStats(pools);
-    }
-
-    public async Task<PostgresConnectionStats?> GetPostgresConnectionsAsync(CancellationToken ct)
-    {
-        var container = await FindAsync("postgres", ct);
-        if (container is null)
-        {
-            return null;
-        }
-
-        var output = await ExecAsync(container.ID,
-            ["psql", "-U", "postgres", "-tAc", "SELECT datname, count(*) FROM pg_stat_activity WHERE datname IS NOT NULL GROUP BY datname"], ct);
-
-        var byDatabase = new Dictionary<string, int>();
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var f = line.Split('|');
-            if (f.Length == 2 && int.TryParse(f[1], out var count))
-            {
-                byDatabase[f[0]] = count;
-            }
-        }
-
-        return new PostgresConnectionStats(byDatabase, byDatabase.Values.Sum());
-    }
-
-    // --formatter=json instead of parsing rabbitmqctl's plain-text table (unlike SHOW POOLS/
-    // pg_stat_activity above) - rabbitmqctl's default text output interleaves an informational
-    // "Listing queues for vhost ..." banner with the data on the same stream depending on version,
-    // where psql's `-tAc` flag reliably strips that noise for the Postgres-based reads above. JSON
-    // is the one format rabbitmqctl guarantees won't change shape across 3.x point releases.
-    internal sealed record RabbitMqQueueInfo(string Name, int Messages);
-    private static readonly JsonSerializerOptions RabbitMqJsonOptions = new() { PropertyNameCaseInsensitive = true };
-
-    // rabbitmqctl's json formatter emits newline-delimited JSON objects for list_queues (one row per
-    // line), not a single wrapped array - but that shape isn't documented as a stable guarantee
-    // across versions, so this tolerates a real array too rather than assuming one or the other.
-    internal static List<RabbitMqQueueInfo> ParseRabbitMqQueueList(string output)
-    {
-        var trimmed = output.TrimStart();
-        if (trimmed.StartsWith('['))
-        {
-            return JsonSerializer.Deserialize<List<RabbitMqQueueInfo>>(trimmed, RabbitMqJsonOptions) ?? [];
-        }
-
-        var result = new List<RabbitMqQueueInfo>();
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            if (!line.StartsWith('{'))
-            {
-                continue;
-            }
-
-            // A line starting with '{' can still be malformed/truncated - e.g. the 10s ExecTimeout
-            // above cutting rabbitmqctl off mid-stream. Skipping just that line keeps this read-only
-            // status query "fails safely" like every other ExecAsync-based read in this class (see
-            // the comment above ExecAsync), instead of taking the whole panel down with an uncaught
-            // JsonException over one bad line.
-            try
-            {
-                var queue = JsonSerializer.Deserialize<RabbitMqQueueInfo>(line, RabbitMqJsonOptions);
-                if (queue is not null)
-                {
-                    result.Add(queue);
-                }
-            }
-            catch (JsonException)
-            {
-            }
-        }
-
-        return result;
-    }
-
-    public async Task<DeadLetterQueueStats?> GetDeadLetterQueueStatsAsync(CancellationToken ct)
-    {
-        var container = await FindAsync("rabbitmq", ct);
-        if (container is null)
-        {
-            return null;
-        }
-
-        // Needs the exit code, unlike the other ExecAsync-based reads in this class - those read
-        // config/status where "empty/unparseable output" already fails safely as itself (see
-        // ExecAsync's own comment), but here an empty result is indistinguishable from the real
-        // "zero dead-lettered messages" success case. Without checking the exit code, a failed
-        // rabbitmqctl invocation (e.g. a transient auth/cookie mismatch right after the container
-        // restarts) would silently report "all clear" instead of surfacing the failure - exactly the
-        // kind of false negative this panel exists to avoid.
-        var (exitCode, output) = await ExecWithExitCodeAsync(container.ID, ["rabbitmqctl", "list_queues", "name", "messages", "--formatter=json"], ct);
-        if (exitCode != 0)
-        {
-            throw new InvalidOperationException($"rabbitmqctl exited {exitCode}: {output}");
-        }
-
-        var allQueues = ParseRabbitMqQueueList(output);
-
-        // ".dead" is RabbitMqConsumer's own DeadQueueName convention ("{queueName}.dead") - matching
-        // on the suffix instead of a hardcoded queue list means a new consumer's dead-letter queue
-        // shows up here automatically, with nothing to keep in sync by hand.
-        var deadQueues = allQueues
-            .Where(q => q.Name.EndsWith(".dead", StringComparison.Ordinal))
-            .Select(q => new DeadLetterQueueDepth(q.Name, q.Messages))
-            .ToList();
-
-        return new DeadLetterQueueStats(deadQueues, deadQueues.Sum(q => q.MessageCount));
-    }
-
-    // Redis Sentinel can fail over on its own (see infra/redis/sentinel.conf) - "redis-master" is
-    // only a hostname/label in architecture.json, not a guarantee that container is still the one
-    // actually serving writes. ROLE is asked of each of the three data nodes directly, not read off
-    // Sentinel's own view (see GetSentinelConfigAsync above) - it's the ground truth of what each
-    // Redis process itself currently believes it is, and needs no IP-to-container mapping the way
-    // reading Sentinel's reported master IP would.
-    public async Task<InfraTopology> GetRedisTopologyAsync(CancellationToken ct)
-    {
-        var roles = new List<NodeRole>();
-        foreach (var serviceId in RedisDataNodes)
-        {
-            var container = await FindAsync(serviceId, ct);
-            if (container is null)
-            {
-                roles.Add(new NodeRole(serviceId, "unreachable"));
-                continue;
-            }
-
-            try
-            {
-                var output = await ExecAsync(container.ID, ["redis-cli", "-p", "6379", "ROLE"], ct);
-                var role = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-                roles.Add(new NodeRole(serviceId, role switch { "master" => "master", "slave" => "replica", _ => "unreachable" }));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to read Redis ROLE from {ServiceId}", serviceId);
-                roles.Add(new NodeRole(serviceId, "unreachable"));
-            }
-        }
-
-        return new InfraTopology(roles);
-    }
-
-    // MongoDB elects its own primary among the replica set members with no external tool involved -
-    // the same "the graph's static node labels can lie" problem as Redis Sentinel above. rs.status()
-    // has to run against a member that's actually reachable, so this tries mongo1/2/3 in turn and
-    // uses whichever first responds; its view covers every member (reachable or not) in one call, so
-    // only one successful exec is needed per poll instead of one per node.
-    public async Task<InfraTopology> GetMongoTopologyAsync(CancellationToken ct)
-    {
-        foreach (var serviceId in MongoNodes)
-        {
-            var container = await FindAsync(serviceId, ct);
-            if (container is null)
-            {
-                continue;
-            }
-
-            try
-            {
-                var output = await ExecAsync(container.ID,
-                    ["mongosh", "--quiet", "--eval", "JSON.stringify(rs.status().members.map(m => ({ name: m.name, state: m.stateStr })))"], ct);
-
-                // mongosh can print a version/connection banner before the eval result even with
-                // --quiet - slicing from the first '[' skips over that instead of assuming the whole
-                // output is clean JSON.
-                var start = output.IndexOf('[');
-                if (start < 0)
-                {
-                    continue;
-                }
-
-                using var doc = JsonDocument.Parse(output[start..]);
-                var roles = new List<NodeRole>();
-                foreach (var member in doc.RootElement.EnumerateArray())
-                {
-                    var name = member.GetProperty("name").GetString() ?? "";
-                    var memberServiceId = name.Split(':')[0];
-                    var state = member.GetProperty("state").GetString() ?? "";
-                    roles.Add(new NodeRole(memberServiceId, state switch
-                    {
-                        "PRIMARY" => "primary",
-                        "SECONDARY" => "secondary",
-                        _ => "unreachable",
-                    }));
-                }
-
-                return new InfraTopology(roles);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to read Mongo replica set status from {ServiceId}", serviceId);
-            }
-        }
-
-        // Every member unreachable (or none responded) - report all three as unreachable rather than
-        // an empty list, so the UI still has something to render.
-        return new InfraTopology(MongoNodes.Select(id => new NodeRole(id, "unreachable")).ToList());
-    }
-
-    // recovery_min_apply_delay is a PGC_SIGHUP GUC on a standby - ALTER SYSTEM SET + pg_reload_conf()
-    // applies it live, no restart. pg_settings.setting for a GUC_UNIT_MS parameter is always the raw
-    // millisecond integer with no suffix, unlike SHOW's human-formatted output ("5s", "1min", ...) -
-    // reading that column instead of parsing SHOW's text is what keeps GetReplicationLagAsync simple.
-    public async Task<ReplicationLag?> GetReplicationLagAsync(string serviceId, CancellationToken ct)
-    {
-        if (!PostgresReplicas.Contains(serviceId))
-        {
-            return null;
-        }
-
-        var container = await FindAsync(serviceId, ct);
-        if (container is null)
-        {
-            return null;
-        }
-
-        var output = await ExecAsync(container.ID, ["psql", "-U", "postgres", "-tAc", "SELECT setting FROM pg_settings WHERE name = 'recovery_min_apply_delay'"], ct);
-        return new ReplicationLag(int.TryParse(output.Trim(), out var ms) ? ms : 0);
-    }
-
-    public async Task<ReplicationLag?> SetReplicationLagAsync(string serviceId, int delayMs, CancellationToken ct)
-    {
-        if (!PostgresReplicas.Contains(serviceId))
-        {
-            return null;
-        }
-
-        var container = await FindAsync(serviceId, ct);
-        if (container is null)
-        {
-            return null;
-        }
-
-        // Two separate exec calls, not one "ALTER SYSTEM SET ...; SELECT pg_reload_conf();" - psql
-        // sends a multi-statement -c string as one simple-query message, which Postgres runs inside
-        // an implicit transaction block, and ALTER SYSTEM refuses to run inside one (confirmed live:
-        // "ERROR: ALTER SYSTEM cannot run inside a transaction block" when combined).
-        var (alterExitCode, alterOutput) = await ExecWithExitCodeAsync(container.ID, ["psql", "-U", "postgres", "-c", $"ALTER SYSTEM SET recovery_min_apply_delay = '{delayMs}ms'"], ct);
-        if (alterExitCode != 0)
-        {
-            _logger.LogWarning("Setting {ServiceId} replication lag failed (exit {ExitCode}): {Output}", serviceId, alterExitCode, alterOutput);
-            throw new InvalidOperationException($"psql exited {alterExitCode}: {alterOutput}");
-        }
-
-        var (reloadExitCode, reloadOutput) = await ExecWithExitCodeAsync(container.ID, ["psql", "-U", "postgres", "-c", "SELECT pg_reload_conf()"], ct);
-        if (reloadExitCode != 0)
-        {
-            _logger.LogWarning("Reloading {ServiceId} config after setting replication lag failed (exit {ExitCode}): {Output}", serviceId, reloadExitCode, reloadOutput);
-            throw new InvalidOperationException($"psql exited {reloadExitCode}: {reloadOutput}");
-        }
-
-        _logger.LogWarning("Set {ServiceId} replication lag (recovery_min_apply_delay) to {DelayMs}ms", serviceId, delayMs);
-        return new ReplicationLag(delayMs);
-    }
-
-    // SENTINEL MASTER returns a flat alternating key/value list (confirmed against a real Sentinel
-    // before parsing anything) - reads it off redis-sentinel-1 as a representative instance, since a
-    // successful SetSentinelConfigAsync keeps all three in sync anyway.
-    public async Task<SentinelConfig?> GetSentinelConfigAsync(CancellationToken ct)
-    {
-        var container = await FindAsync("redis-sentinel-1", ct);
-        if (container is null)
-        {
-            return null;
-        }
-
-        var output = await ExecAsync(container.ID, ["redis-cli", "-p", "26379", "SENTINEL", "MASTER", "mymaster"], ct);
-        var lines = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        var fields = new Dictionary<string, string>();
-        for (var i = 0; i + 1 < lines.Length; i += 2)
-        {
-            fields[lines[i]] = lines[i + 1];
-        }
-
-        int Get(string key) => fields.TryGetValue(key, out var v) && int.TryParse(v, out var n) ? n : 0;
-        return new SentinelConfig(Get("down-after-milliseconds"), Get("quorum"), Get("failover-timeout"));
-    }
-
-    public async Task<SentinelConfig> SetSentinelConfigAsync(SentinelConfig config, CancellationToken ct)
-    {
-        foreach (var serviceId in SentinelContainers)
-        {
-            var container = await FindAsync(serviceId, ct);
-            if (container is null)
-            {
-                // A missing container used to just `continue` past, then still return `config` at
-                // the end as if it had been applied to all three - the caller had no way to tell a
-                // partial application (e.g. one Sentinel down for maintenance) from a full one.
-                // Failing loudly here is the same "don't report success you didn't verify" principle
-                // as the exit-code checks below, just for "the container wasn't even there" instead
-                // of "the command it ran failed".
-                _logger.LogWarning("Setting Sentinel config failed: {ServiceId} container not found", serviceId);
-                throw new InvalidOperationException($"Sentinel container {serviceId} not found");
-            }
-
-            // Three separate SENTINEL SET calls, not one with multiple option/value pairs - kept to
-            // exactly the shape already confirmed live against a real Sentinel, one option at a time.
-            await SentinelSetAsync(container.ID, serviceId, "down-after-milliseconds", config.DownAfterMs.ToString(), ct);
-            await SentinelSetAsync(container.ID, serviceId, "quorum", config.Quorum.ToString(), ct);
-            await SentinelSetAsync(container.ID, serviceId, "failover-timeout", config.FailoverTimeoutMs.ToString(), ct);
-        }
-
-        _logger.LogWarning(
-            "Set Sentinel config on {Containers}: down-after-milliseconds={DownAfterMs}, quorum={Quorum}, failover-timeout={FailoverTimeoutMs}",
-            string.Join(", ", SentinelContainers), config.DownAfterMs, config.Quorum, config.FailoverTimeoutMs);
-
-        return config;
-    }
-
-    // redis-cli exits non-zero not just on a connection failure but also when the server's reply to
-    // the command it ran was itself an error (e.g. "(error) ERR ..."), so this exit code is a real
-    // signal here - unlike a bare docker-exec-couldn't-start failure, it's specifically the SENTINEL
-    // SET command that Redis itself rejected.
-    private async Task SentinelSetAsync(string containerId, string serviceId, string option, string value, CancellationToken ct)
-    {
-        var (exitCode, output) = await ExecWithExitCodeAsync(containerId, ["redis-cli", "-p", "26379", "SENTINEL", "SET", "mymaster", option, value], ct);
-        if (exitCode != 0)
-        {
-            _logger.LogWarning("Setting Sentinel {Option} on {ServiceId} failed (exit {ExitCode}): {Output}", option, serviceId, exitCode, output);
-            throw new InvalidOperationException($"redis-cli exited {exitCode}: {output}");
-        }
-    }
-
-    internal readonly record struct RedisRoleObservation(string ServiceId, string Role);
-
-    // Picks the one node reporting ROLE=master among the observations, or null if zero or more than
-    // one do. Zero means no node is currently reachable/master-y (probably still starting up); more
-    // than one means either a real failover is still mid-flight (the old master hasn't stepped down
-    // yet) or a genuine split-brain - in both of those cases guessing which one is "right" and
-    // re-pointing Sentinel at it could make things worse, not better, so the caller's only safe move
-    // is to do nothing and check again next tick. Extracted as a pure function so this decision rule
-    // has a test that doesn't need a live Docker daemon, unlike the rest of this class.
-    internal static string? SelectSoleMaster(IEnumerable<RedisRoleObservation> observations)
-    {
-        var masters = observations.Where(o => o.Role == "master").Select(o => o.ServiceId).ToList();
-        return masters.Count == 1 ? masters[0] : null;
-    }
-
-    private async Task<string?> GetContainerIpAsync(string containerId, CancellationToken ct)
-    {
-        var inspect = await _client.Containers.InspectContainerAsync(containerId, ct);
-        return inspect.NetworkSettings?.Networks?.TryGetValue(_composeNetwork, out var endpoint) == true ? endpoint.IPAddress : null;
-    }
-
-    // Sentinel monitors "mymaster" by IP, not by container name - and once its config carries the
-    // "# Generated by CONFIG REWRITE" marker (see the sentinel command's own comment in
-    // docker-compose.yml, and master-entrypoint.sh's matching STATE_FILE logic), nothing in this
-    // stack ever re-resolves that address again for the life of the named volume backing it. If
-    // redis-master is ever recreated by something Sentinel itself didn't observe as a failure (a
-    // plain `docker compose up`, not a real outage), Docker hands the new container an IP from its
-    // reuse pool - Sentinel keeps monitoring the stale one, which a later `up` cycle can just as
-    // easily hand to a completely unrelated container. Discovered live in this repo's own dev stack:
-    // all three Sentinels ended up agreeing on an IP that belonged to sandbox-aspire-dashboard-1, not
-    // Redis at all (see the 3a9af3d review report's F3 for the full incident write-up) - every
-    // redirect-api/link-api request needing Redis blocked for a full ConnectTimeout and failed, for
-    // as long as that container ran.
-    //
-    // This periodically re-derives the real master directly - ROLE asked of each of the three actual
-    // Redis containers, the same ground-truth check GetRedisTopologyAsync already uses, never trusting
-    // Sentinel's own belief about itself - and corrects any Sentinel found monitoring a different
-    // address. This never fights a genuine failover: once Sentinel promotes a replica, that replica's
-    // own ROLE reports "master" too, so the real master this resolves to is the same one Sentinel
-    // already switched to - nothing to correct. It only catches the case Sentinel itself has no way to
-    // notice: its remembered address quietly stopped being Redis at all.
-    public async Task SelfHealSentinelAsync(CancellationToken ct)
-    {
-        var observations = new List<RedisRoleObservation>();
-        var containersByServiceId = new Dictionary<string, ContainerListResponse>();
-        foreach (var serviceId in RedisDataNodes)
-        {
-            var container = await FindAsync(serviceId, ct);
-            if (container is null)
-            {
-                continue;
-            }
-
-            containersByServiceId[serviceId] = container;
-            try
-            {
-                var output = await ExecAsync(container.ID, ["redis-cli", "-p", "6379", "ROLE"], ct);
-                var role = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-                observations.Add(new RedisRoleObservation(serviceId, role switch { "master" => "master", "slave" => "replica", _ => "unreachable" }));
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "SelfHealSentinelAsync: failed to read ROLE from {ServiceId} - skipping this node for this tick", serviceId);
-            }
-        }
-
-        var realMasterServiceId = SelectSoleMaster(observations);
-        if (realMasterServiceId is null)
-        {
-            return;
-        }
-
-        var realMasterIp = await GetContainerIpAsync(containersByServiceId[realMasterServiceId].ID, ct);
-        if (realMasterIp is null)
-        {
-            return;
-        }
-
-        // Best-effort: read whatever down-after/quorum/failover-timeout is currently configured so a
-        // correction below can restore it - SENTINEL MONITOR resets a freshly (re-)created "mymaster"
-        // entry to sentinel.conf's own template defaults, not necessarily whatever
-        // SetSentinelConfigAsync had previously applied through the UI. Falls back to the template's
-        // own baked-in values (see sentinel.conf) if even this read fails.
-        SentinelConfig? previousConfig;
-        try
-        {
-            previousConfig = await GetSentinelConfigAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "SelfHealSentinelAsync: failed to read current Sentinel config before any correction - falling back to sentinel.conf's own template defaults");
-            previousConfig = null;
-        }
-
-        var quorum = previousConfig is { Quorum: > 0 } ? previousConfig.Quorum : 2;
-        var downAfterMs = previousConfig is { DownAfterMs: > 0 } ? previousConfig.DownAfterMs : 5000;
-        var failoverTimeoutMs = previousConfig is { FailoverTimeoutMs: > 0 } ? previousConfig.FailoverTimeoutMs : 10000;
-
-        foreach (var sentinelServiceId in SentinelContainers)
-        {
-            var sentinelContainer = await FindAsync(sentinelServiceId, ct);
-            if (sentinelContainer is null)
-            {
-                continue;
-            }
-
-            string reportedAddr;
-            try
-            {
-                reportedAddr = await ExecAsync(sentinelContainer.ID, ["redis-cli", "-p", "26379", "SENTINEL", "get-master-addr-by-name", "mymaster"], ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "SelfHealSentinelAsync: failed to query {ServiceId}'s view of mymaster - skipping this tick", sentinelServiceId);
-                continue;
-            }
-
-            var reportedIp = reportedAddr.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (string.Equals(reportedIp, realMasterIp, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            _logger.LogWarning(
-                "SelfHealSentinelAsync: {SentinelServiceId} was monitoring {ReportedIp} as mymaster, but {RealMasterServiceId} ({RealMasterIp}) is the only node currently reporting ROLE=master - re-pointing",
-                sentinelServiceId, reportedIp, realMasterServiceId, realMasterIp);
-
-            try
-            {
-                await ExecAsync(sentinelContainer.ID, ["redis-cli", "-p", "26379", "SENTINEL", "REMOVE", "mymaster"], ct);
-                await ExecAsync(sentinelContainer.ID, ["redis-cli", "-p", "26379", "SENTINEL", "MONITOR", "mymaster", realMasterIp, "6379", quorum.ToString()], ct);
-                await SentinelSetAsync(sentinelContainer.ID, sentinelServiceId, "down-after-milliseconds", downAfterMs.ToString(), ct);
-                await SentinelSetAsync(sentinelContainer.ID, sentinelServiceId, "failover-timeout", failoverTimeoutMs.ToString(), ct);
-                // Not exposed via SentinelConfig/the UI - restored to the template's own value (see
-                // sentinel.conf) since MONITOR reset it, not because it was ever customizable here.
-                await SentinelSetAsync(sentinelContainer.ID, sentinelServiceId, "parallel-syncs", "1", ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "SelfHealSentinelAsync: failed to re-point {ServiceId} at {RealMasterIp} - will retry next tick", sentinelServiceId, realMasterIp);
-            }
         }
     }
 
@@ -1716,91 +1046,6 @@ public class DockerService : IDockerService
         }
     }
 
-    public PgcatPoolSettings GetPgcatPoolSettings() => _pgcatPoolSettings;
-
-    // Rewrites pgcat.toml wholesale rather than patching the existing file's text - deterministic
-    // and reversible regardless of what the file currently looks like, same reasoning as
-    // sentinel.conf being generated fresh at container start rather than edited in place. Written to
-    // a *separate* writable bind mount of the same host directory (control-api's own workspace mount
-    // is read-only on purpose - see RunComposeAsync's --no-deps comment for the other toggle that
-    // learned this the hard way); pgcat itself still mounts the file read-only, but Docker bind
-    // mounts are live views of the same host file, so pgcat's own `autoreload = 15000` picks this up
-    // within ~15s with no docker compose call at all - no recreate, no --no-deps cascade risk.
-    // Collapses the original file's differentiated per-pool sizes (10/20/10) into one shared value -
-    // acceptable for an experimental control whose whole point is "what happens if I shrink every
-    // pool", not preserving the original tuning.
-    public async Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct)
-    {
-        var path = Path.Combine(_pgcatConfigDir, "pgcat.toml");
-        await File.WriteAllTextAsync(path, RenderPgcatToml(settings), ct);
-
-        _logger.LogWarning(
-            "Rewrote pgcat.toml: pool_mode={PoolMode}, read_write_splitting={ReadWriteSplitting}, pool_size={PoolSize} - pgcat autoreload picks this up within ~15s",
-            settings.PoolMode, settings.ReadWriteSplitting, settings.PoolSize);
-
-        _pgcatPoolSettings = settings;
-        return settings;
-    }
-
-    private static readonly IReadOnlyList<string> PgcatDatabases = ["users_db", "links_db", "clicks_db"];
-
-    private static string RenderPgcatToml(PgcatPoolSettings settings)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("# Rewritten live by control-api's pgcat pool-settings control (see DockerService.SetPgcatPoolSettingsAsync).");
-        sb.AppendLine("# One primary + 2 streaming replicas (postgres-replica1/2), same trio for all three databases.");
-        sb.AppendLine();
-        sb.AppendLine("[general]");
-        sb.AppendLine("host = \"0.0.0.0\"");
-        sb.AppendLine("port = 6432");
-        sb.AppendLine("enable_prometheus_exporter = false");
-        sb.AppendLine("connect_timeout = 5000");
-        sb.AppendLine("idle_timeout = 30000");
-        sb.AppendLine("healthcheck_timeout = 1000");
-        sb.AppendLine("healthcheck_delay = 30000");
-        sb.AppendLine("shutdown_timeout = 5000");
-        // Was 20 (seconds). A 200-VU/20-replica run's connection-establishment burst hit intermittent
-        // Docker embedded-DNS lookup failures against postgres-replica1/2 ("failed to lookup address
-        // information") - transient, gone on the very next attempt - but pgcat's ban then blocked that
-        // replica for the *entire* ban_time, and every read routed there in the meantime queued for
-        // it: this is exactly what showed up as ~20s p95/max on /health/ready (and rare 50s+ tail
-        // latencies on real traffic) despite pgcat's own pool never once reporting a queued client.
-        // Same class of Docker-DNS flakiness already known here for Redis Sentinel (see
-        // [[resilience-ha-postgres-mongo-redis]] in project memory) - shortening the ban keeps the
-        // circuit-breaker (don't hammer a genuinely dead replica) without magnifying a sub-second
-        // blip into a 20-second one. See sandbox/docs/pgcat-pool-sizing.md.
-        sb.AppendLine("ban_time = 3");
-        sb.AppendLine("log_client_connections = false");
-        sb.AppendLine("log_client_disconnections = false");
-        sb.AppendLine("autoreload = 15000");
-        sb.AppendLine("worker_threads = 4");
-        sb.AppendLine("admin_username = \"admin_user\"");
-        sb.AppendLine("admin_password = \"admin_pass\"");
-
-        foreach (var database in PgcatDatabases)
-        {
-            sb.AppendLine();
-            sb.AppendLine($"[pools.{database}]");
-            sb.AppendLine($"pool_mode = \"{settings.PoolMode}\"");
-            sb.AppendLine("default_role = \"primary\"");
-            sb.AppendLine("query_parser_enabled = true");
-            sb.AppendLine($"query_parser_read_write_splitting = {(settings.ReadWriteSplitting ? "true" : "false")}");
-            sb.AppendLine("primary_reads_enabled = true");
-            sb.AppendLine();
-            sb.AppendLine($"[pools.{database}.users.0]");
-            sb.AppendLine("username = \"postgres\"");
-            sb.AppendLine("password = \"postgres\"");
-            sb.AppendLine($"pool_size = {settings.PoolSize}");
-            sb.AppendLine("statement_timeout = 0");
-            sb.AppendLine();
-            sb.AppendLine($"[pools.{database}.shards.0]");
-            sb.AppendLine("servers = [[\"postgres\", 5432, \"primary\"], [\"postgres-replica1\", 5432, \"replica\"], [\"postgres-replica2\", 5432, \"replica\"]]");
-            sb.AppendLine($"database = \"{database}\"");
-        }
-
-        return sb.ToString();
-    }
-
     public IReadOnlyList<EndpointDefinition> ListKnownEndpoints() => EndpointRegistry;
 
     public IReadOnlyList<DataSourceDefinition> ListDataSources() => DataSourceRegistry;
@@ -1809,7 +1054,7 @@ public class DockerService : IDockerService
     {
         try
         {
-            var response = await _client.Containers.GetArchiveFromContainerAsync(
+            var response = await _runtime.Client.Containers.GetArchiveFromContainerAsync(
                 containerId, new GetArchiveFromContainerParameters { Path = "/scripts/summary.json" }, false, ct);
             using var responseStream = response.Stream;
 
@@ -1960,76 +1205,16 @@ public class DockerService : IDockerService
         return tarStream;
     }
 
-    private async Task EnsureImageAsync(string image, CancellationToken ct)
-    {
-        var existing = await _client.Images.ListImagesAsync(new ImagesListParameters
-        {
-            Filters = new Dictionary<string, IDictionary<string, bool>>
-            {
-                ["reference"] = new Dictionary<string, bool> { [image] = true },
-            },
-        }, ct);
-
-        if (existing.Count > 0)
-        {
-            return;
-        }
-
-        var parts = image.Split(':', 2);
-        _logger.LogInformation("Pulling {Image} (first use)", image);
-        await _client.Images.CreateImageAsync(
-            new ImagesCreateParameters { FromImage = parts[0], Tag = parts.Length > 1 ? parts[1] : "latest" },
-            null,
-            new Progress<JSONMessage>(),
-            ct);
-    }
-
-    // For an unscaled service this returns Docker's only match either way. For a scaled one
-    // (link-api/redirect-api, ScalableServices) there can be several - Docker's ListContainersAsync
-    // order isn't documented/stable, so picking an arbitrary one here used to mean repeated
-    // Stop/Start/Restart/Degrade calls could silently act on a *different* physical container each
-    // time, and diverge from what the frontend displays (ServiceControls/NodePanel show
-    // instances[0], the lowest containerNumber, per useLiveStack's groupByService sort). Ordering by
-    // container-number and taking the lowest makes this deterministic and matches that same
-    // convention, so "the container the UI shows" and "the container this call acts on" are always
-    // the same one - it does not let a caller target a specific replica among several, which is an
-    // accepted limitation, not something this fixes.
-    private async Task<ContainerListResponse?> FindAsync(string serviceId, CancellationToken ct)
-    {
-        var containers = await _client.Containers.ListContainersAsync(new ContainersListParameters
-        {
-            All = true,
-            Filters = new Dictionary<string, IDictionary<string, bool>>
-            {
-                ["label"] = new Dictionary<string, bool>
-                {
-                    [$"com.docker.compose.project={_composeProject}"] = true,
-                    [$"com.docker.compose.service={serviceId}"] = true,
-                },
-            },
-        }, ct);
-
-        return SelectPrimary(containers);
-    }
-
-    // Extracted from FindAsync so the selection rule itself (lowest container-number wins,
-    // deterministically) is unit-testable without a real/mocked Docker daemon - DockerService talks
-    // to a concrete Docker.DotNet DockerClient with no seam for that anywhere in this codebase.
-    internal static ContainerListResponse? SelectPrimary(IEnumerable<ContainerListResponse> containers) =>
-        containers
-            .OrderBy(c => c.Labels.TryGetValue("com.docker.compose.container-number", out var n) && int.TryParse(n, out var parsed) ? parsed : int.MaxValue)
-            .FirstOrDefault();
-
     private async Task<int> CountReplicasAsync(string serviceId, CancellationToken ct)
     {
-        var containers = await _client.Containers.ListContainersAsync(new ContainersListParameters
+        var containers = await _runtime.Client.Containers.ListContainersAsync(new ContainersListParameters
         {
             All = true,
             Filters = new Dictionary<string, IDictionary<string, bool>>
             {
                 ["label"] = new Dictionary<string, bool>
                 {
-                    [$"com.docker.compose.project={_composeProject}"] = true,
+                    [$"com.docker.compose.project={_runtime.ComposeProject}"] = true,
                     [$"com.docker.compose.service={serviceId}"] = true,
                 },
             },

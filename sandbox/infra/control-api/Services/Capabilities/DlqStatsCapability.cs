@@ -2,7 +2,7 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class DlqStatsCapability(IDockerService docker, ILogger<DlqStatsCapability> logger) : IComponentCapability
+public sealed class DlqStatsCapability(IRabbitMqService rabbitMq, ILogger<DlqStatsCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
@@ -10,7 +10,7 @@ public sealed class DlqStatsCapability(IDockerService docker, ILogger<DlqStatsCa
         {
             try
             {
-                var result = await docker.GetDeadLetterQueueStatsAsync(ct);
+                var result = await rabbitMq.GetDeadLetterQueueStatsAsync(ct);
                 return result is null ? Results.NotFound() : Results.Ok(result);
             }
             catch (Exception ex)

@@ -3,7 +3,7 @@ using Docker.DotNet.Models;
 
 namespace ControlApi.Tests;
 
-public class DockerServiceSelectPrimaryTests
+public class ContainerRuntimeSelectPrimaryTests
 {
     private static ContainerListResponse WithContainerNumber(string id, string? containerNumber)
     {
@@ -28,9 +28,9 @@ public class DockerServiceSelectPrimaryTests
         var one = WithContainerNumber("c-one", "1");
         var three = WithContainerNumber("c-three", "3");
 
-        Assert.Equal("c-one", DockerService.SelectPrimary([two, one, three])?.ID);
-        Assert.Equal("c-one", DockerService.SelectPrimary([one, two, three])?.ID);
-        Assert.Equal("c-one", DockerService.SelectPrimary([three, two, one])?.ID);
+        Assert.Equal("c-one", ContainerRuntime.SelectPrimary([two, one, three])?.ID);
+        Assert.Equal("c-one", ContainerRuntime.SelectPrimary([one, two, three])?.ID);
+        Assert.Equal("c-one", ContainerRuntime.SelectPrimary([three, two, one])?.ID);
     }
 
     [Fact]
@@ -40,12 +40,12 @@ public class DockerServiceSelectPrimaryTests
         // set the container-number label on it - this must keep working exactly as before.
         var only = WithContainerNumber("c-only", containerNumber: null);
 
-        Assert.Equal("c-only", DockerService.SelectPrimary([only])?.ID);
+        Assert.Equal("c-only", ContainerRuntime.SelectPrimary([only])?.ID);
     }
 
     [Fact]
     public void SelectPrimary_NoContainers_ReturnsNull()
     {
-        Assert.Null(DockerService.SelectPrimary([]));
+        Assert.Null(ContainerRuntime.SelectPrimary([]));
     }
 }

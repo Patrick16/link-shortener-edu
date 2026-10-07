@@ -2,7 +2,7 @@ using ControlApi.Services;
 
 namespace ControlApi.Tests;
 
-public class DockerServiceParseRabbitMqQueueListTests
+public class RabbitMqServiceParseRabbitMqQueueListTests
 {
     [Fact]
     public void ParseRabbitMqQueueList_NewlineDelimitedObjects_ParsesEachLine()
@@ -12,7 +12,7 @@ public class DockerServiceParseRabbitMqQueueListTests
         var output = "{\"name\":\"shortener-service.link-created\",\"messages\":0}\n" +
                      "{\"name\":\"shortener-service.link-created.dead\",\"messages\":3}\n";
 
-        var result = DockerService.ParseRabbitMqQueueList(output);
+        var result = RabbitMqService.ParseRabbitMqQueueList(output);
 
         Assert.Equal(2, result.Count);
         Assert.Equal("shortener-service.link-created.dead", result[1].Name);
@@ -26,7 +26,7 @@ public class DockerServiceParseRabbitMqQueueListTests
         // ParseRabbitMqQueueList itself.
         var output = "[{\"name\":\"traffic-service.click-tracked.dead\",\"messages\":1}]";
 
-        var result = DockerService.ParseRabbitMqQueueList(output);
+        var result = RabbitMqService.ParseRabbitMqQueueList(output);
 
         Assert.Single(result);
         Assert.Equal("traffic-service.click-tracked.dead", result[0].Name);
@@ -35,7 +35,7 @@ public class DockerServiceParseRabbitMqQueueListTests
     [Fact]
     public void ParseRabbitMqQueueList_EmptyOutput_ReturnsEmptyList()
     {
-        Assert.Empty(DockerService.ParseRabbitMqQueueList(string.Empty));
+        Assert.Empty(RabbitMqService.ParseRabbitMqQueueList(string.Empty));
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public class DockerServiceParseRabbitMqQueueListTests
         var output = "Listing queues for vhost / ...\n" +
                      "{\"name\":\"reporting-service.click-tracked.dead\",\"messages\":0}\n";
 
-        var result = DockerService.ParseRabbitMqQueueList(output);
+        var result = RabbitMqService.ParseRabbitMqQueueList(output);
 
         Assert.Single(result);
         Assert.Equal("reporting-service.click-tracked.dead", result[0].Name);
@@ -54,12 +54,12 @@ public class DockerServiceParseRabbitMqQueueListTests
     [Fact]
     public void ParseRabbitMqQueueList_TruncatedJsonLine_SkipsItInsteadOfThrowing()
     {
-        // A line that starts with '{' but isn't valid/complete JSON - e.g. the 10s ExecTimeout
-        // cutting rabbitmqctl off mid-stream - must not take the whole read down.
+        // A line that starts with '{' but isn't valid/complete JSON - e.g. the exec timeout cutting
+        // rabbitmqctl off mid-stream - must not take the whole read down.
         var output = "{\"name\":\"shortener-service.click-tracked.dead\",\"mess\n" +
                      "{\"name\":\"traffic-service.click-tracked.dead\",\"messages\":2}\n";
 
-        var result = DockerService.ParseRabbitMqQueueList(output);
+        var result = RabbitMqService.ParseRabbitMqQueueList(output);
 
         Assert.Single(result);
         Assert.Equal("traffic-service.click-tracked.dead", result[0].Name);

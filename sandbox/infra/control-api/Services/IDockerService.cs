@@ -12,15 +12,6 @@ public interface IDockerService
 
     Task<ManagedContainer?> RestartAsync(string serviceId, CancellationToken ct);
 
-    // Runs Pumba against the target's network - the target container itself keeps running
-    // throughout, only its network behaves worse. Self-heals after DurationSeconds; returns null
-    // if the target service isn't found.
-    Task<ChaosAction?> DegradeAsync(string serviceId, ChaosRequest request, CancellationToken ct);
-
-    // Stops any in-progress chaos against a service early instead of waiting out its duration.
-    // Returns how many chaos containers were stopped.
-    Task<int> HealAsync(string serviceId, CancellationToken ct);
-
     // Runs the request's ordered Endpoints sequence through k6-scripts/flow.js against the real
     // stack, calling onProgress roughly once a second (parsed from k6's own periodic status lines)
     // while it runs, then returns the final report. Null return means an endpoint id didn't
@@ -41,11 +32,6 @@ public interface IDockerService
     // replica-management logic is Compose's own, not reimplemented against the raw Docker API.
     Task<ScaleResult> ScaleAsync(string serviceId, int replicas, CancellationToken ct);
 
-    // Runs `redis-cli FLUSHALL` inside the redis container via Docker's exec API - lets a demo
-    // show cold-cache behavior on demand. Returns the command's own output, or null if redis isn't
-    // running.
-    Task<string?> FlushRedisAsync(CancellationToken ct);
-
     // The four standing infra toggles - see InfraStatus for what each one actually does and why
     // they're not all implemented the same way (one's an in-memory flag, three recreate containers).
     InfraStatus GetInfraStatus();
@@ -60,41 +46,6 @@ public interface IDockerService
 
     // The bulk, paginated reads a run's DataPoolRequest can preload from - see DataSourceDefinition.
     IReadOnlyList<DataSourceDefinition> ListDataSources();
-
-    // Live connection counts, read directly off pgcat/postgres via `psql` in a Docker exec (same
-    // approach as FlushRedisAsync) - not polled/cached, a fresh snapshot on every call. Null means
-    // the container isn't running.
-    Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(CancellationToken ct);
-    Task<PostgresConnectionStats?> GetPostgresConnectionsAsync(CancellationToken ct);
-
-    // Which physical container is actually master/primary right now, read directly off each
-    // cluster's own data-plane nodes rather than assumed from architecture.json's static labels -
-    // both Redis Sentinel and MongoDB's replica set can re-elect a leader with zero involvement from
-    // this app, and the graph needs to reflect that instead of silently going stale. See NodeRole.
-    Task<InfraTopology> GetRedisTopologyAsync(CancellationToken ct);
-    Task<InfraTopology> GetMongoTopologyAsync(CancellationToken ct);
-
-    // pgcat.toml pool_mode/read-write-splitting/pool_size - rewrites the file directly and relies on
-    // pgcat's own autoreload, no docker compose recreate involved. See PgcatPoolSettings.
-    PgcatPoolSettings GetPgcatPoolSettings();
-    Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct);
-
-    // Artificial WAL-replay delay on one Postgres standby (postgres-replica1/postgres-replica2) via
-    // recovery_min_apply_delay - live SQL against the target container, no file edit or restart.
-    // Null means the given serviceId isn't a known replica.
-    Task<ReplicationLag?> GetReplicationLagAsync(string serviceId, CancellationToken ct);
-    Task<ReplicationLag?> SetReplicationLagAsync(string serviceId, int delayMs, CancellationToken ct);
-
-    // Redis Sentinel's own live SENTINEL SET/MASTER commands - applied to all 3 sentinel containers
-    // at once (each tracks its own local config independently). See SentinelConfig.
-    Task<SentinelConfig?> GetSentinelConfigAsync(CancellationToken ct);
-    Task<SentinelConfig> SetSentinelConfigAsync(SentinelConfig config, CancellationToken ct);
-
-    // Re-derives the real Redis master directly (ROLE asked of each of the three data containers)
-    // and corrects any Sentinel found monitoring a different address - Sentinel's own remembered
-    // address can go silently stale after a redis-master recreate it never observed as a failure.
-    // See DockerService's own comment on this method for the incident that motivated it.
-    Task SelfHealSentinelAsync(CancellationToken ct);
 
     // Consumer QoS - read once at RabbitMqConsumer startup, so this recreates shortener-service and
     // traffic-service (same env-var + --force-recreate --no-deps shape as the pgcat/cache toggles).
@@ -111,9 +62,4 @@ public interface IDockerService
     // server-pool-size half of. Recreates the same DbTouchingServices set the pgcat toggle does.
     int GetNpgsqlPoolSize();
     Task<int> SetNpgsqlPoolSizeAsync(int poolSize, CancellationToken ct);
-
-    // Live depth of every "{queue}.dead" queue, read directly off RabbitMQ via `rabbitmqctl
-    // list_queues` in a Docker exec (same approach as FlushRedisAsync) - not polled/cached, a fresh
-    // snapshot on every call. Null means the rabbitmq container isn't running.
-    Task<DeadLetterQueueStats?> GetDeadLetterQueueStatsAsync(CancellationToken ct);
 }

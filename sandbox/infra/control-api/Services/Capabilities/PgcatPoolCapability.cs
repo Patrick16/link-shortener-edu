@@ -2,11 +2,11 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class PgcatPoolCapability(IDockerService docker, ILogger<PgcatPoolCapability> logger) : IComponentCapability
+public sealed class PgcatPoolCapability(IPgcatService pgcat, ILogger<PgcatPoolCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
-        app.MapGet("/api/infra/pgcat-pool", () => Results.Ok(docker.GetPgcatPoolSettings()));
+        app.MapGet("/api/infra/pgcat-pool", () => Results.Ok(pgcat.GetPgcatPoolSettings()));
 
         app.MapPost("/api/infra/pgcat-pool", async (PgcatPoolSettings request, CancellationToken ct) =>
         {
@@ -22,7 +22,7 @@ public sealed class PgcatPoolCapability(IDockerService docker, ILogger<PgcatPool
 
             try
             {
-                return Results.Ok(await docker.SetPgcatPoolSettingsAsync(request, ct));
+                return Results.Ok(await pgcat.SetPgcatPoolSettingsAsync(request, ct));
             }
             catch (Exception ex)
             {

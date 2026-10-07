@@ -15,10 +15,7 @@ public static class CapabilityEndpointExtensions
             ?? "/workspace/frontend/architecture-map/src/data/architecture.json";
         try
         {
-            var capabilities = new CapabilityFactory().BuildFromArchitectureFile(
-                architectureFile,
-                app.Services.GetRequiredService<IDockerService>(),
-                app.Services.GetRequiredService<ILoggerFactory>());
+            var capabilities = new CapabilityFactory().BuildFromArchitectureFile(architectureFile, app.Services);
             foreach (var capability in capabilities)
             {
                 capability.MapEndpoints(app);

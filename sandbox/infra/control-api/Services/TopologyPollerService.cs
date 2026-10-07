@@ -12,7 +12,8 @@ namespace ControlApi.Services;
 // poll interval, not one plus each tab's own), and control-api makes exactly one set of exec calls
 // per tick no matter how many tabs are open.
 public class TopologyPollerService(
-    IDockerService docker,
+    IRedisInfraService redis,
+    IMongoTopologyService mongo,
     IHubContext<StatusHub> hub,
     ILogger<TopologyPollerService> logger) : BackgroundService
 {
@@ -27,9 +28,9 @@ public class TopologyPollerService(
         {
             try
             {
-                var redis = await docker.GetRedisTopologyAsync(stoppingToken);
-                var mongo = await docker.GetMongoTopologyAsync(stoppingToken);
-                var current = redis.Roles.Concat(mongo.Roles).ToList();
+                var redisTopology = await redis.GetRedisTopologyAsync(stoppingToken);
+                var mongoTopology = await mongo.GetMongoTopologyAsync(stoppingToken);
+                var current = redisTopology.Roles.Concat(mongoTopology.Roles).ToList();
 
                 if (!HasChanged(_lastKnown, current))
                 {

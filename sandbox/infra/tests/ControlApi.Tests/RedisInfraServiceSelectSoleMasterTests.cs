@@ -2,9 +2,9 @@ using ControlApi.Services;
 
 namespace ControlApi.Tests;
 
-public class DockerServiceSelectSoleMasterTests
+public class RedisInfraServiceSelectSoleMasterTests
 {
-    private static DockerService.RedisRoleObservation Observation(string serviceId, string role) => new(serviceId, role);
+    private static RedisInfraService.RedisRoleObservation Observation(string serviceId, string role) => new(serviceId, role);
 
     [Fact]
     public void SelectSoleMaster_ExactlyOneMaster_ReturnsIt()
@@ -19,7 +19,7 @@ public class DockerServiceSelectSoleMasterTests
         // The exact scenario SelfHealSentinelAsync exists for: a real failover already promoted
         // redis-replica1, and this must resolve to the node ROLE actually agrees is master right
         // now - not to whichever container happens to be named "redis-master".
-        Assert.Equal("redis-replica1", DockerService.SelectSoleMaster(observations));
+        Assert.Equal("redis-replica1", RedisInfraService.SelectSoleMaster(observations));
     }
 
     [Fact]
@@ -32,7 +32,7 @@ public class DockerServiceSelectSoleMasterTests
             Observation("redis-replica2", "replica"),
         };
 
-        Assert.Null(DockerService.SelectSoleMaster(observations));
+        Assert.Null(RedisInfraService.SelectSoleMaster(observations));
     }
 
     [Fact]
@@ -48,12 +48,12 @@ public class DockerServiceSelectSoleMasterTests
             Observation("redis-replica2", "replica"),
         };
 
-        Assert.Null(DockerService.SelectSoleMaster(observations));
+        Assert.Null(RedisInfraService.SelectSoleMaster(observations));
     }
 
     [Fact]
     public void SelectSoleMaster_NoObservationsAtAll_ReturnsNull()
     {
-        Assert.Null(DockerService.SelectSoleMaster([]));
+        Assert.Null(RedisInfraService.SelectSoleMaster([]));
     }
 }

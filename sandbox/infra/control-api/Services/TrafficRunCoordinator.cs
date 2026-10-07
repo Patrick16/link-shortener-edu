@@ -15,6 +15,9 @@ namespace ControlApi.Services;
 // BeginRun() clearing state run 1 is still accumulating into).
 public sealed class TrafficRunCoordinator(
     IDockerService docker,
+    IPgcatService pgcat,
+    IPostgresService postgres,
+    IRedisInfraService redis,
     IRunHistoryStore runHistory,
     IHubContext<StatusHub> hub,
     TraceStore traceStore,
@@ -135,7 +138,7 @@ public sealed class TrafficRunCoordinator(
             // (there's no way to know the expected count in advance).
             await Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None);
 
-            var pgcatConnections = await docker.GetPgcatConnectionsAsync(CancellationToken.None);
+            var pgcatConnections = await pgcat.GetPgcatConnectionsAsync(CancellationToken.None);
             var traceHops = traceStore.GetHopStatsBetween(runStart, runEnd);
             var verdict = BottleneckAdvisor.Analyze(report, resourceMaxima, traceHops, pgcatConnections);
 
@@ -146,9 +149,9 @@ public sealed class TrafficRunCoordinator(
                 docker.GetInfraStatus(),
                 replicas,
                 pgcatConnections,
-                await docker.GetPostgresConnectionsAsync(CancellationToken.None),
+                await postgres.GetPostgresConnectionsAsync(CancellationToken.None),
                 report,
-                docker.GetPgcatPoolSettings(),
+                pgcat.GetPgcatPoolSettings(),
                 sentinel,
                 replicationLags,
                 docker.GetRabbitMqPrefetch(),
@@ -176,7 +179,7 @@ public sealed class TrafficRunCoordinator(
         {
             try
             {
-                var lag = await docker.GetReplicationLagAsync(replicaId, CancellationToken.None);
+                var lag = await postgres.GetReplicationLagAsync(replicaId, CancellationToken.None);
                 if (lag is not null)
                 {
                     replicationLags.Add(new ReplicationLagEntry(replicaId, lag.DelayMs));
@@ -195,7 +198,7 @@ public sealed class TrafficRunCoordinator(
     {
         try
         {
-            return await docker.GetSentinelConfigAsync(CancellationToken.None);
+            return await redis.GetSentinelConfigAsync(CancellationToken.None);
         }
         catch (Exception ex)
         {

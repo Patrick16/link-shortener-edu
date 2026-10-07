@@ -2,13 +2,13 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class ReplicationLagCapability(IDockerService docker, ILogger<ReplicationLagCapability> logger) : IComponentCapability
+public sealed class ReplicationLagCapability(IPostgresService postgres, ILogger<ReplicationLagCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
         app.MapGet("/api/containers/{serviceId}/replication-lag", async (string serviceId, CancellationToken ct) =>
         {
-            var result = await docker.GetReplicationLagAsync(serviceId, ct);
+            var result = await postgres.GetReplicationLagAsync(serviceId, ct);
             return result is null ? Results.NotFound() : Results.Ok(result);
         });
 
@@ -21,7 +21,7 @@ public sealed class ReplicationLagCapability(IDockerService docker, ILogger<Repl
 
             try
             {
-                var result = await docker.SetReplicationLagAsync(serviceId, request.DelayMs, ct);
+                var result = await postgres.SetReplicationLagAsync(serviceId, request.DelayMs, ct);
                 return result is null ? Results.NotFound() : Results.Ok(result);
             }
             catch (Exception ex)

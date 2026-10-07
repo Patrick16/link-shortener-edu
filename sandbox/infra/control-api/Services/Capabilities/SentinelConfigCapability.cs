@@ -2,13 +2,13 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class SentinelConfigCapability(IDockerService docker, ILogger<SentinelConfigCapability> logger) : IComponentCapability
+public sealed class SentinelConfigCapability(IRedisInfraService redis, ILogger<SentinelConfigCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
         app.MapGet("/api/infra/sentinel", async (CancellationToken ct) =>
         {
-            var result = await docker.GetSentinelConfigAsync(ct);
+            var result = await redis.GetSentinelConfigAsync(ct);
             return result is null ? Results.NotFound() : Results.Ok(result);
         });
 
@@ -31,7 +31,7 @@ public sealed class SentinelConfigCapability(IDockerService docker, ILogger<Sent
 
             try
             {
-                return Results.Ok(await docker.SetSentinelConfigAsync(request, ct));
+                return Results.Ok(await redis.SetSentinelConfigAsync(request, ct));
             }
             catch (Exception ex)
             {

@@ -10,7 +10,14 @@ public static class ControlPlaneServiceExtensions
     {
         var services = builder.Services;
 
+        services.AddSingleton<IContainerRuntime, ContainerRuntime>();
         services.AddSingleton<IDockerService, DockerService>();
+        services.AddSingleton<IChaosService, ChaosService>();
+        services.AddSingleton<IPgcatService, PgcatService>();
+        services.AddSingleton<IPostgresService, PostgresService>();
+        services.AddSingleton<IRedisInfraService, RedisInfraService>();
+        services.AddSingleton<IMongoTopologyService, MongoTopologyService>();
+        services.AddSingleton<IRabbitMqService, RabbitMqService>();
         services.AddSingleton<IScenarioStore, ScenarioStore>();
         services.AddSingleton<IPresetStore, PresetStore>();
         services.AddSingleton<IRunHistoryStore, RunHistoryStore>();
