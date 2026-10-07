@@ -220,6 +220,16 @@ public class RunHistoryStoreTests : IDisposable
         // catch for a corrupt file. A single delete throwing (permissions, or here, a file another
         // process/handle still has open) used to abort the whole loop, leaving every run after it
         // in iteration order still on disk while everything before it was already gone.
+        //
+        // Windows-only: the FileShare.Read handle below only blocks File.Delete under Windows'
+        // mandatory share-mode locking. On Unix, unlink() doesn't check other open handles at all
+        // (that's why you can delete a file a process still has open), so there's no portable way
+        // to reproduce "locked by another handle" here - CI runs on ubuntu-latest, so skip there.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         var sut = NewSut();
         await sut.SaveAsync(NewSnapshot("run-locked"), CancellationToken.None);
         await sut.SaveAsync(NewSnapshot("run-a"), CancellationToken.None);
