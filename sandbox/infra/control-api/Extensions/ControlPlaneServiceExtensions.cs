@@ -1,3 +1,4 @@
+using ControlApi.Models;
 using ControlApi.Services;
 
 namespace ControlApi.Extensions;
@@ -9,6 +10,11 @@ public static class ControlPlaneServiceExtensions
     public static WebApplicationBuilder AddControlPlaneServices(this WebApplicationBuilder builder)
     {
         var services = builder.Services;
+
+        // Defaults match BottleneckThresholds.Default exactly - an unconfigured deployment (no
+        // "BottleneckThresholds" section in appsettings.json) behaves exactly as before this was
+        // made configurable.
+        services.Configure<BottleneckThresholds>(builder.Configuration.GetSection("BottleneckThresholds"));
 
         services.AddSingleton<IContainerRuntime, ContainerRuntime>();
         services.AddSingleton<IChaosService, ChaosService>();

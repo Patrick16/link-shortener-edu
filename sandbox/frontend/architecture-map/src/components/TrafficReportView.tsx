@@ -1,3 +1,4 @@
+import { BaselineComparisonPanel } from './BaselineComparisonPanel'
 import { BottleneckPanel } from './BottleneckPanel'
 import { buildReportHtml, buildReportMarkdown, downloadTextFile, reportExportFilename } from '../utils/exportReport'
 import type { BottleneckVerdict, RunSnapshot, TraceHopStats, TrafficReport } from '../types/controlApi'
@@ -143,7 +144,9 @@ export function TrafficReportView({ report, verdict, traceHops, snapshot }: Prop
         <pre>{report.rawOutput}</pre>
       </details>
 
-      <BottleneckPanel verdict={verdict} traceHops={traceHops} />
+      <BaselineComparisonPanel baseline={snapshot?.baseline} />
+
+      <BottleneckPanel verdict={verdict} traceHops={traceHops} thresholdsUsed={snapshot?.thresholdsUsed} />
     </div>
   )
 }

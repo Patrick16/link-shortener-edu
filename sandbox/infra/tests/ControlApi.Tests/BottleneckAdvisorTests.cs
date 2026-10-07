@@ -223,4 +223,33 @@ public class BottleneckAdvisorTests
 
         Assert.DoesNotContain(verdict.Checklist, s => s.Title.StartsWith("5."));
     }
+
+    // Regression test for making thresholds configurable: a value that's a non-issue under the
+    // defaults (70% CPU, below the default 85% threshold) must still flag once a caller passes a
+    // stricter configured threshold - proves the parameter is actually read, not just accepted and
+    // ignored in favor of the old hardcoded constant.
+    [Fact]
+    public void Analyze_CustomStricterCpuThreshold_FlagsNodeTheDefaultWouldNotHaveFlagged()
+    {
+        var rawCpu = 70.0 * Environment.ProcessorCount;
+        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
+        var strictThresholds = BottleneckThresholds.Default with { HighCpuPercent = 60 };
+
+        var defaultVerdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null);
+        var strictVerdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null, strictThresholds);
+
+        Assert.Empty(defaultVerdict.Suspects);
+        Assert.Single(strictVerdict.Suspects);
+    }
+
+    [Fact]
+    public void Analyze_NullThresholds_FallsBackToDefault()
+    {
+        var rawCpu = 85.0 * Environment.ProcessorCount;
+        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
+
+        var verdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null, thresholds: null);
+
+        Assert.Single(verdict.Suspects);
+    }
 }

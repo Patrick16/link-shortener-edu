@@ -1,6 +1,7 @@
 using ControlApi.Hubs;
 using ControlApi.Models;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Options;
 
 namespace ControlApi.Services;
 
@@ -24,6 +25,7 @@ public sealed class TrafficRunCoordinator(
     IHubContext<StatusHub> hub,
     TraceStore traceStore,
     RunResourceMaxTracker resourceMaxTracker,
+    IOptions<BottleneckThresholds> bottleneckThresholds,
     ILogger<TrafficRunCoordinator> logger)
 {
     // 0 = idle, 1 = running.
@@ -142,7 +144,10 @@ public sealed class TrafficRunCoordinator(
 
             var pgcatConnections = await pgcat.GetPgcatConnectionsAsync(CancellationToken.None);
             var traceHops = traceStore.GetHopStatsBetween(runStart, runEnd);
-            var verdict = BottleneckAdvisor.Analyze(report, resourceMaxima, traceHops, pgcatConnections);
+            var thresholds = bottleneckThresholds.Value;
+            var verdict = BottleneckAdvisor.Analyze(report, resourceMaxima, traceHops, pgcatConnections, thresholds);
+            // Looked up before this run is saved below, so it can never match itself.
+            var baseline = await FindBaselineComparisonAsync(request.Scenario, report, CancellationToken.None);
 
             var snapshot = new RunSnapshot(
                 $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid().ToString("N")[..6]}",
@@ -161,7 +166,9 @@ public sealed class TrafficRunCoordinator(
                 infraToggle.GetNpgsqlPoolSize(),
                 resourceMaxima,
                 traceHops,
-                verdict);
+                verdict,
+                thresholds,
+                baseline);
 
             await runHistory.SaveAsync(snapshot, CancellationToken.None);
             await hub.Clients.All.SendAsync("runSaved", new { snapshot.Id });
@@ -194,6 +201,34 @@ public sealed class TrafficRunCoordinator(
         }
 
         return replicationLags;
+    }
+
+    // "Baseline" means the most recent *prior* run of this exact scenario - a different scenario's
+    // numbers (e.g. a resolve-only flow vs. a full register+create+click flow) would be meaningless
+    // to compare against. ListAsync already returns runs sorted newest-first, and this run hasn't
+    // been saved yet when this runs, so the first scenario match is guaranteed to be an earlier run,
+    // never this one.
+    private async Task<BaselineComparison?> FindBaselineComparisonAsync(string scenario, TrafficReport report, CancellationToken ct)
+    {
+        try
+        {
+            var pastRuns = await runHistory.ListAsync(ct);
+            var baselineSummary = pastRuns.FirstOrDefault(r => r.Scenario == scenario);
+            if (baselineSummary is null)
+            {
+                return null;
+            }
+
+            var baselineSnapshot = await runHistory.GetAsync(baselineSummary.Id, ct);
+            return baselineSnapshot is null
+                ? null
+                : BaselineComparer.Compare(report, baselineSnapshot.Report, baselineSummary.Id, baselineSummary.Timestamp);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to compute baseline comparison for scenario {Scenario}", scenario);
+            return null;
+        }
     }
 
     private async Task<SentinelConfig?> ReadSentinelConfigAsync()

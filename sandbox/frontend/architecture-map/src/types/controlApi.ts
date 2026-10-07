@@ -353,6 +353,38 @@ export interface BottleneckVerdict {
   checklist: ChecklistStep[]
 }
 
+// Whatever was configured in appsettings.json's "BottleneckThresholds" section when this run's
+// Verdict was computed (see RunSnapshot.thresholdsUsed) - saved per-run since two verdicts aren't
+// comparable once these are configurable: a "no issues found" run judged against loosened
+// thresholds looks identical to one judged against the defaults.
+export interface BottleneckThresholds {
+  highCpuPercent: number
+  highMemoryPercent: number
+  slowHopP95Ms: number
+  highFailedRequestRate: number
+}
+
+// percentChange is null when baseline was 0 (division is meaningless - e.g. an error rate that
+// went from 0% to something >0%). isRegression is always set regardless, computed on the backend
+// from whichever direction counts as worse for this particular metric, so nothing here needs its
+// own per-metric "higher is better?" logic.
+export interface MetricComparison {
+  name: string
+  unit: string
+  current: number
+  baseline: number
+  percentChange: number | null
+  isRegression: boolean
+}
+
+// This run's report compared against the most recent *previous run of the same scenario* - see
+// RunSnapshot.baseline. Absent when no earlier run of this scenario exists yet.
+export interface BaselineComparison {
+  baselineRunId: string
+  baselineTimestamp: string
+  metrics: MetricComparison[]
+}
+
 // The "desired config" half of RunSnapshot, named on its own so a Preset can reference it without
 // dragging in the run-result fields below (request/report/connections/trace/verdict) that don't
 // apply to "reconfigure the stand to this." RunSnapshot already satisfies this shape structurally
@@ -398,6 +430,8 @@ export interface RunSnapshot {
   resourceMaxima?: NodeResourceMax[] | null
   traceHops?: TraceHopStats[] | null
   verdict?: BottleneckVerdict | null
+  thresholdsUsed?: BottleneckThresholds | null
+  baseline?: BaselineComparison | null
 }
 
 // Lightweight row for the history list - see RunSummary on the backend for why it's separate from

@@ -28,7 +28,14 @@ public record RunSnapshot(
     int? NpgsqlPoolSize = null,
     IReadOnlyList<NodeResourceMax>? ResourceMaxima = null,
     IReadOnlyList<TraceHopStats>? TraceHops = null,
-    BottleneckVerdict? Verdict = null);
+    BottleneckVerdict? Verdict = null,
+    // Which thresholds Verdict was actually judged against - without this, two runs' verdicts
+    // aren't comparable once BottleneckThresholds becomes configurable (a "no issues found" run
+    // judged against loosened thresholds looks identical to one judged against the defaults).
+    BottleneckThresholds? ThresholdsUsed = null,
+    // Comparison against the most recent prior run of this exact scenario, if one exists - see
+    // BaselineComparison's own comment for why it's scenario-scoped, not just "the previous run".
+    BaselineComparison? Baseline = null);
 
 // Lightweight row for the history list - avoids deserializing every run's full report (including
 // its potentially large RawOutput) just to render a list of past runs.

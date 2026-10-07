@@ -19,16 +19,11 @@ public static class BottleneckAdvisor
     // of percent on a many-core host without the host itself being anywhere near saturated -
     // confirmed live (rabbitmq showed 593% during a small run on a 32-core machine). Dividing by
     // the core count this control-api process itself sees turns it into "% of total host capacity"
-    // before comparing against HighCpuPercent or showing it in evidence text - Environment.
+    // before comparing against thresholds.HighCpuPercent or showing it in evidence text - Environment.
     // ProcessorCount matches ContainerLifecycleService's own onlineCpus fallback reasoning (both assume the
     // container sees the host's full core set, true for this stack since nothing here sets a
     // per-container cpuset/cpu-quota limit).
     private static double NormalizedCpuPercent(double rawCpuPercent) => rawCpuPercent / Environment.ProcessorCount;
-
-    private const double HighCpuPercent = 85;
-    private const double HighMemoryPercent = 90;
-    private const double SlowHopP95Ms = 300;
-    private const double HighFailedRequestRate = 0.05;
 
     private static readonly IReadOnlyDictionary<string, string> NodeTypes = new Dictionary<string, string>
     {
@@ -55,8 +50,10 @@ public static class BottleneckAdvisor
         TrafficReport report,
         IReadOnlyList<NodeResourceMax> resourceMaxima,
         IReadOnlyList<TraceHopStats> traceHops,
-        PgcatConnectionStats? pgcatConnections)
+        PgcatConnectionStats? pgcatConnections,
+        BottleneckThresholds? thresholds = null)
     {
+        thresholds ??= BottleneckThresholds.Default;
         var suspects = new List<BottleneckSuspect>();
 
         // Rule 1: pgcat clients queued waiting for a free server connection - the clearest possible
@@ -82,7 +79,7 @@ public static class BottleneckAdvisor
             var nodeType = NodeTypes.GetValueOrDefault(node.ServiceId, "other");
             var cpuPercentOfHost = NormalizedCpuPercent(node.MaxCpuPercent);
 
-            if (cpuPercentOfHost >= HighCpuPercent)
+            if (cpuPercentOfHost >= thresholds.HighCpuPercent)
             {
                 suspects.Add(new BottleneckSuspect(
                     node.ServiceId,
@@ -92,7 +89,7 @@ public static class BottleneckAdvisor
                     Recommendation: RecommendationForCpu(nodeType, node.ServiceId)));
             }
 
-            if (node.MaxMemoryPercent >= HighMemoryPercent)
+            if (node.MaxMemoryPercent >= thresholds.HighMemoryPercent)
             {
                 suspects.Add(new BottleneckSuspect(
                     node.ServiceId,
@@ -107,7 +104,7 @@ public static class BottleneckAdvisor
         // one", so a run where every hop is genuinely fast doesn't get a manufactured suspect.
         foreach (var hop in traceHops)
         {
-            if (hop.P95Ms >= SlowHopP95Ms)
+            if (hop.P95Ms >= thresholds.SlowHopP95Ms)
             {
                 var nodeType = NodeTypes.GetValueOrDefault(hop.ServiceId, "other");
                 suspects.Add(new BottleneckSuspect(
@@ -121,7 +118,7 @@ public static class BottleneckAdvisor
 
         // Rule 4: failed requests, broken down by which status code dominates - a 502/503 wave
         // points at nginx/backend capacity, a 500 wave points at the backend itself misbehaving.
-        if (report.HttpRequests > 0 && report.FailedRequestRate >= HighFailedRequestRate)
+        if (report.HttpRequests > 0 && report.FailedRequestRate >= thresholds.HighFailedRequestRate)
         {
             // TrafficService's TrackedStatusCodes labels are human-readable ("502 Bad Gateway"), not
             // bare codes - match with StartsWith, the same way TrafficReportView.tsx's own

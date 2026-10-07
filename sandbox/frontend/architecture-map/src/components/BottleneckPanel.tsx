@@ -1,8 +1,11 @@
-import type { BottleneckVerdict, TraceHopStats } from '../types/controlApi'
+import type { BottleneckThresholds, BottleneckVerdict, TraceHopStats } from '../types/controlApi'
 
 interface Props {
   verdict?: BottleneckVerdict | null
   traceHops?: TraceHopStats[] | null
+  // Older run snapshots (saved before thresholds became configurable) have no record of what was
+  // in effect - the caption is simply omitted rather than guessing it was the current defaults.
+  thresholdsUsed?: BottleneckThresholds | null
 }
 
 // Two views over the same run data, deliberately kept side by side rather than one replacing the
@@ -11,7 +14,7 @@ interface Props {
 // <details> so it doesn't short-circuit the "figure it out yourself" step for someone using this to
 // learn, but is one click away for someone who just wants the answer. Both are built from the exact
 // same BottleneckAdvisor computation on the backend, so they can't disagree with each other.
-export function BottleneckPanel({ verdict, traceHops }: Props) {
+export function BottleneckPanel({ verdict, traceHops, thresholdsUsed }: Props) {
   if (!verdict) {
     return null // Older run snapshots (saved before this feature existed) simply have no verdict.
   }
@@ -63,6 +66,12 @@ export function BottleneckPanel({ verdict, traceHops }: Props) {
 
       <details className="bottleneck-verdict">
         <summary>Show automatic verdict</summary>
+        {thresholdsUsed && (
+          <p className="bottleneck-thresholds-note">
+            Judged against: CPU &gt; {thresholdsUsed.highCpuPercent}% · memory &gt; {thresholdsUsed.highMemoryPercent}% · hop p95 &gt;{' '}
+            {thresholdsUsed.slowHopP95Ms}ms · error rate &gt; {(thresholdsUsed.highFailedRequestRate * 100).toFixed(0)}%
+          </p>
+        )}
         {verdict.suspects.length === 0 ? (
           <p className="bottleneck-verdict-clean">No clear bottleneck detected - resources, pools, and traces look normal for this run.</p>
         ) : (

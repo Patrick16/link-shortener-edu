@@ -2078,6 +2078,62 @@ button:disabled {
   margin-top: 4px;
 }
 
+.bottleneck-thresholds-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.baseline-panel {
+  margin-top: 16px;
+}
+
+.baseline-panel h3 {
+  font-size: 14px;
+  margin: 0 0 4px;
+  color: var(--text-h);
+}
+
+.baseline-panel-note {
+  font-size: 12px;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.baseline-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.baseline-table th {
+  text-align: left;
+  color: var(--text);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.baseline-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Specificity must beat .baseline-table td's own `color: var(--text-h)` (element + class, (0,1,1))
+   - a bare class selector here ((0,1,0)) silently loses regardless of source order, which is
+   exactly what shipped uncaught until a live render check showed every cell the same color. */
+.baseline-table td.baseline-change-regression {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.baseline-table td.baseline-change-improvement {
+  color: #22c55e;
+  font-weight: 600;
+}
+
 /* Run history (right sidebar) */
 
 .run-history-panel {
