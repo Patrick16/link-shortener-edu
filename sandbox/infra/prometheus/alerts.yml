@@ -18,7 +18,10 @@ groups:
       # surfaced this.
       - alert: PgcatClientsWaiting
         expr: pgcat_pools_cl_waiting > 5
-        for: 30s
+        # prometheus.yml has no global.evaluation_interval, so it defaults to 1m - a `for` shorter
+        # than that doesn't actually fire any sooner (it only takes effect on the next evaluation
+        # tick), it just reads misleadingly precise. 1m matches the real cadence.
+        for: 1m
         labels:
           severity: warning
         annotations:
@@ -27,19 +30,21 @@ groups:
 
   - name: rabbitmq
     rules:
-      # rabbitmq_queue_messages is the rabbitmq_prometheus plugin's own metric (bundled in the
-      # rabbitmq:3-management-alpine image, scraped by prometheus.yml's rabbitmq job on :15692) -
-      # ready + unacked messages per queue. A growing backlog means consumers aren't keeping up with
-      # publish rate (see sandbox/infra/control-api's rabbitmq-prefetch control for one way to tune
-      # that live).
+      # rabbitmq_detailed_queue_messages is the rabbitmq_prometheus plugin's per-queue metric
+      # (bundled in the rabbitmq:3-management-alpine image, scraped by prometheus.yml's rabbitmq
+      # job via its /metrics/detailed?family=queue_coarse_metrics path - the plugin's default
+      # /metrics only exposes an unlabeled cluster-wide total, confirmed live before relying on
+      # either one) - ready + unacked messages per queue. A growing backlog means consumers aren't
+      # keeping up with publish rate (see sandbox/infra/control-api's rabbitmq-prefetch control for
+      # one way to tune that live).
       - alert: RabbitMqQueueBacklog
-        expr: rabbitmq_queue_messages > 10000
+        expr: rabbitmq_detailed_queue_messages > 10000
         for: 1m
         labels:
           severity: warning
         annotations:
           summary: "RabbitMQ queue {{ $labels.queue }} has a growing backlog"
-          description: "Queue {{ $labels.queue }} has had over 10000 messages (ready + unacked) for at least 1m - consumers aren't keeping up with publish rate."
+          description: "Queue {{ $labels.queue }} (vhost {{ $labels.vhost }}) has had over 10000 messages (ready + unacked) for at least 1m - consumers aren't keeping up with publish rate."
 
   - name: http
     rules:

@@ -54,5 +54,13 @@ scrape_configs:
 
   - job_name: rabbitmq
     scrape_interval: 5s
+    # The default /metrics path only exposes rabbitmq_queue_messages as one cluster-wide,
+    # unlabeled aggregate across every queue/vhost - confirmed live against a real broker before
+    # relying on it. Per-queue data (what RabbitMqQueueBacklog's {{ $labels.queue }} actually
+    # needs) only exists on /metrics/detailed with family=queue_coarse_metrics, which is where
+    # rabbitmq_detailed_queue_messages{vhost, queue} comes from instead.
+    metrics_path: /metrics/detailed
+    params:
+      family: ["queue_coarse_metrics"]
     static_configs:
       - targets: ["rabbitmq:15692"]
