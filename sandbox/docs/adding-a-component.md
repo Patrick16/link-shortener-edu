@@ -34,29 +34,38 @@ If the control just reads/writes something through an endpoint that doesn't exis
 class in `sandbox/infra/control-api/Services/Capabilities/`:
 
 ```csharp
-public sealed class MyCapability(IDockerService docker) : IComponentCapability
+public sealed class MyCapability(IMyDomainService myDomain) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
-        app.MapGet("/api/infra/my-thing", () => Results.Ok(docker.GetMyThing()));
+        app.MapGet("/api/infra/my-thing", () => Results.Ok(myDomain.GetMyThing()));
         app.MapPost("/api/infra/my-thing", (MyThingRequest request) =>
         {
             // validate, then:
-            return Results.Ok(docker.SetMyThing(request));
+            return Results.Ok(myDomain.SetMyThing(request));
         });
     }
 }
 ```
 
-Register it in `CapabilityFactory`'s `_factories` dictionary under the exact name from step 1:
+Depend on the narrowest service interface that actually has the method you need - `IPgcatService`,
+`IRedisInfraService`, `IDockerService` (still owns container lifecycle, k6 traffic, and the standing
+env toggles), or a new one if this capability doesn't fit any existing domain (see
+`Services/IContainerRuntime.cs` and its six domain services for the shape to follow: a thin
+interface, an implementation built on `IContainerRuntime` for the shared Docker/exec/compose
+primitives, and a singleton registration in `ControlPlaneServiceExtensions.cs`).
+
+Register it in `CapabilityFactory`'s `_factories` dictionary under the exact name from step 1,
+resolving your dependency from the `IServiceProvider` each factory gets:
 
 ```csharp
-["my-capability"] = (docker, loggerFactory) => new MyCapability(docker),
+["my-capability"] = sp => new MyCapability(sp.GetRequiredService<IMyDomainService>()),
 ```
 
 That's the only place that knows the mapping - `Program.cs` never changes. If the underlying
-Docker/exec logic doesn't exist yet either, add it to `IDockerService`/`DockerService` first, the
-same way `SetPgcatPoolSettingsAsync` etc. already work.
+Docker/exec logic doesn't exist yet either, add it to the relevant domain service first (or a new
+one, per the paragraph above), the same way `PgcatService.SetPgcatPoolSettingsAsync` etc. already
+work.
 
 Skip this step entirely if the control is purely a frontend display over an existing generic
 endpoint (like the connections panels) - not every capability needs a backend class.

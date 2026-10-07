@@ -23,7 +23,7 @@ control panel's own **Bottleneck Advisor** already has a rule for exactly this
 `pgcat.Pools[].ClientWaiting > 0` → *"the pgcat pool is exhausted"*.
 
 **Fix:** raised `pool_size` to **40**
-([`DockerService.cs`](../infra/control-api/Services/DockerService.cs)'s `_pgcatPoolSettings`
+([`PgcatService.cs`](../infra/control-api/Services/PgcatService.cs)'s `_pgcatPoolSettings`
 default and `RenderPgcatToml`, plus the tracked baseline
 [`pgcat.toml.example`](../infra/pgcat/pgcat.toml.example) — `pgcat.toml` itself is gitignored
 runtime state, regenerated from `.example` on first `start-stack.ps1` run or from `RenderPgcatToml`
@@ -75,7 +75,7 @@ sub-second DNS blip was turning into a full 20-second unavailability window for 
 lined up suspiciously well with the observed p95.
 
 **Fix:** `ban_time` **20 → 3** seconds (same two places as `pool_size`: `RenderPgcatToml` in
-`DockerService.cs`, and the tracked `pgcat.toml.example`). This genuinely happened and is worth
+`PgcatService.cs`, and the tracked `pgcat.toml.example`). This genuinely happened and is worth
 knowing about, but turned out **not to be the main driver of the ~20s figure** — after this fix
 alone, `/health/ready` p95 was still ~20024ms in the next run. Left in regardless: shortening a
 circuit-breaker's ban window so a one-off blip doesn't cascade into 20s is correct on its own merits.
@@ -304,7 +304,7 @@ to avg 70ms/0% failed on fresh containers.
 
 - [`sandbox/infra/pgcat/pgcat.toml.example`](../infra/pgcat/pgcat.toml.example) — `pool_size` 10→40,
   `ban_time` 20→3 (the tracked baseline; live `pgcat.toml` is gitignored runtime state)
-- [`sandbox/infra/control-api/Services/DockerService.cs`](../infra/control-api/Services/DockerService.cs)
+- [`sandbox/infra/control-api/Services/PgcatService.cs`](../infra/control-api/Services/PgcatService.cs)
   — `_pgcatPoolSettings` default 10→40, `RenderPgcatToml`'s `ban_time` 20→3 (kept in sync with
   `.example` so `GetPgcatPoolSettings()`/a fresh `pgcat.toml` don't drift back to the old values)
 - [`sandbox/docker-compose.yml`](../docker-compose.yml) — `POSTGRES_MAX_CONNECTIONS` default
