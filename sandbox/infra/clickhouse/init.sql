@@ -20,6 +20,13 @@
 -- service" convention Postgres's init-databases.sql already follows for users_db/links_db/clicks_db.
 CREATE DATABASE IF NOT EXISTS reports_db;
 
+-- TTL (2026-10-06): rows are deleted once they're older than the retention window - enforced lazily,
+-- during ClickHouse's own background merges (same mechanism that collapses ReplacingMergeTree
+-- duplicates above), not on a separate schedule. 90 days matches MongoClickMetaStore's own
+-- RetentionWindow (src/backend/Shared/Infrastructure/MongoClickMetaStore.cs) so the retention story
+-- is consistent across every store this project writes click data to - this table already
+-- partitions by day for dedup, but partitioning alone never deleted anything on its own; nothing in
+-- this project actually expired old data anywhere until this and the Mongo TTL index were added.
 CREATE TABLE IF NOT EXISTS reports_db.clicks
 (
     hash String,
@@ -33,4 +40,5 @@ CREATE TABLE IF NOT EXISTS reports_db.clicks
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY toYYYYMMDD(clicked_at)
-ORDER BY (hash, id);
+ORDER BY (hash, id)
+TTL clicked_at + INTERVAL 90 DAY DELETE;

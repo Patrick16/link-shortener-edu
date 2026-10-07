@@ -1,9 +1,16 @@
 # Architecture
 
 This project is built in scenarios, each adding one high-load pattern on top of the last (caching →
-async messaging → replication → sharding → pooler scaling). This doc describes the **target**
+async messaging → replication → partitioning → pooler scaling). This doc describes the **target**
 end-state architecture; see [Current Status](#current-status) below for what's actually implemented
 right now.
+
+**Scenario 4 changed 2026-10-06** — it used to be write-sharding (`Postgres Links` split across 2
+shards via `ShardResolver` + per-shard `pgcat` pools). Replaced with Postgres native partitioning
+(data retention) for `clicks_db` after an external gap-analysis pass found unbounded data growth was
+a real, undemonstrated gap in this project. Write-sharding is **dropped, not deferred** — every
+mention of it below is corrected or removed; see `.notes/PLAN.md`'s Mental Model section for the
+full reasoning.
 
 ## Components
 
@@ -13,7 +20,7 @@ right now.
   otherwise it's `null` — no authentication is required. Publishes the created link (with hash and
   `userId?`) to RabbitMQ for `ShortenerService`.
 - **ShortenerService** (worker) — listens on RabbitMQ, persists the already-hashed short link to
-  `Postgres Links` (sharded, in the target design).
+  `Postgres Links`.
 - **RedirectApi** — accepts a short link, resolves the origin link via `Redis Links` (cache) or
   directly from Postgres, returns the redirect, and publishes a click event to RabbitMQ for
   `TrafficService`.
@@ -23,26 +30,27 @@ right now.
 ## Storage
 
 Each owning service gets its own **physical database** (not a shared database with per-service
-schemas) — closer to real microservice isolation, and it's the model `pgcat` pools route on later
-(scenario 4: a pool is per-database, not per-schema).
+schemas) — closer to real microservice isolation, and it's the model `pgcat` pools route on
+(one pool per database, not per-schema).
 
 - `users_db` (owned by AuthApi) — Users(id, name, email, passwordHash, sault)
-- `links_db` (owned by ShortenerService; LinkApi/RedirectApi read the same database) — target:
-  **sharded** (see `infra/pgcat/shard1.toml`, `shard2.toml`): Links(hash PK, originLink, shortenLink,
-  createdAt, userId?)
+- `links_db` (owned by ShortenerService; LinkApi/RedirectApi read the same database) —
+  Links(hash PK, originLink, shortenLink, createdAt, userId?)
 - `Redis Links` — cache of hash → link for fast redirects (shared key format across LinkApi/RedirectApi)
-- `clicks_db` (owned by TrafficService) — Clicks(id, clickedAt, inboundLink, outboundLink, hash)
+- `clicks_db` (owned by TrafficService) — Clicks(id, clickedAt, inboundLink, outboundLink, hash),
+  **natively partitioned** by `clickedAt` (`PARTITION BY RANGE`, monthly) since scenario 4 — see
+  `scenarios/04-partitioning.md`
 - `clicks_meta_db` (Mongo, owned by TrafficService) — clicks collection, one ClickMeta document per
   click, `_id` = the same id as the Postgres row: (hash, clickedAt, userAgent, referrer, ipAddress,
   browser?, os?, deviceType?, country?, city?)
 
 ## Infrastructure for High-Load Practice
 
-- **Sharding** of Postgres Links via hash(key) % N through `ShardResolver` + pgcat pools per shard — scenario 4
 - **Service replicas** (multiple instances of each API/worker behind nginx) — cross-cutting, not scenario-bound
-- **Partitioning** of Clicks/ClicksMeta by time — scenario 2+
+- **Partitioning** of Postgres Clicks by time (native `PARTITION BY RANGE`), plus a Mongo TTL index
+  and a ClickHouse `TTL` clause for the other two stores that hold click data — scenario 4, done
 - **Message bus** RabbitMQ between APIs and workers (LinkApi → ShortenerService, RedirectApi → TrafficService — both live)
-- **pgcat/pgbouncer** — connection pooling to each Postgres shard — scenario 4
+- **pgcat/pgbouncer** — connection pooling to Postgres — scenario 1+, multi-instance pooler scaling is scenario 5
 - **nginx** — load balancer in front of the API services — cross-cutting, done
 
 ---
@@ -65,8 +73,8 @@ Short version of what's real today:
 - `LinkApi` optionally validates a Bearer token (no `[Authorize]` — anonymous still works) and
   stores the caller's `userId` on the link when one is present
 - One Postgres server hosts three separate databases (`users_db`, `links_db`, `clicks_db`) — real
-  database-level isolation between services, not just schemas in one database. No sharding of
-  `links_db` yet — that's scenario 4.
+  database-level isolation between services, not just schemas in one database. `links_db` isn't
+  sharded, and isn't planned to be — see the 2026-10-06 note at the top of this doc.
 - Click *metadata* (parsed browser/OS/device via `UAParser`, IP, geo via `ip-api.com`) writes to a
   Mongo `clicks_meta_db.clicks` document alongside the Postgres `Clicks` row, same `Id`. See
   `scenarios/02-async.md#click-metadata-mongo` for what's captured and known tradeoffs.
@@ -102,10 +110,21 @@ Short version of what's real today:
   `scenarios/03-replicas.md` is still to be written (see the TODO below); until then, the
   pitfall docs under `scenarios/pitfalls/` cover the real bugs found getting failover to actually
   work.
+- **Scenario 4 (Postgres partitioning / data retention) is done and verified live** — `clicks_db`
+  is natively partitioned by `ClickedAt` (monthly), with a Mongo TTL index and a ClickHouse `TTL`
+  clause covering the other two click-data stores. Full write-up:
+  **[`scenarios/04-partitioning.md`](scenarios/04-partitioning.md)**. One real gap: no
+  partition-maintenance job exists yet (nothing creates future partitions ahead of time or drops old
+  ones) — documented as a known, deliberate omission in that doc, not silently missing.
 
 ## TODO
 
-`infra/postgres/shard1/`, `infra/postgres/shard2/` stay empty placeholders until scenario 4
-(sharding). `docs/scenarios/03-replicas.md` doesn't exist yet — this file's Current Status section
-above is the only write-up of scenario 3 so far, and it's a summary, not the detailed
-walkthrough/try-it-yourself the other scenario docs have.
+`docs/scenarios/03-replicas.md` doesn't exist yet — this file's Current Status section above is the
+only write-up of scenario 3 so far, and it's a summary, not the detailed walkthrough/try-it-yourself
+the other scenario docs have.
+
+The dropped write-sharding plan's placeholder files (`infra/postgres/shard1/`,
+`infra/postgres/shard2/`, `infra/pgcat/shard1.toml`, `infra/pgcat/shard2.toml`,
+`docker-compose.shard1.yml`, `docker-compose.shard2.yml`, `Shared/Infrastructure/ShardResolver.cs`)
+were removed 2026-10-06 alongside this doc update — all were empty `TODO`-only stubs with no real
+code or references anywhere else.

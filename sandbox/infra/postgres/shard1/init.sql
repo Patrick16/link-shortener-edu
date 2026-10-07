@@ -1,1 +1,0 @@
--- TODO: shard 1 schema (Links table: hash PK, originLink, shortenLink, userId).

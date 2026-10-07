@@ -20,7 +20,13 @@ public class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbCont
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Click>().ToTable(ClicksTable);
+        // Composite, not just Id: Postgres requires the partition key (ClickedAt) in every
+        // unique/primary key on a table declared PARTITION BY RANGE (ClickedAt) - see the
+        // ConvertClicksToPartitionedTable migration. Every lookup in this codebase (the dedup check
+        // in ClickTrackedConsumer) filters by Id alone via a plain WHERE, not Find/Attach, so this
+        // doesn't need any call-site changes - Id leads the composite index, so an Id-only filter
+        // still uses it efficiently.
         modelBuilder.Entity<Click>()
-            .HasKey(x => x.Id);
+            .HasKey(x => new { x.Id, x.ClickedAt });
     }
 }

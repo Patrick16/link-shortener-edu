@@ -24,6 +24,9 @@ var app = builder.Build();
 // This service owns clicks_db.
 await app.MigratePostgresAsync<DatabaseContext>();
 
+// This service owns clicks_meta_db too - ensures the TTL index exists before consuming starts.
+await app.Services.GetRequiredService<IClickMetaStore>().EnsureIndexesAsync();
+
 // The only reason this service has an HTTP listener at all beyond health/gRPC - it doesn't serve
 // any other REST endpoint. Ready means it can actually consume from RabbitMQ and write to Postgres
 // right now.
