@@ -749,6 +749,16 @@ services:
       # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
       # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
       OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # Sampling ratio for new root traces (1 = 100%, the default here so every request shows up in
+      # Jaeger/Aspire Dashboard for demos/debugging) - parentbased_traceidratio still always honors
+      # an already-sampled parent either way, only a *new* root trace's own ratio is what these two
+      # env vars control. Override OTEL_TRACES_SAMPLER_ARG (e.g. to 0.1) before a load test, where
+      # 100% tracing adds real overhead and Jaeger/otel-collector pressure at volume. No code
+      # involved - confirmed live against this exact SDK version (0 -> 0% sampled, 0.1 -> ~10%,
+      # 1 -> 100%): OpenTelemetry.Exporter.OpenTelemetryProtocol >= 1.8.0-rc.1 reads these itself,
+      # since ServiceDefaults.Extensions never calls SetSampler.
+      OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
     depends_on:
       pgcat:
         condition: service_healthy
@@ -794,6 +804,9 @@ services:
       # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
       # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
       OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # See auth-api's identical comment on these two - same default/override story everywhere.
+      OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
       # Defaults to true - control-api's cache toggle recreates link-api/redirect-api with this set
       # to false so the app skips Redis entirely (see EntityCacheService), a clean "no caching"
       # demo rather than every request eating a failed-connection timeout against a stopped redis.
@@ -857,6 +870,9 @@ services:
       # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
       # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
       OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # See auth-api's identical comment on these two - same default/override story everywhere.
+      OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
       Cache__Enabled: "${CACHE_ENABLED:-true}"
       # Messaging transport toggle - rabbitmq (default, async) or grpc (sync). TargetUrl points at
       # nginx's internal gRPC fan-out for traffic-service (port 9091, see nginx.conf) only -
@@ -940,6 +956,9 @@ services:
       # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
       # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
       OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # See auth-api's identical comment on these two - same default/override story everywhere.
+      OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
     depends_on:
       pgcat:
         condition: service_healthy
@@ -992,6 +1011,9 @@ services:
       # missing trace data for short/recent runs. Standard OTEL_BSP_* env var, read directly
       # by the .NET SDK's BatchExportActivityProcessorOptions - no code change needed.
       OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # See auth-api's identical comment on these two - same default/override story everywhere.
+      OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
     depends_on:
       pgcat:
         condition: service_healthy
@@ -1064,6 +1086,9 @@ services:
       Redis__InstanceName: "GeoIpCache"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_BSP_SCHEDULE_DELAY: "1000"
+      # See auth-api's identical comment on these two - same default/override story everywhere.
+      OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -1093,6 +1118,9 @@ services:
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Database=reports_db"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      # See auth-api's identical comment on these two - same default/override story everywhere.
+      OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
     depends_on:
       clickhouse:
         condition: service_healthy
