@@ -11,7 +11,7 @@ namespace ControlApi.Services;
 // once (see TrafficService.RunTrafficAsync).
 public class RunResourceMaxTracker
 {
-    private readonly ConcurrentDictionary<string, (double MaxCpu, long MaxMemoryBytes, double MaxMemoryPercent)> _maxima = new();
+    private readonly ConcurrentDictionary<string, (double MaxCpu, double SumCpuPeak, long MaxMemoryBytes, double MaxMemoryPercent)> _maxima = new();
     private volatile bool _tracking;
 
     public void BeginRun()
@@ -23,7 +23,7 @@ public class RunResourceMaxTracker
     public IReadOnlyList<NodeResourceMax> EndRun()
     {
         _tracking = false;
-        var result = _maxima.Select(kv => new NodeResourceMax(kv.Key, kv.Value.MaxCpu, kv.Value.MaxMemoryBytes, kv.Value.MaxMemoryPercent)).ToList();
+        var result = _maxima.Select(kv => new NodeResourceMax(kv.Key, kv.Value.MaxCpu, kv.Value.SumCpuPeak, kv.Value.MaxMemoryBytes, kv.Value.MaxMemoryPercent)).ToList();
         _maxima.Clear();
         return result;
     }
@@ -35,19 +35,29 @@ public class RunResourceMaxTracker
             return;
         }
 
-        foreach (var sample in samples)
+        // Grouped by ServiceId first so a scaled service (N containers sharing one ServiceId) gets
+        // this tick's CPU summed across its replicas before folding into the running peak - tracking
+        // only a per-container Max would silently miss a service that's saturated in aggregate but
+        // balanced evenly across its replicas (see SumCpuPercent on NodeResourceMax).
+        foreach (var group in samples.GroupBy(s => s.ServiceId))
         {
-            var memoryPercent = sample.MemoryLimitBytes > 0
-                ? sample.MemoryUsageBytes * 100.0 / sample.MemoryLimitBytes
-                : 0;
+            var tickSumCpu = group.Sum(s => s.CpuPercent);
 
-            _maxima.AddOrUpdate(
-                sample.ServiceId,
-                _ => (sample.CpuPercent, sample.MemoryUsageBytes, memoryPercent),
-                (_, current) => (
-                    Math.Max(current.MaxCpu, sample.CpuPercent),
-                    Math.Max(current.MaxMemoryBytes, sample.MemoryUsageBytes),
-                    Math.Max(current.MaxMemoryPercent, memoryPercent)));
+            foreach (var sample in group)
+            {
+                var memoryPercent = sample.MemoryLimitBytes > 0
+                    ? sample.MemoryUsageBytes * 100.0 / sample.MemoryLimitBytes
+                    : 0;
+
+                _maxima.AddOrUpdate(
+                    sample.ServiceId,
+                    _ => (sample.CpuPercent, tickSumCpu, sample.MemoryUsageBytes, memoryPercent),
+                    (_, current) => (
+                        Math.Max(current.MaxCpu, sample.CpuPercent),
+                        Math.Max(current.SumCpuPeak, tickSumCpu),
+                        Math.Max(current.MaxMemoryBytes, sample.MemoryUsageBytes),
+                        Math.Max(current.MaxMemoryPercent, memoryPercent)));
+            }
         }
     }
 }

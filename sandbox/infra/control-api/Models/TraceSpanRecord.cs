@@ -18,5 +18,11 @@ public record TraceHopStats(string ServiceId, string SpanName, int Count, double
 // not read back afterwards, since ResourceStatsStore's own ring buffer only keeps the last 60s and
 // a run can run longer than that. MaxMemoryPercent is computed against that same sample's own
 // container memory limit, not a fixed byte threshold - a hardcoded byte cutoff would be meaningless
-// across containers with different limits.
-public record NodeResourceMax(string ServiceId, double MaxCpuPercent, long MaxMemoryUsageBytes, double MaxMemoryPercent);
+// across containers with different limits. MaxCpuPercent is the single busiest container's own
+// peak; SumCpuPercent is the peak, across the run, of each poll tick's CPU summed over every
+// replica of this service. For a scaled service (N containers sharing one ServiceId) that sum is
+// the number that actually reflects the service's total load - MaxCpuPercent alone only ever looks
+// at one replica at a time, so it silently misses saturation that's spread evenly across many
+// (e.g. 20 replicas each at 100% raw looks "fine" by Max but is 2000% of a core combined). For a
+// service that only ever runs one container, the two are equal.
+public record NodeResourceMax(string ServiceId, double MaxCpuPercent, double SumCpuPercent, long MaxMemoryUsageBytes, double MaxMemoryPercent);

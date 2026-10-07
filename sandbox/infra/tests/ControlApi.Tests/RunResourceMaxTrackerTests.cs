@@ -33,7 +33,54 @@ public class RunResourceMaxTrackerTests
         var node = Assert.Single(result);
         Assert.Equal("link-api", node.ServiceId);
         Assert.Equal(70, node.MaxCpuPercent);
+        Assert.Equal(70, node.SumCpuPercent); // one container per tick here, so Sum equals Max
         Assert.Equal(300, node.MaxMemoryUsageBytes);
+    }
+
+    // Regression test for the Sum-vs-Max aggregation bug: a scaled service (N containers sharing
+    // one ServiceId) must have its replicas' CPU summed per poll tick, not reduced to whichever
+    // single replica happened to be busiest - otherwise saturation spread evenly across replicas
+    // never shows up at all.
+    [Fact]
+    public void Observe_MultipleReplicasSameServiceInOneTick_SumsTheirCpu()
+    {
+        var sut = new RunResourceMaxTracker();
+        sut.BeginRun();
+
+        sut.Observe([
+            Sample("redirect-api", 100, 100, 1000),
+            Sample("redirect-api", 100, 100, 1000),
+            Sample("redirect-api", 100, 100, 1000),
+        ]);
+        var result = sut.EndRun();
+
+        var node = Assert.Single(result);
+        Assert.Equal(100, node.MaxCpuPercent);
+        Assert.Equal(300, node.SumCpuPercent);
+    }
+
+    // SumCpuPercent tracks the peak *tick* sum over the run, not whatever the latest tick happened
+    // to be - a later, quieter tick must not erase an earlier spike.
+    [Fact]
+    public void Observe_SumCpuPercent_TracksPeakTickSumOverTime()
+    {
+        var sut = new RunResourceMaxTracker();
+        sut.BeginRun();
+
+        sut.Observe([
+            Sample("redirect-api", 100, 100, 1000),
+            Sample("redirect-api", 100, 100, 1000),
+        ]); // tick sum = 200
+
+        sut.Observe([
+            Sample("redirect-api", 50, 50, 1000),
+        ]); // tick sum = 50 - must not lower the tracked peak
+
+        var result = sut.EndRun();
+
+        var node = Assert.Single(result);
+        Assert.Equal(100, node.MaxCpuPercent);
+        Assert.Equal(200, node.SumCpuPercent);
     }
 
     [Fact]

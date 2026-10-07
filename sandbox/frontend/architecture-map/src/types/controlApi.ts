@@ -312,9 +312,13 @@ export interface ReplicationLagEntry {
 
 // Peak CPU/memory one node's container(s) reached during a run - see NodeResourceMax on the
 // backend (captured live while the run was in flight, not read back from the 60s ring buffer).
+// maxCpuPercent is the single busiest container's own peak; sumCpuPercent is that service's
+// replicas summed per poll tick, peaked over the run - the number that reflects total load for a
+// scaled service (the two are equal when the service only ever runs one container).
 export interface NodeResourceMax {
   serviceId: string
   maxCpuPercent: number
+  sumCpuPercent: number
   maxMemoryUsageBytes: number
   maxMemoryPercent: number
 }

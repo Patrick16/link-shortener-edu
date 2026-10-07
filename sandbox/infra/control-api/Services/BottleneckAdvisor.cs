@@ -77,15 +77,26 @@ public static class BottleneckAdvisor
         foreach (var node in resourceMaxima)
         {
             var nodeType = NodeTypes.GetValueOrDefault(node.ServiceId, "other");
-            var cpuPercentOfHost = NormalizedCpuPercent(node.MaxCpuPercent);
 
-            if (cpuPercentOfHost >= thresholds.HighCpuPercent)
+            // SumCpuPercent (summed across however many replicas were running at the peak tick) is
+            // always >= the single busiest container's own MaxCpuPercent, so comparing it against
+            // the threshold is the strictly more correct check - it catches load spread evenly
+            // across many replicas that MaxCpuPercent alone would under-report, and for a
+            // single-container service the two are equal, so nothing changes there.
+            var cpuPercentOfHostAggregate = NormalizedCpuPercent(node.SumCpuPercent);
+            var cpuPercentOfHostPeakContainer = NormalizedCpuPercent(node.MaxCpuPercent);
+
+            if (cpuPercentOfHostAggregate >= thresholds.HighCpuPercent)
             {
+                var evidence = cpuPercentOfHostAggregate > cpuPercentOfHostPeakContainer + 1
+                    ? $"CPU reached {cpuPercentOfHostAggregate:F0}% of host capacity during the run, combined across this service's replicas (peak single container was {cpuPercentOfHostPeakContainer:F0}%)"
+                    : $"CPU reached {cpuPercentOfHostAggregate:F0}% of host capacity during the run";
+
                 suspects.Add(new BottleneckSuspect(
                     node.ServiceId,
                     nodeType,
                     Severity: 90,
-                    Evidence: $"CPU reached {cpuPercentOfHost:F0}% of host capacity during the run",
+                    Evidence: evidence,
                     Recommendation: RecommendationForCpu(nodeType, node.ServiceId)));
             }
 
@@ -165,13 +176,13 @@ public static class BottleneckAdvisor
     {
         var steps = new List<ChecklistStep>();
 
-        var worstResource = resourceMaxima.OrderByDescending(n => n.MaxCpuPercent).FirstOrDefault();
+        var worstResource = resourceMaxima.OrderByDescending(n => n.SumCpuPercent).FirstOrDefault();
         steps.Add(new ChecklistStep(
             "1. Resource maxima per node",
-            "Open each node's panel on the graph and look at its CPU/memory peak during the run (sparklines + the numbers below). Note: the sparklines show CPU docker-stats style (100% = one core) - on a multi-core machine that's not the same as % of the whole host.",
+            "Open each node's panel on the graph and look at its CPU/memory peak during the run (sparklines + the numbers below). Note: the sparklines show CPU docker-stats style (100% = one core) - on a multi-core machine that's not the same as % of the whole host, and a scaled service's replicas are summed before comparing to host capacity.",
             worstResource is null
                 ? null
-                : $"Most loaded: '{worstResource.ServiceId}' - CPU up to {NormalizedCpuPercent(worstResource.MaxCpuPercent):F0}% of host ({worstResource.MaxCpuPercent:F0}% docker-stats style), memory up to {worstResource.MaxMemoryPercent:F0}%."));
+                : $"Most loaded: '{worstResource.ServiceId}' - CPU up to {NormalizedCpuPercent(worstResource.SumCpuPercent):F0}% of host combined across its replicas (peak single container {NormalizedCpuPercent(worstResource.MaxCpuPercent):F0}% of host, {worstResource.MaxCpuPercent:F0}% docker-stats style), memory up to {worstResource.MaxMemoryPercent:F0}%."));
 
         var waitingPool = pgcatConnections?.Pools.FirstOrDefault(p => p.ClientWaiting > 0);
         steps.Add(new ChecklistStep(

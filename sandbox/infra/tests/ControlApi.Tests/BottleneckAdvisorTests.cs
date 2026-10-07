@@ -73,7 +73,7 @@ public class BottleneckAdvisorTests
             return;
         }
 
-        var resourceMaxima = new[] { new NodeResourceMax("rabbitmq", MaxCpuPercent: 150, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
+        var resourceMaxima = new[] { new NodeResourceMax("rabbitmq", MaxCpuPercent: 150, SumCpuPercent: 150, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
 
         var verdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null);
 
@@ -83,21 +83,49 @@ public class BottleneckAdvisorTests
     [Fact]
     public void Analyze_CpuAtOrAboveHostThreshold_FlagsNode()
     {
-        // 85 * ProcessorCount raw = exactly 85% of host capacity once normalized.
+        // 85 * ProcessorCount raw = exactly 85% of host capacity once normalized. A single-container
+        // service, so SumCpuPercent equals MaxCpuPercent - the evidence text must stay in the plain
+        // (non-"combined across replicas") form for this case.
         var rawCpu = 85.0 * Environment.ProcessorCount;
-        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
+        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, SumCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
 
         var verdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null);
 
         var suspect = Assert.Single(verdict.Suspects);
         Assert.Equal("link-api", suspect.ServiceId);
         Assert.Equal("service", suspect.NodeType);
+        Assert.DoesNotContain("combined across", suspect.Evidence);
+    }
+
+    // Regression test for the Sum-vs-Max aggregation bug: a service scaled to many replicas, each
+    // individually well under the threshold, used to never get flagged because the tracker only
+    // ever compared the single busiest container's own CPU. SumCpuPercent (replicas summed per
+    // poll tick) must be what trips the threshold here, not MaxCpuPercent alone.
+    [Fact]
+    public void Analyze_CpuSaturatedInAggregateButLowPerReplica_StillFlagsNode()
+    {
+        var thresholdRawCpu = 85.0 * Environment.ProcessorCount;
+        var resourceMaxima = new[]
+        {
+            new NodeResourceMax(
+                "redirect-api",
+                MaxCpuPercent: thresholdRawCpu / 4,
+                SumCpuPercent: thresholdRawCpu,
+                MaxMemoryUsageBytes: 0,
+                MaxMemoryPercent: 10),
+        };
+
+        var verdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null);
+
+        var suspect = Assert.Single(verdict.Suspects);
+        Assert.Equal("redirect-api", suspect.ServiceId);
+        Assert.Contains("combined across", suspect.Evidence);
     }
 
     [Fact]
     public void Analyze_MemoryNearLimit_FlagsNode()
     {
-        var resourceMaxima = new[] { new NodeResourceMax("postgres", MaxCpuPercent: 0, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 95) };
+        var resourceMaxima = new[] { new NodeResourceMax("postgres", MaxCpuPercent: 0, SumCpuPercent: 0, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 95) };
 
         var verdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null);
 
@@ -232,7 +260,7 @@ public class BottleneckAdvisorTests
     public void Analyze_CustomStricterCpuThreshold_FlagsNodeTheDefaultWouldNotHaveFlagged()
     {
         var rawCpu = 70.0 * Environment.ProcessorCount;
-        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
+        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, SumCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
         var strictThresholds = BottleneckThresholds.Default with { HighCpuPercent = 60 };
 
         var defaultVerdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null);
@@ -246,7 +274,7 @@ public class BottleneckAdvisorTests
     public void Analyze_NullThresholds_FallsBackToDefault()
     {
         var rawCpu = 85.0 * Environment.ProcessorCount;
-        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
+        var resourceMaxima = new[] { new NodeResourceMax("link-api", MaxCpuPercent: rawCpu, SumCpuPercent: rawCpu, MaxMemoryUsageBytes: 0, MaxMemoryPercent: 10) };
 
         var verdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima, traceHops: [], pgcatConnections: null, thresholds: null);
 
