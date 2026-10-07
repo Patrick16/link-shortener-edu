@@ -1,0 +1,41 @@
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directories:
+      - /src/backend
+      - /sandbox/infra/control-api
+    schedule:
+      interval: weekly
+    groups:
+      dotnet-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directories:
+      - /src/frontend/app
+      - /sandbox/frontend/architecture-map
+    schedule:
+      interval: weekly
+    groups:
+      npm-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /src/backend/Services/AuthApi
+      - /src/backend/Services/LinkApi
+      - /src/backend/Services/RedirectApi
+      - /src/backend/Services/ReportingApi
+      - /src/backend/Services/ReportingService
+      - /src/backend/Services/ShortenerService
+      - /src/backend/Services/TrafficService
+      - /src/frontend/app
+      - /sandbox/frontend/architecture-map
+      - /sandbox/infra/control-api
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

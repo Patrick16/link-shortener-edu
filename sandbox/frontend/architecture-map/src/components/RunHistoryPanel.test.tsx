@@ -33,7 +33,7 @@ describe('RunHistoryPanel bulk delete', () => {
     const runs = [summary('run-a'), summary('run-b')]
     const user = await renderWithRuns(runs)
     vi.mocked(controlApi.deleteRun).mockImplementation((id) =>
-      id === 'run-a' ? Promise.resolve(undefined) : Promise.reject(new Error('network error')),
+      id === 'run-a' ? Promise.resolve(new Response()) : Promise.reject(new Error('network error')),
     )
 
     await user.click(screen.getByLabelText('Select run run-a'))
@@ -48,7 +48,7 @@ describe('RunHistoryPanel bulk delete', () => {
   it('removes every checked run and shows no failure note when all deletes succeed', async () => {
     const runs = [summary('run-a'), summary('run-b')]
     const user = await renderWithRuns(runs)
-    vi.mocked(controlApi.deleteRun).mockResolvedValue(undefined)
+    vi.mocked(controlApi.deleteRun).mockResolvedValue(new Response())
 
     await user.click(screen.getByLabelText('Select run run-a'))
     await user.click(screen.getByLabelText('Select run run-b'))
