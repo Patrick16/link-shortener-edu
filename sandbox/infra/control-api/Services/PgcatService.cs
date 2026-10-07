@@ -92,7 +92,11 @@ public sealed class PgcatService : IPgcatService
         sb.AppendLine("[general]");
         sb.AppendLine("host = \"0.0.0.0\"");
         sb.AppendLine("port = 6432");
-        sb.AppendLine("enable_prometheus_exporter = false");
+        // Scraped by Prometheus's pgcat job (see sandbox/infra/prometheus/prometheus.yml) for the
+        // PgcatClientsWaiting alert (pgcat_pools_cl_waiting - see sandbox/infra/prometheus/alerts.yml).
+        // 9930 is pgcat's own documented default for this exporter, not configurable from here.
+        sb.AppendLine("enable_prometheus_exporter = true");
+        sb.AppendLine("prometheus_exporter_port = 9930");
         sb.AppendLine("connect_timeout = 5000");
         sb.AppendLine("idle_timeout = 30000");
         sb.AppendLine("healthcheck_timeout = 1000");

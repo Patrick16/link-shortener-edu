@@ -1,0 +1,64 @@
+# Loaded by prometheus.yml's rule_files. No Alertmanager is deployed in this stack - firing alerts
+# show up in Prometheus's own "Alerts" tab (http://localhost:9090/alerts) and can be added as a panel
+# in Grafana, but nothing pages/notifies anyone. That's enough to demonstrate "the stack can tell you
+# something's wrong" for an educational sandbox without the extra moving part of routing/notification
+# config that would only matter for a real on-call setup.
+#
+# Every expression here was checked against this stack's actual exporters, not assumed from a
+# generic example - see each group's own comment for where its metric names come from.
+groups:
+  - name: pgcat
+    rules:
+      # pgcat_pools_cl_waiting is pgcat's own built-in Prometheus exporter (see
+      # PgcatService.RenderPgcatToml - enable_prometheus_exporter/prometheus_exporter_port, scraped
+      # by prometheus.yml's pgcat job) - same cl_waiting column GetPgcatConnectionsAsync already
+      # reads live via `SHOW POOLS`, just exposed as a metric instead of polled on demand. Clients
+      # queueing for a server connection is pgcat's own signal that its pool is undersized for the
+      # current load - see sandbox/docs/pgcat-pool-sizing.md for the real incident that first
+      # surfaced this.
+      - alert: PgcatClientsWaiting
+        expr: pgcat_pools_cl_waiting > 5
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "pgcat pool {{ $labels.pool }} has clients waiting for a server connection"
+          description: "{{ $value }} client(s) queued on pgcat's {{ $labels.pool }} pool for at least 30s - the pool is undersized for the current load. See sandbox/docs/pgcat-pool-sizing.md."
+
+  - name: rabbitmq
+    rules:
+      # rabbitmq_queue_messages is the rabbitmq_prometheus plugin's own metric (bundled in the
+      # rabbitmq:3-management-alpine image, scraped by prometheus.yml's rabbitmq job on :15692) -
+      # ready + unacked messages per queue. A growing backlog means consumers aren't keeping up with
+      # publish rate (see sandbox/infra/control-api's rabbitmq-prefetch control for one way to tune
+      # that live).
+      - alert: RabbitMqQueueBacklog
+        expr: rabbitmq_queue_messages > 10000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RabbitMQ queue {{ $labels.queue }} has a growing backlog"
+          description: "Queue {{ $labels.queue }} has had over 10000 messages (ready + unacked) for at least 1m - consumers aren't keeping up with publish rate."
+
+  - name: http
+    rules:
+      # http_server_request_duration_seconds_count and its http_response_status_code label come from
+      # the OTel .NET SDK's standard HTTP server instrumentation, exported via otel-collector's own
+      # Prometheus exporter (prometheus.yml's otel-collector job) - same metric/label names the
+      # existing Grafana dashboard's "error rate" panel already uses (grafana/provisioning/dashboards/
+      # metrics.json), confirmed there rather than assumed. A raw request-rate threshold doesn't mean
+      # anything on its own (it conflates "busy and healthy" with "actually failing"), so this alerts
+      # on the 5xx *ratio* instead, same formula as that panel.
+      - alert: HighErrorRate
+        expr: |
+          sum by (exported_job) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[5m]))
+          /
+          sum by (exported_job) (rate(http_server_request_duration_seconds_count[5m]))
+          > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.exported_job }} has an elevated 5xx error rate"
+          description: "{{ $labels.exported_job }} has returned 5xx for more than 5% of requests over the last 5m (currently {{ $value | humanizePercentage }}) for at least 2m."

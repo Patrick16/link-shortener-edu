@@ -1,16 +1,19 @@
-# Rewritten live by control-api's pgcat pool-settings control (see DockerService.SetPgcatPoolSettingsAsync).
+# Rewritten live by control-api's pgcat pool-settings control (see PgcatService.SetPgcatPoolSettingsAsync).
 # One primary + 2 streaming replicas (postgres-replica1/2), same trio for all three databases.
 
 [general]
 host = "0.0.0.0"
 port = 6432
-enable_prometheus_exporter = false
+# Scraped by Prometheus's pgcat job for the PgcatClientsWaiting alert - see
+# sandbox/infra/prometheus/prometheus.yml and alerts.yml.
+enable_prometheus_exporter = true
+prometheus_exporter_port = 9930
 connect_timeout = 5000
 idle_timeout = 30000
 healthcheck_timeout = 1000
 healthcheck_delay = 30000
 shutdown_timeout = 5000
-# See DockerService.RenderPgcatToml's identical comment: a 200-VU/20-replica run showed transient
+# See PgcatService.RenderPgcatToml's identical comment: a 200-VU/20-replica run showed transient
 # Docker-DNS lookup failures against postgres-replica1/2 turning into ~20s stalls once pgcat banned
 # the replica for the old ban_time=20 - shortened so a sub-second DNS blip doesn't cascade that far.
 ban_time = 3
