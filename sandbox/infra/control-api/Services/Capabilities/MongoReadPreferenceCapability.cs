@@ -2,11 +2,11 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class MongoReadPreferenceCapability(IDockerService docker, ILogger<MongoReadPreferenceCapability> logger) : IComponentCapability
+public sealed class MongoReadPreferenceCapability(IInfraToggleService infraToggle, ILogger<MongoReadPreferenceCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
-        app.MapGet("/api/infra/mongo-read-preference", () => Results.Ok(new { preference = docker.GetMongoReadPreference() }));
+        app.MapGet("/api/infra/mongo-read-preference", () => Results.Ok(new { preference = infraToggle.GetMongoReadPreference() }));
 
         app.MapPost("/api/infra/mongo-read-preference", async (MongoReadPreferenceRequest request, CancellationToken ct) =>
         {
@@ -17,7 +17,7 @@ public sealed class MongoReadPreferenceCapability(IDockerService docker, ILogger
 
             try
             {
-                return Results.Ok(new { preference = await docker.SetMongoReadPreferenceAsync(request.Preference, ct) });
+                return Results.Ok(new { preference = await infraToggle.SetMongoReadPreferenceAsync(request.Preference, ct) });
             }
             catch (Exception ex)
             {

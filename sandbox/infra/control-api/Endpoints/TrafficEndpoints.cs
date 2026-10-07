@@ -7,9 +7,9 @@ public static class TrafficEndpoints
 {
     public static IEndpointRouteBuilder MapTrafficEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/traffic", (TrafficRequest request, IDockerService docker, TrafficRunCoordinator coordinator) =>
+        app.MapPost("/api/traffic", (TrafficRequest request, ITrafficService traffic, TrafficRunCoordinator coordinator) =>
         {
-            var error = TrafficRequestValidator.Validate(request, docker);
+            var error = TrafficRequestValidator.Validate(request, traffic);
             if (error is not null)
             {
                 return Results.BadRequest(new { error });

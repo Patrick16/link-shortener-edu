@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Docker.DotNet;
 using Docker.DotNet.Models;
 
@@ -6,6 +7,7 @@ namespace ControlApi.Services;
 public sealed class ContainerRuntime : IContainerRuntime
 {
     private readonly ILogger<ContainerRuntime> _logger;
+    private readonly string _composeFile;
 
     public DockerClient Client { get; }
 
@@ -19,11 +21,18 @@ public sealed class ContainerRuntime : IContainerRuntime
     // without masking a real hang as "just slow".
     private static readonly TimeSpan ExecTimeout = TimeSpan.FromSeconds(10);
 
+    // See RunComposeAsync's own doc comment on IContainerRuntime.
+    private readonly SemaphoreSlim _composeGate = new(1, 1);
+
+    // See RunExclusiveToggleAsync's own doc comment on IContainerRuntime.
+    private readonly SemaphoreSlim _toggleGate = new(1, 1);
+
     public ContainerRuntime(IConfiguration configuration, ILogger<ContainerRuntime> logger)
     {
         _logger = logger;
         ComposeProject = configuration["Docker:ComposeProject"] ?? "sandbox";
         ComposeNetwork = configuration["Docker:ComposeNetwork"] ?? $"{ComposeProject}_default";
+        _composeFile = configuration["Docker:ComposeFile"] ?? "/workspace/docker-compose.yml";
 
         var endpoint = configuration["Docker:Endpoint"]
             ?? (OperatingSystem.IsWindows() ? "npipe://./pipe/docker_engine" : "unix:///var/run/docker.sock");
@@ -123,5 +132,87 @@ public sealed class ContainerRuntime : IContainerRuntime
     {
         var inspect = await Client.Containers.InspectContainerAsync(containerId, ct);
         return inspect.NetworkSettings?.Networks?.TryGetValue(ComposeNetwork, out var endpoint) == true ? endpoint.IPAddress : null;
+    }
+
+    public async Task<(int ExitCode, string Output)> RunComposeAsync(IEnumerable<string> args, IDictionary<string, string>? extraEnv, CancellationToken ct)
+    {
+        await _composeGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "docker",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            foreach (var arg in new[] { "compose", "-p", ComposeProject, "-f", _composeFile }.Concat(args))
+            {
+                psi.ArgumentList.Add(arg);
+            }
+
+            if (extraEnv is not null)
+            {
+                foreach (var (key, value) in extraEnv)
+                {
+                    psi.Environment[key] = value;
+                }
+            }
+
+            using var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start the docker compose process");
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+            var stderrTask = process.StandardError.ReadToEndAsync(ct);
+            await process.WaitForExitAsync(ct);
+            var output = await stdoutTask + await stderrTask;
+            return (process.ExitCode, output);
+        }
+        finally
+        {
+            _composeGate.Release();
+        }
+    }
+
+    public async Task<int> CountReplicasAsync(string serviceId, CancellationToken ct)
+    {
+        var containers = await Client.Containers.ListContainersAsync(new ContainersListParameters
+        {
+            All = true,
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                ["label"] = new Dictionary<string, bool>
+                {
+                    [$"com.docker.compose.project={ComposeProject}"] = true,
+                    [$"com.docker.compose.service={serviceId}"] = true,
+                },
+            },
+        }, ct);
+
+        return containers.Count;
+    }
+
+    public async Task<List<string>> BuildPreserveScaleArgsAsync(IReadOnlyList<string> services, CancellationToken ct)
+    {
+        var scaleArgs = new List<string>();
+        foreach (var serviceId in services)
+        {
+            var replicas = await CountReplicasAsync(serviceId, ct);
+            scaleArgs.Add("--scale");
+            scaleArgs.Add($"{serviceId}={Math.Max(replicas, 1)}");
+        }
+
+        return scaleArgs;
+    }
+
+    public async Task<T> RunExclusiveToggleAsync<T>(Func<CancellationToken, Task<T>> action, CancellationToken ct)
+    {
+        await _toggleGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await action(ct);
+        }
+        finally
+        {
+            _toggleGate.Release();
+        }
     }
 }

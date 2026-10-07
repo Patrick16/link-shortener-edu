@@ -2,11 +2,11 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class NpgsqlPoolSizeCapability(IDockerService docker, ILogger<NpgsqlPoolSizeCapability> logger) : IComponentCapability
+public sealed class NpgsqlPoolSizeCapability(IInfraToggleService infraToggle, ILogger<NpgsqlPoolSizeCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
-        app.MapGet("/api/infra/npgsql-pool-size", () => Results.Ok(new { poolSize = docker.GetNpgsqlPoolSize() }));
+        app.MapGet("/api/infra/npgsql-pool-size", () => Results.Ok(new { poolSize = infraToggle.GetNpgsqlPoolSize() }));
 
         app.MapPost("/api/infra/npgsql-pool-size", async (NpgsqlPoolSizeRequest request, CancellationToken ct) =>
         {
@@ -17,7 +17,7 @@ public sealed class NpgsqlPoolSizeCapability(IDockerService docker, ILogger<Npgs
 
             try
             {
-                return Results.Ok(new { poolSize = await docker.SetNpgsqlPoolSizeAsync(request.PoolSize, ct) });
+                return Results.Ok(new { poolSize = await infraToggle.SetNpgsqlPoolSizeAsync(request.PoolSize, ct) });
             }
             catch (Exception ex)
             {

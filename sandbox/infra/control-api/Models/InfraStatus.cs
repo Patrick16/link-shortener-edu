@@ -13,7 +13,7 @@ namespace ControlApi.Models;
 // an accepted, documented limitation rather than something worth reconciling on startup.
 // MessagingMode ("rabbitmq" or "grpc") is the fourth real-container-state toggle, same category as
 // PgcatEnabled/CacheEnabled above (same drift-on-restart caveat applies) - see
-// MessagingToggleCapability/DockerService.SetMessagingModeAsync.
+// MessagingToggleCapability/InfraToggleService.SetMessagingModeAsync.
 public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode);
 
 public record InfraToggleRequest(bool Enabled);

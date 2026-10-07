@@ -23,7 +23,7 @@ public record DataPoolRequest(string SourceId, int Count, string Mode);
 
 // Every run goes through the one generic k6-scripts/flow.js now - there's no more "named script"
 // concept. Steps is the ordered sequence to call, once per iteration, in that exact order (see
-// DockerService.EndpointRegistry) - order matters, since later steps can consume variables earlier
+// TrafficService.EndpointRegistry) - order matters, since later steps can consume variables earlier
 // steps produced (e.g. a "resolve" step needs the "hash" a "create" step earlier in the same
 // sequence produced). Scenario is just a display label for the report/UI (e.g. a saved custom
 // scenario's own name), not a script name.
@@ -47,7 +47,7 @@ public record CheckResult(string Name, int Passes, int Fails);
 
 // One HTTP status code (or "0" for a request that never got a response at all - connection
 // refused/reset/timeout) and how many requests landed on it. Only codes k6 was told to track via a
-// threshold show up at all (see TrackedStatusCodes in DockerService) and only ones that actually
+// threshold show up at all (see TrackedStatusCodes in TrafficService) and only ones that actually
 // occurred (Count > 0) make it into a report.
 public record StatusCount(string Label, long Count);
 

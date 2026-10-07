@@ -14,7 +14,9 @@ namespace ControlApi.Services;
 // comment) - a second concurrent run would silently corrupt both runs' resource maxima (e.g. run 2's
 // BeginRun() clearing state run 1 is still accumulating into).
 public sealed class TrafficRunCoordinator(
-    IDockerService docker,
+    ITrafficService traffic,
+    IContainerLifecycleService lifecycle,
+    IInfraToggleService infraToggle,
     IPgcatService pgcat,
     IPostgresService postgres,
     IRedisInfraService redis,
@@ -73,7 +75,7 @@ public sealed class TrafficRunCoordinator(
             var runStart = DateTimeOffset.UtcNow;
             resourceMaxTracker.BeginRun();
 
-            var report = await docker.RunTrafficAsync(
+            var report = await traffic.RunTrafficAsync(
                 request,
                 progress => hub.Clients.All.SendAsync("trafficProgress", progress),
                 cts.Token);
@@ -122,7 +124,7 @@ public sealed class TrafficRunCoordinator(
     {
         try
         {
-            var containers = await docker.ListContainersAsync(CancellationToken.None);
+            var containers = await lifecycle.ListContainersAsync(CancellationToken.None);
             var replicas = containers
                 .GroupBy(c => c.ServiceId)
                 .Select(g => new ReplicaCount(g.Key, g.Count(c => c.State == "running")))
@@ -146,7 +148,7 @@ public sealed class TrafficRunCoordinator(
                 $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid().ToString("N")[..6]}",
                 DateTimeOffset.UtcNow,
                 request,
-                docker.GetInfraStatus(),
+                infraToggle.GetInfraStatus(),
                 replicas,
                 pgcatConnections,
                 await postgres.GetPostgresConnectionsAsync(CancellationToken.None),
@@ -154,9 +156,9 @@ public sealed class TrafficRunCoordinator(
                 pgcat.GetPgcatPoolSettings(),
                 sentinel,
                 replicationLags,
-                docker.GetRabbitMqPrefetch(),
-                docker.GetMongoReadPreference(),
-                docker.GetNpgsqlPoolSize(),
+                infraToggle.GetRabbitMqPrefetch(),
+                infraToggle.GetMongoReadPreference(),
+                infraToggle.GetNpgsqlPoolSize(),
                 resourceMaxima,
                 traceHops,
                 verdict);

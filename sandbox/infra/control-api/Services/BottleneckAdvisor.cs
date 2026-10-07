@@ -13,14 +13,14 @@ namespace ControlApi.Services;
 // the "how would I have found this myself" guided panel can never disagree with each other.
 public static class BottleneckAdvisor
 {
-    // NodeResourceMax.MaxCpuPercent comes straight from DockerService's own docker-stats-style
+    // NodeResourceMax.MaxCpuPercent comes straight from ContainerLifecycleService's own docker-stats-style
     // formula (cpuDelta/systemDelta * onlineCpus * 100 - see GetResourceSampleAsync), which is
     // normalized per CORE: 100% means one full core saturated, and a container can show hundreds
     // of percent on a many-core host without the host itself being anywhere near saturated -
     // confirmed live (rabbitmq showed 593% during a small run on a 32-core machine). Dividing by
     // the core count this control-api process itself sees turns it into "% of total host capacity"
     // before comparing against HighCpuPercent or showing it in evidence text - Environment.
-    // ProcessorCount matches DockerService's own onlineCpus fallback reasoning (both assume the
+    // ProcessorCount matches ContainerLifecycleService's own onlineCpus fallback reasoning (both assume the
     // container sees the host's full core set, true for this stack since nothing here sets a
     // per-container cpuset/cpu-quota limit).
     private static double NormalizedCpuPercent(double rawCpuPercent) => rawCpuPercent / Environment.ProcessorCount;
@@ -123,7 +123,7 @@ public static class BottleneckAdvisor
         // points at nginx/backend capacity, a 500 wave points at the backend itself misbehaving.
         if (report.HttpRequests > 0 && report.FailedRequestRate >= HighFailedRequestRate)
         {
-            // DockerService's TrackedStatusCodes labels are human-readable ("502 Bad Gateway"), not
+            // TrafficService's TrackedStatusCodes labels are human-readable ("502 Bad Gateway"), not
             // bare codes - match with StartsWith, the same way TrafficReportView.tsx's own
             // success/failure coloring already does, not an exact-string lookup against "502".
             var allStatusCounts = report.StatusBreakdownByEndpoint.SelectMany(e => e.StatusCounts).ToList();

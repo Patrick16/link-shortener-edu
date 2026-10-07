@@ -2,11 +2,11 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class RabbitMqPrefetchCapability(IDockerService docker, ILogger<RabbitMqPrefetchCapability> logger) : IComponentCapability
+public sealed class RabbitMqPrefetchCapability(IInfraToggleService infraToggle, ILogger<RabbitMqPrefetchCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
-        app.MapGet("/api/infra/rabbitmq-prefetch", () => Results.Ok(new { prefetchCount = docker.GetRabbitMqPrefetch() }));
+        app.MapGet("/api/infra/rabbitmq-prefetch", () => Results.Ok(new { prefetchCount = infraToggle.GetRabbitMqPrefetch() }));
 
         app.MapPost("/api/infra/rabbitmq-prefetch", async (RabbitMqPrefetchRequest request, CancellationToken ct) =>
         {
@@ -17,7 +17,7 @@ public sealed class RabbitMqPrefetchCapability(IDockerService docker, ILogger<Ra
 
             try
             {
-                return Results.Ok(new { prefetchCount = await docker.SetRabbitMqPrefetchAsync(request.PrefetchCount, ct) });
+                return Results.Ok(new { prefetchCount = await infraToggle.SetRabbitMqPrefetchAsync(request.PrefetchCount, ct) });
             }
             catch (Exception ex)
             {

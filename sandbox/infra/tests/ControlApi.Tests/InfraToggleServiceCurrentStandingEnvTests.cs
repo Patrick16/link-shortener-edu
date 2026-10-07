@@ -4,13 +4,13 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ControlApi.Tests;
 
-public class DockerServiceCurrentStandingEnvTests
+public class InfraToggleServiceCurrentStandingEnvTests
 {
-    private static DockerService NewService()
+    private static InfraToggleService NewService()
     {
         var configuration = new ConfigurationBuilder().Build();
         var runtime = new ContainerRuntime(configuration, NullLogger<ContainerRuntime>.Instance);
-        return new DockerService(configuration, runtime, NullLogger<DockerService>.Instance);
+        return new InfraToggleService(runtime, NullLogger<InfraToggleService>.Instance);
     }
 
     [Fact]
@@ -21,7 +21,7 @@ public class DockerServiceCurrentStandingEnvTests
         // its own new value into before recreating a shared container - without it, recreating for
         // one axis silently reverts every other axis on that container to whatever
         // docker-compose.yml's own ${VAR:-default} falls back to. The keys/defaults here must stay
-        // in sync with those fallback defaults; neither DockerService's nor ContainerRuntime's
+        // in sync with those fallback defaults; neither InfraToggleService's nor ContainerRuntime's
         // constructor touches the Docker daemon (the client connects lazily), so building an
         // instance here has no I/O.
         var sut = NewService();

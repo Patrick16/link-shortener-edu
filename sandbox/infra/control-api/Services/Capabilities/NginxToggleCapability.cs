@@ -2,7 +2,7 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class NginxToggleCapability(IDockerService docker) : IComponentCapability
+public sealed class NginxToggleCapability(IInfraToggleService infraToggle) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
@@ -10,6 +10,6 @@ public sealed class NginxToggleCapability(IDockerService docker) : IComponentCap
         // the degraded one being demonstrated - even though nginx's own field name (NginxBypassed) is
         // the inverse of that, since bypassing is the interesting state worth naming directly there.
         app.MapPost("/api/infra/nginx", (InfraToggleRequest request) =>
-            Results.Ok(docker.SetNginxBypass(!request.Enabled)));
+            Results.Ok(infraToggle.SetNginxBypass(!request.Enabled)));
     }
 }

@@ -8,7 +8,7 @@ namespace ControlApi.Services;
 // no Docker events API subscription (would be more efficient) for this first cut, a 1.5s poll is
 // simple and fast enough for a panel a human is watching.
 public class StatusPollerService(
-    IDockerService docker,
+    IContainerLifecycleService lifecycle,
     IHubContext<StatusHub> hub,
     ILogger<StatusPollerService> logger) : BackgroundService
 {
@@ -23,7 +23,7 @@ public class StatusPollerService(
         {
             try
             {
-                var current = await docker.ListContainersAsync(stoppingToken);
+                var current = await lifecycle.ListContainersAsync(stoppingToken);
                 if (!HasChanged(_lastKnown, current))
                 {
                     continue;

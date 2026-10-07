@@ -7,14 +7,14 @@ public static class TrafficRequestValidator
     // Returns the first validation error, or null when the request is acceptable. Every bound here
     // guards the one externally-triggerable input that spins up real k6 virtual users against the
     // local docker-compose stack.
-    public static string? Validate(TrafficRequest request, IDockerService docker)
+    public static string? Validate(TrafficRequest request, ITrafficService traffic)
     {
         if (request.Steps.Count == 0)
         {
             return "at least one endpoint step is required";
         }
 
-        var unknownEndpoints = request.Steps.Where(s => !docker.ListKnownEndpoints().Any(ep => ep.Id == s.EndpointId)).Select(s => s.EndpointId).ToList();
+        var unknownEndpoints = request.Steps.Where(s => !traffic.ListKnownEndpoints().Any(ep => ep.Id == s.EndpointId)).Select(s => s.EndpointId).ToList();
         if (unknownEndpoints.Count > 0)
         {
             return $"unknown endpoint(s): {string.Join(", ", unknownEndpoints)}";
@@ -25,7 +25,7 @@ public static class TrafficRequestValidator
             return "each step's pauseAfterSeconds must be between 0 and 30";
         }
 
-        if (request.DataPool is { } dataPool && ValidateDataPool(dataPool, docker) is { } dataPoolError)
+        if (request.DataPool is { } dataPool && ValidateDataPool(dataPool, traffic) is { } dataPoolError)
         {
             return dataPoolError;
         }
@@ -35,9 +35,9 @@ public static class TrafficRequestValidator
             : ValidateRampOrDurationRun(request);
     }
 
-    private static string? ValidateDataPool(DataPoolRequest dataPool, IDockerService docker)
+    private static string? ValidateDataPool(DataPoolRequest dataPool, ITrafficService traffic)
     {
-        if (!docker.ListDataSources().Any(s => s.Id == dataPool.SourceId))
+        if (!traffic.ListDataSources().Any(s => s.Id == dataPool.SourceId))
         {
             return $"unknown data source: {dataPool.SourceId}";
         }

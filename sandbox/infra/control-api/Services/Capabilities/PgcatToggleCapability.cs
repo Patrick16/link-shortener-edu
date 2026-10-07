@@ -2,7 +2,7 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class PgcatToggleCapability(IDockerService docker, ILogger<PgcatToggleCapability> logger) : IComponentCapability
+public sealed class PgcatToggleCapability(IInfraToggleService infraToggle, ILogger<PgcatToggleCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
@@ -10,7 +10,7 @@ public sealed class PgcatToggleCapability(IDockerService docker, ILogger<PgcatTo
         {
             try
             {
-                return Results.Ok(await docker.SetPgcatEnabledAsync(request.Enabled, ct));
+                return Results.Ok(await infraToggle.SetPgcatEnabledAsync(request.Enabled, ct));
             }
             catch (Exception ex)
             {

@@ -27,7 +27,7 @@ public static class InfraEndpoints
         app.MapGet("/api/containers/mongo/topology", async (IMongoTopologyService mongo, CancellationToken ct) =>
             Results.Ok(await mongo.GetMongoTopologyAsync(ct)));
 
-        app.MapGet("/api/infra/status", (IDockerService docker) => Results.Ok(docker.GetInfraStatus()));
+        app.MapGet("/api/infra/status", (IInfraToggleService infraToggle) => Results.Ok(infraToggle.GetInfraStatus()));
 
         return app;
     }

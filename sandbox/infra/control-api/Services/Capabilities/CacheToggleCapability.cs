@@ -2,7 +2,7 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class CacheToggleCapability(IDockerService docker, ILogger<CacheToggleCapability> logger) : IComponentCapability
+public sealed class CacheToggleCapability(IInfraToggleService infraToggle, ILogger<CacheToggleCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
@@ -10,7 +10,7 @@ public sealed class CacheToggleCapability(IDockerService docker, ILogger<CacheTo
         {
             try
             {
-                return Results.Ok(await docker.SetCacheEnabledAsync(request.Enabled, ct));
+                return Results.Ok(await infraToggle.SetCacheEnabledAsync(request.Enabled, ct));
             }
             catch (Exception ex)
             {

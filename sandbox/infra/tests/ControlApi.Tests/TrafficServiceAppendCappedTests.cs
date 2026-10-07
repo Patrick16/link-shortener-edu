@@ -3,14 +3,14 @@ using ControlApi.Services;
 
 namespace ControlApi.Tests;
 
-public class DockerServiceAppendCappedTests
+public class TrafficServiceAppendCappedTests
 {
     [Fact]
     public void AppendCapped_UnderLimit_AppendsWholeChunkAndReportsNotTruncated()
     {
         var builder = new StringBuilder();
 
-        var truncated = DockerService.AppendCapped(builder, "hello", maxChars: 100);
+        var truncated = TrafficService.AppendCapped(builder, "hello", maxChars: 100);
 
         Assert.False(truncated);
         Assert.Equal("hello", builder.ToString());
@@ -21,7 +21,7 @@ public class DockerServiceAppendCappedTests
     {
         var builder = new StringBuilder();
 
-        var truncated = DockerService.AppendCapped(builder, "0123456789", maxChars: 5);
+        var truncated = TrafficService.AppendCapped(builder, "0123456789", maxChars: 5);
 
         Assert.True(truncated);
         Assert.StartsWith("01234", builder.ToString());
@@ -32,10 +32,10 @@ public class DockerServiceAppendCappedTests
     public void AppendCapped_AlreadyAtLimit_ReturnsTruncatedWithoutAppendingAgain()
     {
         var builder = new StringBuilder();
-        DockerService.AppendCapped(builder, "0123456789", maxChars: 5);
+        TrafficService.AppendCapped(builder, "0123456789", maxChars: 5);
         var afterFirstTruncation = builder.ToString();
 
-        var truncated = DockerService.AppendCapped(builder, "more text", maxChars: 5);
+        var truncated = TrafficService.AppendCapped(builder, "more text", maxChars: 5);
 
         Assert.True(truncated);
         Assert.Equal(afterFirstTruncation, builder.ToString());
@@ -46,8 +46,8 @@ public class DockerServiceAppendCappedTests
     {
         var builder = new StringBuilder();
 
-        DockerService.AppendCapped(builder, "abc", maxChars: 100);
-        var truncated = DockerService.AppendCapped(builder, "def", maxChars: 100);
+        TrafficService.AppendCapped(builder, "abc", maxChars: 100);
+        var truncated = TrafficService.AppendCapped(builder, "def", maxChars: 100);
 
         Assert.False(truncated);
         Assert.Equal("abcdef", builder.ToString());
@@ -63,7 +63,7 @@ public class DockerServiceAppendCappedTests
         // specific failure mode.
         var builder = new StringBuilder();
 
-        var truncated = DockerService.AppendCapped(builder, "12345", maxChars: 5);
+        var truncated = TrafficService.AppendCapped(builder, "12345", maxChars: 5);
 
         Assert.True(truncated);
         Assert.StartsWith("12345", builder.ToString());
@@ -80,8 +80,8 @@ public class DockerServiceAppendCappedTests
         // truncation path.
         var builder = new StringBuilder();
 
-        var firstResult = DockerService.AppendCapped(builder, "12345", maxChars: 5);
-        var secondResult = DockerService.AppendCapped(builder, "more text that should never appear", maxChars: 5);
+        var firstResult = TrafficService.AppendCapped(builder, "12345", maxChars: 5);
+        var secondResult = TrafficService.AppendCapped(builder, "more text that should never appear", maxChars: 5);
 
         Assert.True(firstResult);
         Assert.True(secondResult);

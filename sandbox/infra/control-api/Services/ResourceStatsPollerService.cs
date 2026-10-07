@@ -7,7 +7,7 @@ namespace ControlApi.Services;
 // connected clients. Separate from StatusPollerService (which watches container State) - this one
 // hits the Docker stats endpoint per-container, which is heavier, so it runs on its own cadence.
 public class ResourceStatsPollerService(
-    IDockerService docker,
+    IContainerLifecycleService lifecycle,
     ResourceStatsStore store,
     RunResourceMaxTracker resourceMaxTracker,
     IHubContext<StatusHub> hub,
@@ -22,7 +22,7 @@ public class ResourceStatsPollerService(
         {
             try
             {
-                var containers = await docker.ListContainersAsync(stoppingToken);
+                var containers = await lifecycle.ListContainersAsync(stoppingToken);
                 store.Prune(containers.Select(c => c.ContainerId).ToHashSet());
 
                 // Each Docker stats call is slow enough (observed ~2s each against Docker Desktop
@@ -35,7 +35,7 @@ public class ResourceStatsPollerService(
                 // one per replica, instead of every call re-resolving "the" container for that
                 // service and landing on the same one N times.
                 var running = containers.Where(c => c.State == "running").ToList();
-                var results = await Task.WhenAll(running.Select(c => docker.GetResourceSampleAsync(c, stoppingToken)));
+                var results = await Task.WhenAll(running.Select(c => lifecycle.GetResourceSampleAsync(c, stoppingToken)));
                 var samples = results.Where(s => s is not null).Select(s => s!).ToList();
 
                 foreach (var sample in samples)

@@ -8,7 +8,7 @@ namespace ControlApi.Services;
 // from ResourceStatsStore's ring buffer afterwards, because that buffer only keeps ~60s of history
 // and a run can run longer than that - by the time the run ends the peak could already be gone.
 // One tracked run at a time, matching how RunTrafficAsync itself only ever runs one k6 container at
-// once (see DockerService).
+// once (see TrafficService.RunTrafficAsync).
 public class RunResourceMaxTracker
 {
     private readonly ConcurrentDictionary<string, (double MaxCpu, long MaxMemoryBytes, double MaxMemoryPercent)> _maxima = new();

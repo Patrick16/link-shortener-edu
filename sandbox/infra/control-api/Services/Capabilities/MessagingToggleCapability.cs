@@ -2,7 +2,7 @@ using ControlApi.Models;
 
 namespace ControlApi.Services.Capabilities;
 
-public sealed class MessagingToggleCapability(IDockerService docker, ILogger<MessagingToggleCapability> logger) : IComponentCapability
+public sealed class MessagingToggleCapability(IInfraToggleService infraToggle, ILogger<MessagingToggleCapability> logger) : IComponentCapability
 {
     public void MapEndpoints(WebApplication app)
     {
@@ -10,7 +10,7 @@ public sealed class MessagingToggleCapability(IDockerService docker, ILogger<Mes
         {
             try
             {
-                return Results.Ok(await docker.SetMessagingModeAsync(request.Mode, ct));
+                return Results.Ok(await infraToggle.SetMessagingModeAsync(request.Mode, ct));
             }
             catch (ArgumentOutOfRangeException ex)
             {

@@ -8,20 +8,20 @@ public static class ScenarioEndpoints
 {
     public static IEndpointRouteBuilder MapScenarioEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/endpoints", (IDockerService docker) => Results.Ok(docker.ListKnownEndpoints()));
+        app.MapGet("/api/endpoints", (ITrafficService traffic) => Results.Ok(traffic.ListKnownEndpoints()));
 
-        app.MapGet("/api/data-sources", (IDockerService docker) => Results.Ok(docker.ListDataSources()));
+        app.MapGet("/api/data-sources", (ITrafficService traffic) => Results.Ok(traffic.ListDataSources()));
 
         app.MapGet("/api/scenarios", async (IScenarioStore store, CancellationToken ct) => Results.Ok(await store.ListAsync(ct)));
 
-        app.MapPost("/api/scenarios", async (CustomScenario scenario, IScenarioStore store, IDockerService docker, CancellationToken ct) =>
+        app.MapPost("/api/scenarios", async (CustomScenario scenario, IScenarioStore store, ITrafficService traffic, CancellationToken ct) =>
         {
             if (string.IsNullOrWhiteSpace(scenario.Name))
             {
                 return Results.BadRequest(new { error = "name is required" });
             }
 
-            var knownIds = docker.ListKnownEndpoints().Select(ep => ep.Id).ToList();
+            var knownIds = traffic.ListKnownEndpoints().Select(ep => ep.Id).ToList();
             var unknown = scenario.Steps.Where(s => !knownIds.Contains(s.EndpointId)).Select(s => s.EndpointId).ToList();
             if (scenario.Steps.Count == 0 || unknown.Count > 0)
             {
