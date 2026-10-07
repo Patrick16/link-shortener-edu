@@ -2134,6 +2134,13 @@ button:disabled {
   font-weight: 600;
 }
 
+/* current === baseline exactly - deliberately not colored like either direction, see
+   BaselineComparisonPanel's own comment on why this needs its own class rather than reusing
+   improvement/regression. */
+.baseline-table td.baseline-change-neutral {
+  color: var(--text);
+}
+
 /* Run history (right sidebar) */
 
 .run-history-panel {

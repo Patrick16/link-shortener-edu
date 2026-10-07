@@ -5,12 +5,15 @@ using Microsoft.Extensions.Options;
 
 namespace ControlApi.Tests;
 
-// BottleneckThresholds is a record with a primary constructor whose parameters all have C#
-// defaults - this verifies partial JSON overrides behave the way a reader of appsettings.json
-// would expect (an omitted property keeps the record's own default, not CLR's 0), not just that
-// Configure<T>/IOptions wiring compiles. A binder that silently zeroed out unspecified numeric
-// thresholds instead of leaving them at their defaults would be a severe, silent bug - e.g.
-// HighFailedRequestRate=0 would flag every run that has any failures at all.
+// BottleneckThresholds uses init-only properties with C# field initializers for its defaults
+// (not a primary constructor - see the type's own comment for why: Options binding constructs
+// it via Activator.CreateInstance<T>(), which requires a real parameterless constructor that a
+// primary-constructor record does not emit) - this verifies partial JSON overrides behave the
+// way a reader of appsettings.json would expect (an omitted property keeps the type's own
+// default, not CLR's 0), not just that Configure<T>/IOptions wiring compiles. A binder that
+// silently zeroed out unspecified numeric thresholds instead of leaving them at their defaults
+// would be a severe, silent bug - e.g. HighFailedRequestRate=0 would flag every run that has any
+// failures at all.
 public class BottleneckThresholdsConfigBindingTests
 {
     private static BottleneckThresholds Bind(string json)

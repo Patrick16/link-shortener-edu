@@ -42,16 +42,26 @@ export function BaselineComparisonPanel({ baseline }: Props) {
           </tr>
         </thead>
         <tbody>
-          {baseline.metrics.map((metric) => (
-            <tr key={metric.name}>
-              <td>{metric.name}</td>
-              <td>{formatValue(metric.current, metric.unit)}</td>
-              <td>{formatValue(metric.baseline, metric.unit)}</td>
-              <td className={metric.isRegression ? 'baseline-change-regression' : 'baseline-change-improvement'}>
-                {formatPercentChange(metric.percentChange)}
-              </td>
-            </tr>
-          ))}
+          {baseline.metrics.map((metric) => {
+            // Exact equality (not "isRegression is false") on purpose: isRegression only encodes
+            // direction, so an unchanged metric (current === baseline) would otherwise fall into
+            // the "improvement" branch and render green with 0.0%/"—" - a real, if cosmetic,
+            // misread for anyone scanning the table for actual regressions.
+            const changeClass =
+              metric.current === metric.baseline
+                ? 'baseline-change-neutral'
+                : metric.isRegression
+                  ? 'baseline-change-regression'
+                  : 'baseline-change-improvement'
+            return (
+              <tr key={metric.name}>
+                <td>{metric.name}</td>
+                <td>{formatValue(metric.current, metric.unit)}</td>
+                <td>{formatValue(metric.baseline, metric.unit)}</td>
+                <td className={changeClass}>{formatPercentChange(metric.percentChange)}</td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>
