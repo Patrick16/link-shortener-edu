@@ -30,7 +30,14 @@ builder.Services.AddFrontendCors(builder.Configuration);
 
 var healthChecks = builder.Services.AddHealthChecks()
     .AddPostgresHealthCheck<DatabaseContext>();
-if (!isGrpcMode)
+if (isGrpcMode)
+{
+    // Without this, /health/ready stayed Healthy on Postgres alone while SyncGrpcDispatcher's every
+    // call to a downstream ShortenerService/TrafficService that's actually unreachable failed with
+    // 502/503 (found during review - see GrpcChannelHealthCheck).
+    healthChecks.AddGrpcMessagingHealthCheck();
+}
+else
 {
     healthChecks.AddRabbitMqHealthCheck();
 }

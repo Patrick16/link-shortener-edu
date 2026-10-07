@@ -24,6 +24,13 @@ public static class HealthChecksBuilderExtensions
     public static IHealthChecksBuilder AddRabbitMqHealthCheck(this IHealthChecksBuilder builder)
         => builder.AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ReadyTags);
 
+    // For LinkApi/RedirectApi in messaging-mode=grpc - the counterpart to AddRabbitMqHealthCheck for
+    // the other transport. GrpcChannelHealthCheck resolves the GrpcChannel singleton that
+    // AddEventDispatcher only registers in that mode, so this must only be called when
+    // IsMessagingGrpcMode() is true as well.
+    public static IHealthChecksBuilder AddGrpcMessagingHealthCheck(this IHealthChecksBuilder builder)
+        => builder.AddCheck<GrpcChannelHealthCheck>("grpc-messaging", tags: ReadyTags);
+
     public static IHealthChecksBuilder AddMongoHealthCheck(this IHealthChecksBuilder builder)
         => builder.AddCheck<MongoHealthCheck>("mongo", tags: ReadyTags);
 
