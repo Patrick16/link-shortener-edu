@@ -19,7 +19,7 @@ Scaling replicas increases concurrency *in front of* pgcat, not the number of ba
 pgcat is allowed to hold open — with `pool_mode = "transaction"`, only `pool_size` transactions can
 run against a given role at once, so at 200 VUs the other ~190 queued behind those 10 slots. The
 control panel's own **Bottleneck Advisor** already has a rule for exactly this
-([`BottleneckAdvisor.cs:65-76`](../infra/control-api/Services/BottleneckAdvisor.cs#L65-L76)):
+([`BottleneckAdvisor.cs:59-72`](../infra/control-api/Services/BottleneckAdvisor.cs#L59-L72)):
 `pgcat.Pools[].ClientWaiting > 0` → *"the pgcat pool is exhausted"*.
 
 **Fix:** raised `pool_size` to **40**

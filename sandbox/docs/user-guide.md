@@ -365,7 +365,20 @@ k6 output, and — the most useful part for actually learning from a run — the
 The bottleneck panel is deliberately two things at once: an always-open numbered checklist that
 *teaches the diagnostic method* (resource usage per node, pool/queue saturation, trace hop
 latency, ...), and a collapsed automatic verdict ranking suspect services with evidence — useful
-once you already know roughly what to look for.
+once you already know roughly what to look for. Expanding the verdict on a run saved after this
+feature shipped shows a one-line caption naming the exact thresholds it was judged against (e.g.
+"Judged against: CPU > 85% · memory > 90% · hop p95 > 300ms · error rate > 5%") — these come from
+`control-api`'s `appsettings.json` (`BottleneckThresholds` section) rather than being hardcoded, so
+tune them there and restart `control-api` if the defaults don't fit your machine or scenario.
+
+If you've run the same scenario before, a **vs previous run of this scenario** panel appears
+automatically right above the bottleneck panel, with no extra steps — it's computed server-side
+when the run is saved, not on demand. It's a table of throughput, error rate, and p95 latency (p95
+only when both runs have a k6 summary), each row showing this run's value, the previous run's
+value, and a percent-change cell colored red (regressed), green (improved), or gray (unchanged).
+This is distinct from the manual **Compare** below: it's always "this run vs. the one immediately
+before it in the same scenario," with no run picker, and it only ever compares results, not infra
+configuration. The very first run of a scenario simply shows no such panel yet.
 
 Select two or more runs with their checkboxes and hit **Compare** for a side-by-side table split
 into Configuration and Results rows, with every differing value highlighted:
