@@ -88,6 +88,16 @@ public sealed class TrafficRunCoordinator(
             // next run turns out to be.
             var resourceMaxima = resourceMaxTracker.EndRun();
 
+            // Release the "only one run at a time" slot as soon as the run itself (the k6 container
+            // and its live resource tracking) is actually finished, not after SaveSnapshotAsync below
+            // also completes - that method has its own ~2s delay waiting for trace spans to flush
+            // (see its own comment) and doesn't need the guard: resourceMaxima is already captured
+            // above, and nothing else SaveSnapshotAsync touches depends on _runActive. Without this,
+            // a new run attempted during that delay gets rejected with a stale 409 even though
+            // nothing is visibly running anymore.
+            Volatile.Write(ref _runCts, null);
+            Volatile.Write(ref _runActive, 0);
+
             if (report is not null)
             {
                 await hub.Clients.All.SendAsync("trafficCompleted", report);
@@ -109,6 +119,8 @@ public sealed class TrafficRunCoordinator(
         }
         finally
         {
+            // No-op on the success path (already reset above, before SaveSnapshotAsync) - this is
+            // the safety net for the cancellation/exception paths, which never reach that early reset.
             Volatile.Write(ref _runCts, null);
             Volatile.Write(ref _runActive, 0);
         }
