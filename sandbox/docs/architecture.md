@@ -14,7 +14,12 @@ full reasoning.
 
 ## Components
 
-- **AuthApi** — registration / login, writes to `Postgres users`. Issues a JWT.
+- **AuthApi** — registration / login, writes to `Postgres users`. Issues a JWT. Register/login/
+  refresh/logout share one per-client-IP rate limit (`RateLimiting:PermitLimit`/`WindowSeconds` in
+  `appsettings.json`, 100 requests/60s by default) - the sandbox overrides this to an
+  effectively-unlimited quota (`AUTH_RATE_LIMIT_PERMIT`/`AUTH_RATE_LIMIT_WINDOW_SECONDS`, both in
+  `sandbox/docker-compose.yml`) since every k6 VU's calls share one container's IP; lower
+  `AUTH_RATE_LIMIT_PERMIT` before a run that includes Register/Login steps to see a real 429.
 - **LinkApi** — accepts requests to create a short link, generates the hash itself and returns it
   synchronously. If the request carries a valid Bearer token, `userId` comes from its `sub` claim;
   otherwise it's `null` — no authentication is required. Publishes the created link (with hash and
