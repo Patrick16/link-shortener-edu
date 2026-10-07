@@ -4,12 +4,18 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
 namespace AuthApi.Controllers;
 
+// Every action here - register/login/refresh/logout - shares one per-client-IP fixed-window policy
+// (see AuthApiServiceExtensions.AddAuthRateLimiting). No action gets a stricter or looser policy of
+// its own: register/login are the ones an outside reviewer actually flagged as unprotected, and
+// refresh/logout sit behind the same controller rather than being carved out as an exception.
 [ApiController]
 [Route("/")]
+[EnableRateLimiting(AuthApiServiceExtensions.AuthRateLimitPolicy)]
 public class AuthController(
     DatabaseContext context,
     IJwtTokenGenerator tokenGenerator,

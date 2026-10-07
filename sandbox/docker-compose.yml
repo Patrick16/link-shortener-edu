@@ -759,6 +759,15 @@ services:
       # since ServiceDefaults.Extensions never calls SetSampler.
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
+      # appsettings.json's own default (100/60s) is sized for a public deploy with many distinct real
+      # clients - see AuthApiServiceExtensions.AddAuthRateLimiting. Here, every k6 VU's register/login
+      # calls arrive from this one control-api container's single internal IP, not from 100 separate
+      # callers, so that default would make a load test touching AuthApi start failing with 429s almost
+      # immediately. Overridden to an effectively-unlimited quota so a load test behaves as if the
+      # limiter isn't there by default; lower AUTH_RATE_LIMIT_PERMIT yourself to see a run actually hit
+      # 429s - a sequence with Register/Login steps and enough VUs is the easiest way to trigger it.
+      RateLimiting__PermitLimit: "${AUTH_RATE_LIMIT_PERMIT:-100000}"
+      RateLimiting__WindowSeconds: "${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}"
     depends_on:
       pgcat:
         condition: service_healthy

@@ -9,6 +9,7 @@ builder.AddWebApiDefaults();
 
 builder.AddPostgresDbContextPool<DatabaseContext>();
 builder.AddAuthServices();
+builder.AddAuthRateLimiting();
 
 // AllowCredentials is required for the browser to send/receive the refresh-token cookie cross-origin.
 builder.Services.AddFrontendCors(builder.Configuration, allowCredentials: true);
@@ -28,6 +29,10 @@ app.UseApiExceptionHandling();
 app.UseHttpsRedirection();
 app.UseFrontendCors();
 app.UseAuthorization();
+// AddAuthRateLimiting's own OnRejected writes the 429's ProblemDetails body directly (see its
+// comment), so this doesn't depend on UseApiExceptionHandling's ordering above - placed here simply
+// to match the usual auth-then-rate-limit pipeline order.
+app.UseRateLimiter();
 
 app.MapControllers();
 app.MapHealthEndpoints();
