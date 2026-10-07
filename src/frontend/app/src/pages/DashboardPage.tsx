@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthContext'
 import { buildShortUrl, getLinks } from '../api/linkApi'
 import { getClickSummary } from '../api/statsApi'
 import { ApiError } from '../api/client'
+import { ClicksByDayChart } from '../components/ClicksByDayChart'
 import type { ClickSummary, LinksPage } from '../types'
 
 // Keyed by hash. 'loading'/'error' are distinct from "not yet requested" (absent key) so toggling
@@ -27,7 +28,7 @@ function StatsPanel({ summary }: { summary: SummaryState }) {
       <dt>Total clicks</dt>
       <dd>{summary.totalClicks}</dd>
       <dt>By day</dt>
-      <dd>{summary.byDay.map((b) => `${b.key}: ${b.count}`).join(', ') || '—'}</dd>
+      <dd>{summary.byDay.length > 0 ? <ClicksByDayChart buckets={summary.byDay} /> : '—'}</dd>
       <dt>Top countries</dt>
       <dd>{topBucket(summary.byCountry)}</dd>
       <dt>Top devices</dt>

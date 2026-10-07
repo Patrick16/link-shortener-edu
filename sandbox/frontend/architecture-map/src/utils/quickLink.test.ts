@@ -92,6 +92,10 @@ describe('getQuickLinks', () => {
     expect(getQuickLinks(component('postgres-replica-1', 'infrastructure'))).toEqual([{ label: 'pgweb', url: 'http://localhost:8084' }])
   })
 
+  it('links clickhouse to its own built-in Play UI', () => {
+    expect(getQuickLinks(component('clickhouse', 'infrastructure'))).toEqual([{ label: 'ClickHouse Play', url: 'http://localhost:8123/play' }])
+  })
+
   it('does not link the primary postgres container itself unless it is database-typed', () => {
     // Only databases, pgcat, and *replicas* get pgweb per the current branch - "postgres" itself
     // (the primary, not a "postgres-replica*" id) with type 'infrastructure' falls through every

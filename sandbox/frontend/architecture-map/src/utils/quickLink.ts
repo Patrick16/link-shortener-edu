@@ -40,6 +40,13 @@ export function getQuickLinks(component: ArchComponent): QuickLink[] {
     links.push({ label: 'RabbitMQ dashboard', url: `http://localhost:${component.details.managementPort}` })
   }
 
+  // ClickHouse ships its own browser SQL console on the same HTTP port it serves queries on - no
+  // separate UI container needed, unlike pgweb/RedisInsight/Mongo Express (see docker-compose.yml's
+  // clickhouse service, port 8123 published for exactly this).
+  if (component.id === 'clickhouse') {
+    links.push({ label: 'ClickHouse Play', url: 'http://localhost:8123/play' })
+  }
+
   // One shared GUI per cluster, not per node - RedisInsight/Mongo Express/pgweb aren't tied to a
   // specific member's own port, they're separate tools pointed at the whole master+replicas / replica
   // set / cluster. Every node in that family gets the same link since clicking any one of them means

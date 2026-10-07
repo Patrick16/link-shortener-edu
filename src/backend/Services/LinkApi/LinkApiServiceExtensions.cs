@@ -1,8 +1,5 @@
-using System.Text;
 using Common;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
 using WebDefaults;
 
 namespace LinkApi;
@@ -21,31 +18,12 @@ public static class LinkApiServiceExtensions
     // read the caller's userId from a valid Bearer token when one is present. GetLinks does require
     // [Authorize] (per-user listing); it also accepts the InternalApiKey scheme below so a genuinely
     // internal, non-user caller (control-api's data-pool preload) can get unscoped access instead.
-    // Jwt* config keys are shared with AuthApi, which issues the tokens (see Common.Constants) - they
-    // have to match or every token would fail validation here.
+    // JWT Bearer setup itself lives in WebDefaults (shared with ReportingApi, which validates the
+    // same AuthApi-issued tokens but needs no second scheme) - this just adds the InternalApiKey
+    // scheme on top, LinkApi-only.
     public static WebApplicationBuilder AddJwtAndInternalApiKeyAuthentication(this WebApplicationBuilder builder)
     {
-        var configuration = builder.Configuration;
-        var jwtSigningKey = configuration[Constants.JwtSigningKeySection];
-
-        builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-            .AddJwtBearer(options =>
-            {
-                // Without this, the handler silently renames the "sub" claim to the legacy
-                // ClaimTypes.NameIdentifier URI, and User.FindFirst(JwtRegisteredClaimNames.Sub) in
-                // LinksController would never find it. Keep claim types exactly as the token declares them.
-                options.MapInboundClaims = false;
-                options.TokenValidationParameters = new TokenValidationParameters
-                {
-                    ValidateIssuer = true,
-                    ValidIssuer = configuration[Constants.JwtIssuerSection],
-                    ValidateAudience = true,
-                    ValidAudience = configuration[Constants.JwtAudienceSection],
-                    ValidateLifetime = true,
-                    ValidateIssuerSigningKey = true,
-                    IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSigningKey ?? string.Empty)),
-                };
-            })
+        builder.AddJwtBearerAuthentication()
             .AddScheme<AuthenticationSchemeOptions, InternalApiKeyAuthenticationHandler>(
                 Constants.InternalApiKeyAuthenticationScheme, null);
         return builder;

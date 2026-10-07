@@ -1,9 +1,13 @@
 using System.Text.RegularExpressions;
 using Infrastructure;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ReportingApi.Controllers;
 
+// Every action here requires a valid Bearer token (see Program.cs's AddJwtBearerAuthentication) -
+// unlike LinkApi/RedirectApi, there is no anonymous path through this controller at all.
+[Authorize]
 [ApiController]
 [Route("reports")]
 public partial class ReportsController(IClickFactQueryService queryService) : ControllerBase

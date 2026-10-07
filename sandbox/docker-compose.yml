@@ -1137,6 +1137,9 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Database=reports_db"
       Cors__AllowedOrigins__0: "http://localhost:5173"
+      # Every endpoint here requires a Bearer token now (see Program.cs) - same shared signing key
+      # as auth-api/link-api, so a token either of them issues validates here too.
+      Jwt__SigningKey: *jwt-signing-key
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       # See auth-api's identical comment on these two - same default/override story everywhere.
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"

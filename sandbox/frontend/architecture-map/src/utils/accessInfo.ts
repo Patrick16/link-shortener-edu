@@ -139,6 +139,17 @@ export function getAccessInfo(component: ArchComponent): AccessInfo | null {
       }
     }
 
+    case 'clickhouse':
+      return {
+        entries: [
+          { label: 'Dashboard', value: 'http://localhost:8123/play - ClickHouse\'s own built-in SQL console' },
+          { label: 'Login', value: 'No login (CLICKHOUSE_SKIP_USER_SETUP=1 - see docker-compose.yml)' },
+          { label: 'Example query', value: 'SELECT * FROM reports_db.clicks ORDER BY clicked_at DESC LIMIT 20' },
+          { label: 'clickhouse-client from host', value: 'clickhouse-client --host localhost --database reports_db' },
+          { label: 'HTTP connection string', value: 'Host=localhost;Port=8123;Database=reports_db' },
+        ],
+      }
+
     default:
       return null
   }

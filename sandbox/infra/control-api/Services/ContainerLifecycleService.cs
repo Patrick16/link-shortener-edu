@@ -7,13 +7,20 @@ namespace ControlApi.Services;
 public sealed class ContainerLifecycleService(IContainerRuntime runtime, IInfraToggleService infraToggle, ILogger<ContainerLifecycleService> logger) : IContainerLifecycleService
 {
     // link-api/redirect-api scale because nginx fronts them (see sandbox/infra/nginx/nginx.conf);
-    // shortener-service/traffic-service scale as RabbitMQ competing consumers instead - no load
-    // balancer involved, RabbitMQ itself round-robins unacked deliveries across every consumer on a
-    // queue. Still an explicit allowlist, not "anything in the compose file", so a stateful/singleton
-    // service (postgres, rabbitmq, pgcat, ...) isn't even an option to try by mistake - both workers
-    // are volume-free, same property ScaleAsync already relies on for --force-recreate safety
-    // elsewhere (see IContainerRuntime.RunComposeAsync's own comment).
-    private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api", "shortener-service", "traffic-service"];
+    // shortener-service/traffic-service/reporting-service scale as RabbitMQ competing consumers
+    // instead - no load balancer involved, RabbitMQ itself round-robins unacked deliveries across
+    // every consumer on a queue. reporting-service's ClickHouse write is safe under that pattern
+    // for the same reason redelivery already is (see its own architecture.json description): the
+    // `clicks` table is a ReplacingMergeTree ordered by (hash, id), so two replicas both getting a
+    // copy of the same event just produces rows that collapse into one on the next background
+    // merge, not a correctness bug. Still an explicit allowlist, not "anything in the compose
+    // file", so a stateful/singleton service (postgres, rabbitmq, pgcat, ...) isn't even an option
+    // to try by mistake - all three workers are volume-free, same property ScaleAsync already
+    // relies on for --force-recreate safety elsewhere (see IContainerRuntime.RunComposeAsync's own
+    // comment). architecture.json already declared reporting-service's "scalable" capability ahead
+    // of this list actually including it - the UI's scale control existed but every call failed
+    // with "is not a scalable service" until now (found during review).
+    private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service"];
 
     // The two RabbitMQ consumers - mirrors InfraToggleService's own RabbitMqConsumingServices list.
     // Duplicated rather than shared: it's a stable domain fact (which services are RabbitMQ

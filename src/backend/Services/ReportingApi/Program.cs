@@ -8,8 +8,11 @@ builder.AddWebApiDefaults();
 
 builder.AddClickHouseReader();
 
-// No JWT here - reports are read-only aggregates over click counts, same "never require a token"
-// posture as LinkApi; see the plan's open call if this ever needs to be scoped to a link's owner.
+// Unlike LinkApi/RedirectApi's optional-JWT posture, every ReportingApi endpoint requires a valid
+// token - this is the one read path that would otherwise let anyone enumerate click stats for any
+// hash with no account at all (found during review). AddJwtBearerAuthentication alone, no
+// InternalApiKey scheme - nothing internal calls this API, only the product frontend.
+builder.AddJwtBearerAuthentication();
 builder.Services.AddFrontendCors(builder.Configuration);
 
 builder.Services.AddHealthChecks()
@@ -22,6 +25,7 @@ app.MapApiDocumentation();
 app.UseApiExceptionHandling();
 app.UseHttpsRedirection();
 app.UseFrontendCors();
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
