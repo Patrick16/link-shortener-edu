@@ -102,7 +102,7 @@ public sealed class ClickTrackedConsumer(
 
         await _clickMetaStore.SaveManyAsync(metas, cancellationToken);
 
-        _logger.LogInformation("Persisted {Count} click(s) from this batch", distinctByClickId.Count);
+        _logger.LogInformation("Processed {Count} clicks ({AlreadyStored} already stored)", distinctByClickId.Count, alreadyStored.Count);
         return BatchOutcome.Success;
     }
 }
