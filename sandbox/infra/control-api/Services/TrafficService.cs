@@ -134,6 +134,14 @@ public sealed class TrafficService : ITrafficService
 
         await _runtime.EnsureImageAsync(K6Image, ct);
 
+        // Read once for the whole run and threaded through as a parameter from here on (into
+        // FetchDataPoolAsync/FetchLinkHashesAsync below, and into the k6 env vars further down) -
+        // not re-read from _infraToggle at each use. The pool preload and the k6 run itself are
+        // minutes apart for a long run; re-reading at each use let a toggle flip mid-run send the
+        // preload through one URL and the actual run through the other, split across the same
+        // request (found during review).
+        var nginxBypassed = _infraToggle.GetInfraStatus().NginxBypassed;
+
         // A requested data pool is fetched from the real app now, before k6 even starts, and
         // reported through the same onProgress callback as the run itself (Phase "preparing") so
         // the UI can show it instead of a frozen "starting..." while a few hundred requests happen
@@ -146,7 +154,7 @@ public sealed class TrafficService : ITrafficService
             var source = DataSourceRegistry.FirstOrDefault(s => s.Id == poolRequest.SourceId);
             if (source is not null)
             {
-                pool = await FetchDataPoolAsync(source, poolRequest.Count, onProgress, ct);
+                pool = await FetchDataPoolAsync(source, poolRequest.Count, nginxBypassed, onProgress, ct);
                 poolVar = source.ProducesVar;
             }
         }
@@ -193,8 +201,8 @@ public sealed class TrafficService : ITrafficService
         // across replicas per-connection, but k6 keeps a connection alive per VU, so in practice
         // one VU sticks to whichever replica it first resolved - a fair demonstration of "no real
         // load balancing", not a trick. AuthApi was never behind nginx (see nginx.conf), so its URL
-        // doesn't depend on the toggle at all.
-        var nginxBypassed = _infraToggle.GetInfraStatus().NginxBypassed;
+        // doesn't depend on the toggle at all. Reuses the nginxBypassed captured once at the top of
+        // this method, not a fresh read - see that capture's own comment.
         var env = new List<string>
         {
             $"LINK_API_URL=http://{(nginxBypassed ? "link-api:8080" : "nginx:8082")}",
@@ -306,10 +314,10 @@ public sealed class TrafficService : ITrafficService
     // case here, not touching RunTrafficAsync. An id that reaches here without a matching case (only
     // possible if DataSourceRegistry grows a source this switch hasn't been taught yet) yields an
     // empty pool rather than throwing - a run should still proceed using the fixture fallback.
-    private Task<IReadOnlyList<string>> FetchDataPoolAsync(DataSourceDefinition source, int count, Func<TrafficProgress, Task> onProgress, CancellationToken ct) =>
+    private Task<IReadOnlyList<string>> FetchDataPoolAsync(DataSourceDefinition source, int count, bool nginxBypassed, Func<TrafficProgress, Task> onProgress, CancellationToken ct) =>
         source.Id switch
         {
-            "link-api.links" => FetchLinkHashesAsync(count, onProgress, ct),
+            "link-api.links" => FetchLinkHashesAsync(count, nginxBypassed, onProgress, ct),
             _ => Task.FromResult<IReadOnlyList<string>>([]),
         };
 
@@ -317,10 +325,12 @@ public sealed class TrafficService : ITrafficService
     // `count` hashes are collected or the app runs out of links, pushing a "preparing" progress
     // update after every page so a large pool doesn't look like a hang. Fewer real links existing
     // than requested isn't an error - the pool just ends up smaller, which the caller can see in
-    // PreparedCount ending below PreparedTarget in the final push.
-    private async Task<IReadOnlyList<string>> FetchLinkHashesAsync(int count, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
+    // PreparedCount ending below PreparedTarget in the final push. nginxBypassed comes in as a
+    // parameter - the same value RunTrafficAsync captured once for the whole run, not a second,
+    // independent read of the toggle that could disagree with it (see RunTrafficAsync's comment).
+    private async Task<IReadOnlyList<string>> FetchLinkHashesAsync(int count, bool nginxBypassed, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
     {
-        var baseUrl = $"http://{(_infraToggle.GetInfraStatus().NginxBypassed ? "link-api:8080" : "nginx:8082")}";
+        var baseUrl = $"http://{(nginxBypassed ? "link-api:8080" : "nginx:8082")}";
         var hashes = new List<string>(count);
         var page = 1;
 

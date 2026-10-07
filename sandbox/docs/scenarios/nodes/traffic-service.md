@@ -11,6 +11,17 @@ two separate database writes before returning a 302 — see [Async messaging](pa
 Splitting the record itself into two stores (Postgres for the core fact, Mongo for enrichment
 data) is a separate decision from the async split — see "How it works" below.
 
+**Known trade-off, not a bug:** `CachingGeoIpResolver` caches *every* outcome for 10 minutes,
+including a failed/empty lookup (`GeoLocation(null, null)`) — deliberately, since a "not found" is
+just as expensive to re-request against ip-api.com's rate limit as a real answer (see this node's
+Pitfalls for why that rate limit matters at all). The cost: if ip-api.com has a brief blip exactly
+when the first lookup for some IP happens, that `null` result is what both this consumer and
+ReportingService's independent one will see for *any* click from that IP for the next 10 minutes,
+even once the real API has recovered. Acceptable here — a teaching project's geo data is cosmetic,
+and the alternative (a shorter or no negative-result TTL) reopens the rate-limit problem this cache
+exists to solve — but worth knowing before assuming every `null` country/city in `ClickMeta` means
+the address genuinely couldn't be resolved.
+
 ## How it works
 
 `Clicks` (Postgres) is the audit-trail source of truth: `Id`, `ClickedAt`, `InboundLink`,
