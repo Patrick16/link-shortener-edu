@@ -44,6 +44,9 @@ try {
     }
 
     docker cp "${containerId}:$containerTmpFile" $outFile
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'docker cp failed to pull the dump out of the container - see output above.'
+    }
     docker compose exec -T clickhouse rm -f $containerTmpFile
 } finally {
     Pop-Location

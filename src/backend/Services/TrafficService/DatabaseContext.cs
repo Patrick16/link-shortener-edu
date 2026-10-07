@@ -26,6 +26,16 @@ public class DatabaseContext(DbContextOptions<DatabaseContext> options) : DbCont
         // in ClickTrackedConsumer) filters by Id alone via a plain WHERE, not Find/Attach, so this
         // doesn't need any call-site changes - Id leads the composite index, so an Id-only filter
         // still uses it efficiently.
+        //
+        // Known, accepted trade-off: this means Postgres itself no longer enforces Id as globally
+        // unique on its own (only the full (Id, ClickedAt) pair) - native Postgres partitioning has
+        // no way to express a true cross-partition unique constraint on a non-partition-key column.
+        // clicks_meta_db.ClickMeta (Mongo) is upserted by Id alone, so a hypothetical row pair
+        // sharing an Id with different ClickedAt values would desync the two stores. Nothing in this
+        // codebase currently produces that pairing - RedirectController generates Id and ClickedAt
+        // once together and the event carries both unchanged through every redelivery - so this is a
+        // structural limitation to be aware of if a future change ever lets the two drift apart, not
+        // an active bug.
         modelBuilder.Entity<Click>()
             .HasKey(x => new { x.Id, x.ClickedAt });
     }

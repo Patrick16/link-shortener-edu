@@ -110,12 +110,27 @@ docker exec -it $(docker compose ps -q clickhouse) clickhouse-client --query "SH
 - **Partition-maintenance job** — nothing creates next month's partition ahead of time, or drops
   partitions past a retention window, for Postgres. **Decided 2026-10-06 not to build one right
   now**, as an explicit, documented gap rather than a silent omission: the 6-month bootstrap window
-  plus the `clicks_default` safety net means nothing breaks without it — new data just falls into
-  the slower `DEFAULT` partition once the bootstrap window is exhausted, and old partitions simply
-  accumulate instead of ever being dropped. Real options for building this later, none chosen yet: a
-  small scheduled worker (same shape as this project's existing `*Service` workers), the
+  plus the `clicks_default` safety net means inserts don't start *failing* without it — new data
+  just falls into the slower `DEFAULT` partition once the bootstrap window is exhausted, and old
+  partitions simply accumulate instead of ever being dropped. **This is not a free "nothing
+  breaks," though** — once real data has accumulated in `clicks_default`, fixing it by creating a
+  proper dated partition requires `ALTER TABLE clicks ATTACH PARTITION ... FOR VALUES FROM (...) TO
+  (...)`, and Postgres has to scan the entire `DEFAULT` partition under a heavy lock first, to prove
+  no row in it violates the new partition's bounds, before the attach can succeed. At the
+  3.47M-row scale this project already tested, that scan+lock is a real, possibly multi-minute
+  outage window on the live table — not something to attempt casually once `DEFAULT` has grown.
+  Real options for building the maintenance job that avoids ever reaching that state, none chosen
+  yet: a small scheduled worker (same shape as this project's existing `*Service` workers), the
   `pg_partman` extension (Postgres-native, declarative, but a new extension dependency), or a manual
   script in `sandbox/scripts/` (same spirit as `dump-db.ps1`/`.sh`).
+- **`Click`'s composite primary key no longer enforces `Id` as globally unique on its own** — only
+  the full `(Id, ClickedAt)` pair, since Postgres has no way to express a true cross-partition
+  unique constraint on a non-partition-key column. `clicks_meta_db.ClickMeta` (Mongo) is upserted by
+  `Id` alone, so a hypothetical row pair sharing an `Id` with different `ClickedAt` values would
+  desync the two stores — nothing in this codebase currently produces that pairing (`Id` and
+  `ClickedAt` are generated once together and travel through every redelivery unchanged), so this is
+  a structural limitation to stay aware of, not an active bug. See `DatabaseContext.cs`'s own
+  comment on this for the same note closer to the code.
 - **No enforced retention window for Postgres** — Mongo and ClickHouse both actually delete data
   past 90 days; Postgres's partitions just exist, nothing drops old ones (the maintenance job above
   would be what actually enforces a window there).

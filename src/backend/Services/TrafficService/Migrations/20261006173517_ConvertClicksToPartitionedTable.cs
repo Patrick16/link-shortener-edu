@@ -74,9 +74,41 @@ namespace TrafficService.Migrations
             // partition, same as the unpartitioned table used to be for everything).
             migrationBuilder.Sql(@"CREATE TABLE clicks_default PARTITION OF clicks DEFAULT;");
 
+            // Copies directly into each partition table (and clicks_default for anything outside
+            // the bootstrapped window) instead of INSERT-ing through the partitioned parent -
+            // targeting the parent would make Postgres re-derive which partition every single row
+            // belongs to (tuple routing) instead of just bulk-copying into a table we already know
+            // is the right one, and it would hold the entire copy as one long transaction with no
+            // per-partition commit boundaries. Same date math as the partition-creation block above,
+            // recomputed here rather than shared across DO blocks - keeps each step self-contained.
             migrationBuilder.Sql(@"
-                INSERT INTO clicks (""Id"", ""ClickedAt"", ""InboundLink"", ""OutboundLink"", ""Hash"")
-                SELECT ""Id"", ""ClickedAt"", ""InboundLink"", ""OutboundLink"", ""Hash"" FROM clicks_unpartitioned;
+                DO $$
+                DECLARE
+                    start_month date := date_trunc('month', now() AT TIME ZONE 'UTC')::date - interval '2 months';
+                    end_month date := start_month + interval '6 months';
+                    i int;
+                    partition_start date;
+                    partition_end date;
+                    partition_name text;
+                BEGIN
+                    FOR i IN 0..5 LOOP
+                        partition_start := (start_month + (i || ' months')::interval)::date;
+                        partition_end := (start_month + ((i + 1) || ' months')::interval)::date;
+                        partition_name := 'clicks_y' || to_char(partition_start, 'YYYY') || 'm' || to_char(partition_start, 'MM');
+                        EXECUTE format(
+                            'INSERT INTO %I (""Id"", ""ClickedAt"", ""InboundLink"", ""OutboundLink"", ""Hash"")
+                             SELECT ""Id"", ""ClickedAt"", ""InboundLink"", ""OutboundLink"", ""Hash"" FROM clicks_unpartitioned
+                             WHERE ""ClickedAt"" >= %L AND ""ClickedAt"" < %L',
+                            partition_name, partition_start, partition_end
+                        );
+                    END LOOP;
+
+                    -- Older historical data (or anything future-dated past the bootstrap window)
+                    -- goes straight into the default partition.
+                    INSERT INTO clicks_default (""Id"", ""ClickedAt"", ""InboundLink"", ""OutboundLink"", ""Hash"")
+                    SELECT ""Id"", ""ClickedAt"", ""InboundLink"", ""OutboundLink"", ""Hash"" FROM clicks_unpartitioned
+                    WHERE ""ClickedAt"" < start_month OR ""ClickedAt"" >= end_month;
+                END $$;
             ");
 
             migrationBuilder.Sql(@"DROP TABLE clicks_unpartitioned;");
@@ -85,6 +117,11 @@ namespace TrafficService.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            // Same reason as Up()'s identical step: renaming a table does NOT rename its
+            // constraints/indexes, so without freeing "PK_clicks" here first, the CREATE TABLE
+            // below would collide with the partitioned table's own still-attached PK index of that
+            // name (this is exactly the bug Up() was written to avoid - Down() needs the same fix).
+            migrationBuilder.Sql(@"ALTER TABLE clicks RENAME CONSTRAINT ""PK_clicks"" TO ""PK_clicks_partitioned"";");
             migrationBuilder.Sql(@"ALTER TABLE clicks RENAME TO clicks_partitioned;");
 
             migrationBuilder.Sql(@"

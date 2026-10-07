@@ -48,7 +48,16 @@ try {
 
     Write-Host "==> Restoring $DumpFile into the clickhouse container" -ForegroundColor Cyan
     docker cp $DumpFile "${containerId}:$containerTmpFile"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'docker cp failed to copy the dump into the container - see output above.'
+    }
     docker compose exec -T clickhouse clickhouse-client --query 'TRUNCATE TABLE reports_db.clicks'
+    if ($LASTEXITCODE -ne 0) {
+        # Without this check, PowerShell doesn't abort on a failed native-exe call (unlike a
+        # terminating cmdlet error), so execution would fall through to the INSERT below and quietly
+        # turn this restore into an append instead of the documented full-replace.
+        Write-Error 'TRUNCATE TABLE failed - see output above. Aborting before the INSERT would have appended onto existing data.'
+    }
     docker compose exec -T clickhouse sh -c "clickhouse-client --query 'INSERT INTO reports_db.clicks FORMAT Native' < $containerTmpFile"
     if ($LASTEXITCODE -ne 0) {
         Write-Error 'clickhouse-client import failed - see output above.'

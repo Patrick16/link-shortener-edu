@@ -3,6 +3,12 @@
 # dumps reports_db.clicks from the running `clickhouse` container into a timestamped .native file
 # under sandbox/backups/ (gitignored), ClickHouse's own Native format.
 #
+# Unlike the .ps1 twin, this streams straight to the host via `>` instead of writing a
+# container-local temp file and `docker cp`-ing it out - `docker compose exec -T`'s stdout is a raw
+# byte stream in bash (confirmed by dump-db.sh's identical direct-redirect pattern), so the
+# container-temp-file dance is only needed in PowerShell, where it works around the text pipeline
+# mangling binary data.
+#
 # Usage:
 #   ./dump-clickhouse.sh
 
@@ -16,24 +22,15 @@ mkdir -p "$BACKUPS_DIR"
 
 timestamp="$(date +%Y%m%d-%H%M%S)"
 out_file="$BACKUPS_DIR/clickhouse-reports_db.clicks-$timestamp.native"
-container_tmp_file="/tmp/clickhouse-clicks-$timestamp.native"
 
 cd "$SANDBOX_ROOT"
 
-container_id="$(docker compose ps -q clickhouse)"
-if [[ -z "$container_id" ]]; then
-    echo 'Error: clickhouse container not found/running - start the stack first.' >&2
-    exit 1
-fi
-
 echo '==> Dumping reports_db.clicks from the clickhouse container'
-if ! docker compose exec -T clickhouse sh -c "clickhouse-client --query 'SELECT * FROM reports_db.clicks FORMAT Native' > $container_tmp_file"; then
+if ! docker compose exec -T clickhouse clickhouse-client --query 'SELECT * FROM reports_db.clicks FORMAT Native' > "$out_file"; then
+    rm -f "$out_file"
     echo 'Error: clickhouse-client export failed - see output above.' >&2
     exit 1
 fi
-
-docker cp "$container_id:$container_tmp_file" "$out_file"
-docker compose exec -T clickhouse rm -f "$container_tmp_file"
 
 echo "Dump written to: $out_file"
 echo "Restore it with: ./sandbox/scripts/restore-clickhouse.sh --dump-file '$out_file'"

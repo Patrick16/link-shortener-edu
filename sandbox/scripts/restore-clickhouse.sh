@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Linux/macOS equivalent of restore-clickhouse.ps1 - see that file's header for the full
 # rationale: restores a reports_db.clicks Native-format dump (created by dump-clickhouse.sh) into
-# the running `clickhouse` container, truncating the table first.
+# the running `clickhouse` container, truncating the table first. Streams the dump straight from
+# the host file via stdin instead of the .ps1 twin's container-temp-file + docker-cp dance -
+# unnecessary in bash (see dump-clickhouse.sh).
 #
 # Usage:
 #   ./restore-clickhouse.sh [--dump-file PATH]
@@ -36,20 +38,11 @@ fi
 
 cd "$SANDBOX_ROOT"
 
-container_id="$(docker compose ps -q clickhouse)"
-if [[ -z "$container_id" ]]; then
-    echo 'Error: clickhouse container not found/running - start the stack first.' >&2
-    exit 1
-fi
-container_tmp_file="/tmp/clickhouse-restore.native"
-
 echo "==> Restoring $DUMP_FILE into the clickhouse container"
-docker cp "$DUMP_FILE" "$container_id:$container_tmp_file"
 docker compose exec -T clickhouse clickhouse-client --query 'TRUNCATE TABLE reports_db.clicks'
-if ! docker compose exec -T clickhouse sh -c "clickhouse-client --query 'INSERT INTO reports_db.clicks FORMAT Native' < $container_tmp_file"; then
+if ! docker compose exec -T clickhouse clickhouse-client --query 'INSERT INTO reports_db.clicks FORMAT Native' < "$DUMP_FILE"; then
     echo 'Error: clickhouse-client import failed - see output above.' >&2
     exit 1
 fi
-docker compose exec -T clickhouse rm -f "$container_tmp_file"
 
 echo 'Restore complete.'
