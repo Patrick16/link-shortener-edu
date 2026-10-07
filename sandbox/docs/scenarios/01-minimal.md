@@ -140,6 +140,10 @@ mainstream auto-instrumentation for `RabbitMQ.Client`, so this part —
 clicking into once: it's one of the more concrete ways to *see* what "decoupled write path"
 actually means end to end.
 
+Every trace is sampled by default (`OTEL_TRACES_SAMPLER_ARG=1`), which is why you see one here for
+every single request — set it lower (e.g. `0.1`) before a k6 load test, where tracing every request
+adds real overhead to both the app and the collector.
+
 `redisinsight` (`http://localhost:5540`) gives a GUI over the same Redis cache — on first open, add
 a connection with host `redis`, port `6379`, and you can watch `link:{hash}` keys appear as you
 create/visit links, with their TTL counting down.

@@ -90,7 +90,9 @@ Short version of what's real today:
   standalone `aspire-dashboard` container — the dashboard half of .NET Aspire, not the full AppHost
   orchestrator (docker-compose still orchestrates everything). RabbitMQ publish/consume spans are
   manually instrumented so a trace shows the full path across the async boundary for both
-  `LinkApi` → `ShortenerService` and `RedirectApi` → `TrafficService`. `redisinsight` gives a GUI
+  `LinkApi` → `ShortenerService` and `RedirectApi` → `TrafficService`. Every trace is sampled by
+  default (`OTEL_TRACES_SAMPLER_ARG=1`) so demos/debugging see everything — turn it down (e.g. to
+  `0.1`) before a load test, where 100% tracing adds real overhead. `redisinsight` gives a GUI
   over the Redis cache. See `scenarios/01-minimal.md#observability`.
 - **Error handling:** `AuthApi`, `LinkApi`, `RedirectApi` answer every client and server error in
   the same [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) `ProblemDetails` JSON shape (`type`,
