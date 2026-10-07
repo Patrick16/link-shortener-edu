@@ -49,8 +49,9 @@ public sealed class MyCapability(IMyDomainService myDomain) : IComponentCapabili
 ```
 
 Depend on the narrowest service interface that actually has the method you need - `IPgcatService`,
-`IRedisInfraService`, `IDockerService` (still owns container lifecycle, k6 traffic, and the standing
-env toggles), or a new one if this capability doesn't fit any existing domain (see
+`IRedisInfraService`, `IInfraToggleService` (the 7 standing env toggles), `ITrafficService` (k6
+traffic runs), `IContainerLifecycleService` (container lifecycle/scaling), or a new one if this
+capability doesn't fit any existing domain (see
 `Services/IContainerRuntime.cs` and its six domain services for the shape to follow: a thin
 interface, an implementation built on `IContainerRuntime` for the shared Docker/exec/compose
 primitives, and a singleton registration in `ControlPlaneServiceExtensions.cs`).

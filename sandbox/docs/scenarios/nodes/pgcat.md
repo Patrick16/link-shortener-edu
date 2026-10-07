@@ -33,7 +33,7 @@ servers = [["postgres", 5432, "primary"], ["postgres-replica1", 5432, "replica"]
 ```
 
 `pgcat.toml` itself (not the `.example`) is gitignored — the control panel's pool-size control
-rewrites it live (`DockerService.RenderPgcatToml`), so the checked-in file would just be stale the
+rewrites it live (`PgcatService.RenderPgcatToml`), so the checked-in file would just be stale the
 moment anyone touches that control. `ban_time = 3` (how long a server that failed a healthcheck
 stays excluded) is short on purpose: a 200-VU/20-replica load test showed a transient Docker-DNS
 lookup failure against a replica turning into a ~20s stall at the old default (`ban_time = 20`).
