@@ -73,6 +73,9 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
+      # See sandbox/docker-compose.yml's identical override on link-api/redirect-api/
+      # shortener-service - same (empty, shared) InstanceName, same reasoning (LinkCacheService).
+      Redis__InstanceName: ""
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
       Jwt__SigningKey: "dev-only-signing-key-do-not-use-in-production-1234567890"
@@ -100,6 +103,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
+      # See link-api's identical override - same (empty, shared) InstanceName, same reasoning.
+      Redis__InstanceName: ""
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
       ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
     volumes:
@@ -125,6 +130,8 @@ services:
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
       ConnectionStrings__Redis: "redis:6379"
+      # See link-api's identical override - same (empty, shared) InstanceName, same reasoning.
+      Redis__InstanceName: ""
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
     depends_on:
       postgres:
