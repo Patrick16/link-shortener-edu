@@ -28,11 +28,11 @@ app.MapApiDocumentation();
 app.UseApiExceptionHandling();
 app.UseHttpsRedirection();
 app.UseFrontendCors();
-app.UseAuthorization();
 // AddAuthRateLimiting's own OnRejected writes the 429's ProblemDetails body directly (see its
 // comment), so this doesn't depend on UseApiExceptionHandling's ordering above - placed here simply
 // to match the usual auth-then-rate-limit pipeline order.
 app.UseRateLimiter();
+app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthEndpoints();
