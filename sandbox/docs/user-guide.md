@@ -469,16 +469,38 @@ endpoint, request/response shapes, and a built-in client to try requests directl
 
 ## 8. Database dump / restore
 
+One pair of scripts per store this project writes to — same shape, same `sandbox/backups/` output
+directory (gitignored), Linux/macOS `.sh` twins alongside every `.ps1` below.
+
 ```powershell
 sandbox\scripts\dump-db.ps1                                   # -> sandbox/backups/postgres-<timestamp>.sql
 sandbox\scripts\restore-db.ps1                                 # restores the newest file in sandbox/backups/
 sandbox\scripts\restore-db.ps1 -DumpFile '.\sandbox\backups\postgres-20260918-120000.sql'
+
+sandbox\scripts\dump-mongo.ps1                                 # -> sandbox/backups/mongo-<timestamp>.archive.gz
+sandbox\scripts\restore-mongo.ps1
+
+sandbox\scripts\dump-clickhouse.ps1                            # -> sandbox/backups/clickhouse-reports_db.clicks-<timestamp>.native
+sandbox\scripts\restore-clickhouse.ps1
+
+sandbox\scripts\dump-all.ps1                                   # runs all three dump-*.ps1 in sequence
+sandbox\scripts\restore-all.ps1                                # runs all three restore-*.ps1 against the newest dump of each kind
 ```
 
 `dump-db` runs `pg_dumpall` against the running `postgres` container — all three databases
-(`users_db`/`links_db`/`clicks_db`) in one `.sql` file, gitignored, for archiving or moving to
-another machine. `restore-db` replays it against the `postgres` maintenance database (the dump
-already contains its own `CREATE DATABASE` statements).
+(`users_db`/`links_db`/`clicks_db`) in one `.sql` file, for archiving or moving to another machine.
+`restore-db` replays it against the `postgres` maintenance database (the dump already contains its
+own `CREATE DATABASE` statements).
+
+`dump-mongo`/`restore-mongo` use `mongodump`/`mongorestore --archive --gzip` against `clicks_meta_db`,
+connected via the full `rs0` replica-set URI rather than straight to `mongo1` — Mongo can fail over
+to any of the three nodes with zero involvement from this project (same as Redis Sentinel), so the
+URI is what lets the driver find whichever node is actually primary right now instead of assuming
+it's always `mongo1`.
+
+`dump-clickhouse`/`restore-clickhouse` export/import `reports_db.clicks` in ClickHouse's own Native
+format (`restore` `TRUNCATE`s the table first, a full replace rather than a merge on top of
+whatever's already there).
 
 ---
 
