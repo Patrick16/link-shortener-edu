@@ -53,6 +53,8 @@ a failover.
   (architecture-bug) — fixed
 - 🐛 [Sentinel's own hostname resolver failed even though every other tool on the same container could resolve it](pitfall:redis-sentinel-resolver-fails-despite-dns-working)
   (infrastructure-bug) — fixed
+- 🐛 [Only the Redis master asked Sentinel who's in charge before rejoining - the replicas didn't](pitfall:redis-replica-ignores-sentinel-on-rejoin)
+  (architecture-bug) — fixed
 
 ## Relatives
 

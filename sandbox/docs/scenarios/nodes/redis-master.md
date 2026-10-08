@@ -38,6 +38,8 @@ with what was fetched.
   (concurrency) — fixed
 - 🐛 [redis-master accepted writes with no fencing against a split brain](pitfall:redis-master-no-split-brain-fencing)
   (architecture-bug) — fixed
+- 🐛 [Only the Redis master asked Sentinel who's in charge before rejoining - the replicas didn't](pitfall:redis-replica-ignores-sentinel-on-rejoin)
+  (architecture-bug) — fixed
 - 🐛 [Shared `Common` library pulled in the full Redis client just for one interface](pitfall:common-lib-full-redis-client-dependency)
   (coupling) — fixed
 

@@ -51,3 +51,10 @@ redis-replica1:
 ### Patterns
 
 - [High availability & failover](pattern:high-availability-failover)
+
+### Pitfalls
+
+- [Only the Redis master asked Sentinel who's in charge before rejoining - the replicas didn't](pitfall:redis-replica-ignores-sentinel-on-rejoin)
+  — the sibling half of this same split-brain-on-rejoin problem: this one is about a demoted node
+  still accepting writes it shouldn't, that one is about a promoted node not knowing it should stay
+  master at all
