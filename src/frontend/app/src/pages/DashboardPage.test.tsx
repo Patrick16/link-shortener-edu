@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -210,6 +211,40 @@ describe('DashboardPage', () => {
     expect(await screen.findByText('Total clicks')).toBeInTheDocument()
     expect(screen.queryByText('Could not load stats for this link.')).not.toBeInTheDocument()
     expect(statsApi.getClickSummary).toHaveBeenCalledTimes(2)
+  })
+
+  // Regression test: main.tsx renders the real app inside <StrictMode>, which double-invokes every
+  // effect on mount (mount -> cleanup -> mount again) in development specifically to catch bugs
+  // like a mountedRef that never gets reset back to true. Plain render() above doesn't reproduce
+  // that - this test wraps in StrictMode itself so it actually exercises the same mount/cleanup/
+  // remount cycle the real app goes through.
+  it('still resolves the stats fetch under StrictMode\'s double-effect-invocation on mount', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5 }],
+        totalCount: 1,
+      }),
+    )
+    vi.mocked(statsApi.getClickSummary).mockResolvedValue({
+      hash: 'abc12345',
+      totalClicks: 5,
+      byDay: [{ key: '2099-01-01', count: 5 }],
+      byCountry: [],
+      byDevice: [],
+      byBrowser: [],
+    })
+
+    render(
+      <StrictMode>
+        <DashboardPage />
+      </StrictMode>,
+    )
+    await user.click(await screen.findByRole('button', { name: 'Stats' }))
+
+    expect(await screen.findByText('Total clicks')).toBeInTheDocument()
+    expect(screen.queryByText('Loading stats…')).not.toBeInTheDocument()
   })
 
   it('does not update state after unmounting while a stats fetch is in flight', async () => {

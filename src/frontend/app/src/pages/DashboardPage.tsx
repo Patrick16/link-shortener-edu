@@ -50,13 +50,20 @@ export default function DashboardPage() {
   // Guards the stats fetch below against setting state after unmount, same reason the getLinks
   // effect just below uses its own local `cancelled` flag - a ref (not state) since toggleStats is
   // a plain event handler, not an effect, so it has no cleanup function of its own to flip a flag in.
+  // Must set mountedRef.current = true in the effect body itself, not just via useRef(true)'s
+  // initial value - StrictMode (see main.tsx) double-invokes every effect on mount (mount ->
+  // cleanup -> mount again) specifically to catch bugs like this one. A cleanup-only effect left
+  // the ref permanently false after that very first simulated unmount, even though the component
+  // was genuinely still mounted - every subsequent stats fetch then silently dropped its own
+  // result, stuck on "Loading stats..." forever (found live: response arrived, panel never
+  // updated).
   const mountedRef = useRef(true)
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
       mountedRef.current = false
-    },
-    [],
-  )
+    }
+  }, [])
 
   useEffect(() => {
     if (!user) return
