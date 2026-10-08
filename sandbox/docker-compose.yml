@@ -161,15 +161,22 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - ./infra/redis/master-entrypoint.sh:/master-entrypoint.sh:ro
-      # Just this one small marker file (master-entrypoint.sh's STATE_FILE) - not RDB/AOF data, this
-      # stack doesn't persist Redis's actual dataset across recreates. Needs to survive a container
-      # recreate specifically so a restart that can't reach any Sentinel can tell "I was last a
-      # confirmed replica" from "I've never been told anything" - see master-entrypoint.sh's header.
+      - ./infra/redis/redis-node-entrypoint.sh:/redis-node-entrypoint.sh:ro
+      # Just this one small marker file (redis-node-entrypoint.sh's STATE_FILE) - not RDB/AOF data,
+      # this stack doesn't persist Redis's actual dataset across recreates. Needs to survive a
+      # container recreate specifically so a restart that can't reach any Sentinel can tell "I was
+      # last a confirmed replica" from "I've never been told anything" - see
+      # redis-node-entrypoint.sh's header. redis-replica1/2 each get their own equivalent volume
+      # below - this one's name predates the entrypoint script becoming shared across all three
+      # nodes, kept as-is rather than renamed to avoid orphaning whatever state existing dev
+      # environments already have in it.
       - redis-master-state:/state
-    # Checks with Sentinel before deciding to start as a master - see master-entrypoint.sh for why a
-    # bare `redis-server` here would produce a split brain on rejoin after a real failover.
-    entrypoint: ["/bin/sh", "/master-entrypoint.sh"]
+    # Checks with Sentinel before deciding to start as a master - see redis-node-entrypoint.sh for
+    # why a bare `redis-server` here would produce a split brain on rejoin after a real failover.
+    # This container's compose-declared default role when Sentinel has no opinion at all.
+    environment:
+      NODE_DEFAULT_ROLE: "master"
+    entrypoint: ["/bin/sh", "/redis-node-entrypoint.sh"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -179,10 +186,24 @@ services:
   redis-replica1:
     logging: *default-logging
     image: redis:7-alpine
-    # --min-replicas-* baked in here too, not just master-entrypoint.sh's redis-master paths -
-    # Sentinel promotes a replica to master via REPLICAOF NO ONE without setting server-level config,
-    # so whichever node ends up master (this one included) needs to have started with it already.
-    command: ["redis-server", "--replicaof", "redis-master", "6379", "--min-replicas-to-write", "1", "--min-replicas-max-lag", "10"]
+    volumes:
+      - ./infra/redis/redis-node-entrypoint.sh:/redis-node-entrypoint.sh:ro
+      - redis-replica1-state:/state
+    # Same entrypoint as redis-master, not a hardcoded `--replicaof redis-master` - a hardcoded
+    # command here used to mean this node blindly demoted itself back to replicating off
+    # redis-master on every restart, even if Sentinel had already promoted it to master during a
+    # real outage (confirmed live: stop all three data nodes, let Sentinel promote this node while
+    # they're down, restart all three - redis-master correctly deferred to Sentinel and rejoined as
+    # THIS node's replica, while this node, still on the old hardcoded command, demoted itself back
+    # to replicating off redis-master - the two fought over who's the replica). --min-replicas-* is
+    # the entrypoint's own MIN_REPLICAS_FLAGS now, not passed here - Sentinel promotes a replica to
+    # master via REPLICAOF NO ONE without setting server-level config, so whichever node ends up
+    # master (this one included) needs to have started with those flags already.
+    environment:
+      NODE_DEFAULT_ROLE: "replica"
+      NODE_DEFAULT_REPLICAOF_HOST: "redis-master"
+      NODE_DEFAULT_REPLICAOF_PORT: "6379"
+    entrypoint: ["/bin/sh", "/redis-node-entrypoint.sh"]
     depends_on:
       redis-master:
         condition: service_healthy
@@ -195,8 +216,15 @@ services:
   redis-replica2:
     logging: *default-logging
     image: redis:7-alpine
-    # See redis-replica1's comment on --min-replicas-*.
-    command: ["redis-server", "--replicaof", "redis-master", "6379", "--min-replicas-to-write", "1", "--min-replicas-max-lag", "10"]
+    volumes:
+      - ./infra/redis/redis-node-entrypoint.sh:/redis-node-entrypoint.sh:ro
+      - redis-replica2-state:/state
+    # See redis-replica1's comment - same reasoning, same entrypoint.
+    environment:
+      NODE_DEFAULT_ROLE: "replica"
+      NODE_DEFAULT_REPLICAOF_HOST: "redis-master"
+      NODE_DEFAULT_REPLICAOF_PORT: "6379"
+    entrypoint: ["/bin/sh", "/redis-node-entrypoint.sh"]
     depends_on:
       redis-master:
         condition: service_healthy
@@ -1211,6 +1239,8 @@ volumes:
   redis-sentinel-2-data:
   redis-sentinel-3-data:
   redis-master-state:
+  redis-replica1-state:
+  redis-replica2-state:
   redisinsight-data:
   grafana-data:
   control-api-data:
