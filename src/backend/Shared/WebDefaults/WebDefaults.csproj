@@ -19,11 +19,12 @@
 		     (deliberately absent from ServiceDefaults, see the comment in its csproj). -->
 		<PackageReference Include="Grpc.Core.Api" Version="2.84.0" />
 		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
-		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
-		<PackageReference Include="Scalar.AspNetCore" Version="2.17.4" />
+		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
+		<PackageReference Include="Scalar.AspNetCore" Version="2.17.14" />
 		<!-- JwtAuthenticationExtensions.AddJwtBearerAuthentication - shared JWT Bearer setup for every
 		     service that validates AuthApi-issued tokens. -->
-		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
+		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />
 	</ItemGroup>
 
 	<ItemGroup>
