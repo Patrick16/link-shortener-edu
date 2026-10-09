@@ -9,10 +9,11 @@
 
 An **educational project** built around a deliberately simple product — a link shortener — whose
 real purpose is to let you study the patterns and solutions used when designing high-load systems:
-caching, async messaging, read replicas, sharding, connection pooling, failover, observability.
+caching, async messaging, read replicas, data retention/partitioning, connection pooling, failover,
+observability.
 
-The product stays small on purpose. Each scenario layers **one** high-load pattern on top of the
-previous one, and you can watch it work (and break) live.
+The product stays small on purpose. Around it sits a set of independent high-load patterns you can
+build, toggle and observe live — not a fixed sequence to climb, but a stand you configure.
 
 > **A note on the solutions shown here.** Everything in this repository is an *example* of how a
 > given pattern can be applied — not a claim that it is the only correct way, or even the best one
@@ -26,7 +27,7 @@ walkthrough of the sandbox.
 
 - [What makes this project different](#what-makes-this-project-different)
 - [A look inside](#a-look-inside)
-- [Scenarios](#scenarios)
+- [Patterns](#patterns)
 - [Tech stack](#tech-stack)
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
@@ -125,19 +126,28 @@ from LinkApi to ShortenerService.
 
 ![Trace in Aspire Dashboard](docs/images/observability.png)
 
-## Scenarios
+## Patterns
 
-| # | Scenario | Pattern |
+The stand is one complete, configurable system, not a staircase of numbered scenarios — every
+pattern below is already live in the running stack and can be toggled/observed independently.
+
+| Pattern | What it is | Status |
 |---|---|---|
-| 1 | Minimal stack | Caching (Redis), one Postgres server with isolated databases |
-| 2 | Async processing | RabbitMQ between the APIs and their workers |
-| 3 | Postgres replicas | Read scaling |
-| 4 | pgcat + 2 shards | Write scaling |
-| 5 | Multiple pgcat instances | Pooler scaling |
+| Caching | Redis, read-through on link lookups | Built |
+| Async processing | RabbitMQ between the APIs and their workers | Built |
+| Read replicas | Postgres primary + 2 streaming replicas, PgCat routes reads vs writes | Built |
+| High availability / failover | Postgres + Mongo replica sets, Redis Sentinel | Built |
+| CQRS reporting | ClickHouse as a third, independent read model off the same click events | Built |
+| Sync ⇄ async messaging toggle | Swap RabbitMQ for direct gRPC calls, live, to feel the coupling cost | Built |
+| Data retention (partitioning) | Postgres native partitioning + Mongo/ClickHouse TTLs for `clicks` | Built — maintenance job still open |
+| Pooler scaling | Multiple PgCat instances behind a TCP load balancer | Planned |
 
-Per-scenario walkthroughs (what is running, request flow, things to try by hand) are in
-[`sandbox/docs/scenarios/`](sandbox/docs/scenarios/); the target architecture and current
-implementation status are in [`sandbox/docs/architecture.md`](sandbox/docs/architecture.md).
+Pattern write-ups (what it is, what it solves, how it works) are in
+[`sandbox/docs/scenarios/patterns/`](sandbox/docs/scenarios/patterns/), per-component notes in
+[`sandbox/docs/scenarios/nodes/`](sandbox/docs/scenarios/nodes/), and real bugs found while
+building these in [`sandbox/docs/scenarios/pitfalls/`](sandbox/docs/scenarios/pitfalls/); the
+target architecture and current implementation status are in
+[`sandbox/docs/architecture.md`](sandbox/docs/architecture.md).
 
 ## Tech stack
 
@@ -146,9 +156,9 @@ implementation status are in [`sandbox/docs/architecture.md`](sandbox/docs/archi
 | Backend | .NET 10, ASP.NET Core, EF Core, xUnit |
 | Product frontend | React 19, TypeScript, Vite, React Router |
 | Sandbox frontend | React 19, TypeScript, Vite, React Flow (`@xyflow/react`), SignalR |
-| Data | PostgreSQL 16, MongoDB 7 (replica set), Redis 7 (+ Sentinel), SQLite (fallback queue) |
-| Messaging | RabbitMQ |
-| Infrastructure | Docker Compose, nginx, pgcat (pooler / sharding) |
+| Data | PostgreSQL 16 (partitioned), MongoDB 7 (replica set), ClickHouse, Redis 7 (+ Sentinel), SQLite (fallback queue) |
+| Messaging | RabbitMQ (⇄ gRPC, toggleable) |
+| Infrastructure | Docker Compose, nginx, pgcat (connection pooling) |
 | Load & chaos | k6, Pumba |
 | Observability | OpenTelemetry, Aspire Dashboard — or Prometheus, Jaeger, Loki, Grafana |
 
@@ -216,6 +226,6 @@ architecture map, click through the nodes, and start a small load test.
 ## Documentation
 
 - [Repository map](docs/repository-map.md) — how the repository is laid out and why.
-- [`sandbox/docs/`](sandbox/docs/) — scenarios, node and pattern explanations, pitfalls.
+- [`sandbox/docs/`](sandbox/docs/) — node and pattern explanations, pitfalls.
 - [`src/docs/`](src/docs/) — documentation of the product's own code (API shapes, DB schema).
 - [User Guide](sandbox/docs/user-guide.md) — a complete, screenshot-led walkthrough of the sandbox.
