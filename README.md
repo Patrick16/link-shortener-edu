@@ -140,7 +140,7 @@ pattern below is already live in the running stack and can be toggled/observed i
 | CQRS reporting | ClickHouse as a third, independent read model off the same click events | Built |
 | Sync ⇄ async messaging toggle | Swap RabbitMQ for direct gRPC calls, live, to feel the coupling cost | Built |
 | Data retention (partitioning) | Postgres native partitioning + Mongo/ClickHouse TTLs for `clicks` | Built — maintenance job still open |
-| Pooler scaling | Multiple PgCat instances behind a TCP load balancer | Planned |
+| Pooler scaling | 3 PgCat instances behind an HAProxy TCP load balancer | Built |
 
 Pattern write-ups (what it is, what it solves, how it works) are in
 [`sandbox/docs/scenarios/patterns/`](sandbox/docs/scenarios/patterns/), per-component notes in

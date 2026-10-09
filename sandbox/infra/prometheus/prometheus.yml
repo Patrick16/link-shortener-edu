@@ -19,8 +19,23 @@ scrape_configs:
 
   - job_name: pgcat
     scrape_interval: 5s
+    # 3 instances behind haproxy (Pooler Scaling feature, 2026-10-09) - each pgcat process only
+    # reports its own connections/pools, so relabeled with which instance scraped found it; nothing
+    # in pgcat's own metric labels says this on its own (confirmed live against a real exporter).
     static_configs:
-      - targets: ["pgcat:9930"]
+      - targets: ["pgcat-1:9930"]
+        labels: { instance_name: pgcat-1 }
+      - targets: ["pgcat-2:9930"]
+        labels: { instance_name: pgcat-2 }
+      - targets: ["pgcat-3:9930"]
+        labels: { instance_name: pgcat-3 }
+
+  - job_name: haproxy
+    scrape_interval: 5s
+    # HAProxy's own built-in Prometheus exporter module (no sidecar container) - see
+    # infra/haproxy/haproxy.cfg's "observability" frontend.
+    static_configs:
+      - targets: ["haproxy:8405"]
 
   - job_name: postgres
     scrape_interval: 5s

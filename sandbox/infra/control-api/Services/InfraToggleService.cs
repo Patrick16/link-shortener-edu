@@ -56,7 +56,9 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
     // re-applies every other toggle's current value too instead of quietly undoing it.
     internal Dictionary<string, string> CurrentStandingEnv() => new()
     {
-        ["DB_HOST"] = _pgcatEnabled ? "pgcat" : "postgres",
+        // "haproxy" (not "pgcat") since the Pooler Scaling feature (2026-10-09) - haproxy is the
+        // single entry point in front of the 3 pgcat instances now, see docker-compose.yml.
+        ["DB_HOST"] = _pgcatEnabled ? "haproxy" : "postgres",
         ["DB_PORT"] = _pgcatEnabled ? "6432" : "5432",
         ["CACHE_ENABLED"] = _cacheEnabled ? "true" : "false",
         ["MESSAGING_MODE"] = _messagingMode,
@@ -150,7 +152,7 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
         runtime.RunExclusiveToggleAsync(async ct =>
         {
             var env = CurrentStandingEnv();
-            env["DB_HOST"] = enabled ? "pgcat" : "postgres";
+            env["DB_HOST"] = enabled ? "haproxy" : "postgres";
             env["DB_PORT"] = enabled ? "6432" : "5432";
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 

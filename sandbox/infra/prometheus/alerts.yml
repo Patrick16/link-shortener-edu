@@ -25,8 +25,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "pgcat pool {{ $labels.pool }} has clients waiting for a server connection"
-          description: "{{ $value }} client(s) queued on pgcat's {{ $labels.pool }} pool for at least 30s - the pool is undersized for the current load. See sandbox/docs/pgcat-pool-sizing.md."
+          summary: "{{ $labels.instance_name }}'s {{ $labels.pool }} pool has clients waiting for a server connection"
+          description: "{{ $value }} client(s) queued on {{ $labels.instance_name }}'s {{ $labels.pool }} pool for at least 30s - that instance's pool is undersized for the current load (3 pgcat instances now share the work, see the Pooler Scaling feature - this could mean only one instance is overloaded, not the whole tier). See sandbox/docs/pgcat-pool-sizing.md."
 
   - name: availability
     interval: 30s

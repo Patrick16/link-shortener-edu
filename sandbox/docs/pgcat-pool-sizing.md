@@ -347,11 +347,22 @@ to avg 70ms/0% failed on fresh containers.
   — enqueue onto `ILocalPublishQueue` instead of awaiting `IMessagePublisher.PublishAsync` directly
   (Symptom 9)
 
-## What this means for scenario 5 (not built yet)
+## What this meant for Pooler Scaling (built 2026-10-09)
 
-Scenario 5's plan already calls for "3× pgcat behind a TCP load balancer,
-demonstrating correct pool_size sizing" and a TODO to "calculate and document the real
-`pool_size × instances` relative to Postgres `max_connections`" — this investigation is effectively
-that calculation for the *current* single-pgcat setup: `pool_size × 3 database pools` must stay under
-`max_connections` with real headroom for non-pgcat connections, and that math needs to be redone
-per-instance once scenario 5 adds more pgcat instances in front of the same Postgres cluster.
+This investigation was effectively the sizing calculation for the *single-pgcat* setup:
+`pool_size × 3 database pools` had to stay under `max_connections` with real headroom for
+non-pgcat connections. The Pooler Scaling feature (3 pgcat instances behind haproxy — see
+`sandbox/infra/haproxy/haproxy.cfg`, `.notes/PLAN.md`'s Feature: Pooler Scaling) is where that math
+actually got redone per-instance:
+
+- `max_connections` stayed at 200 (unchanged).
+- `pool_size` dropped from 40 to 20 (`sandbox/infra/pgcat/pgcat.toml.example`,
+  `PgcatService._pgcatPoolSettings`'s default) — all 3 instances share the exact same config file
+  (one bind mount into pgcat-1/2/3), so this one number governs all of them at once.
+- Worst case: 20 (pool_size) × 3 (database pools) × 3 (pgcat instances) = 180 real connections to
+  the primary, under 200 with ~20 left over for pgweb/exporters/admin psql/migrations — the same
+  headroom reasoning Symptom 1 above used for the single-instance case, just multiplied by 3
+  instances instead of by 1.
+- Had `pool_size` stayed at 40 when the 3rd instance was added, the same worst case would have been
+  360 — deliberately not what shipped, since demonstrating *why* a pool_size tuned for one instance
+  breaks when multiplied is the whole point of this feature, not an incidental consequence.

@@ -3,25 +3,30 @@
 // redirect path (which also always publishes a click event, regardless of the k6 client's own
 // redirects:0 setting - that's a client-side option, RedirectApi processes the request fully
 // either way). Traffic now goes through nginx (see sandbox/infra/nginx/nginx.conf) on the way in
-// and pgcat (see sandbox/infra/pgcat/pgcat.toml) on the way to Postgres, not straight to
-// link-api/redirect-api or postgres, so both hops are part of the real path too. Used to
-// highlight/animate the edges real traffic is flowing through while a run is active, rather than
-// animating the whole graph indiscriminately.
+// and haproxy -> a pgcat instance (see sandbox/infra/haproxy/haproxy.cfg, Pooler Scaling feature,
+// 2026-10-09) on the way to Postgres, not straight to link-api/redirect-api or postgres, so both
+// hops are part of the real path too. Used to highlight/animate the edges real traffic is flowing
+// through while a run is active, rather than animating the whole graph indiscriminately.
 export const TRAFFIC_FLOW_EDGES: ReadonlyArray<readonly [string, string]> = [
   ['k6', 'nginx'],
   ['nginx', 'link-api'],
   ['nginx', 'redirect-api'],
   ['link-api', 'rabbitmq'],
   ['rabbitmq', 'shortener-service'],
-  ['shortener-service', 'pgcat'],
-  ['pgcat', 'links-db'],
+  ['shortener-service', 'haproxy'],
+  // All 3 - haproxy's leastconn balancing genuinely sends real traffic to all 3 instances, unlike
+  // pgcat-1 below (see that entry's own comment further down).
+  ['haproxy', 'pgcat-1'],
+  ['haproxy', 'pgcat-2'],
+  ['haproxy', 'pgcat-3'],
+  ['pgcat-1', 'links-db'],
   ['redirect-api', 'redis-master'],
-  ['redirect-api', 'pgcat'],
+  ['redirect-api', 'haproxy'],
   ['redirect-api', 'rabbitmq'],
   ['rabbitmq', 'traffic-service'],
-  ['traffic-service', 'pgcat'],
+  ['traffic-service', 'haproxy'],
   ['traffic-service', 'mongo1'],
-  ['pgcat', 'clicks-db'],
+  ['pgcat-1', 'clicks-db'],
 ]
 
 // 'redis-master'/'mongo1' in the list above stand for "whichever node is currently that cluster's
@@ -30,6 +35,12 @@ export const TRAFFIC_FLOW_EDGES: ReadonlyArray<readonly [string, string]> = [
 // really is flowing to the new leader, not the demoted (or unreachable) one the static id names.
 // Highlighting the old id in that case would show the flow passing through a node that's actually
 // down, which is exactly the wrong moment to get this wrong.
+//
+// 'pgcat-1' above is a DIFFERENT kind of simplification - unlike redis-master/mongo1, pgcat-1/2/3
+// are genuinely interchangeable peers (no leader), so real traffic to links-db/clicks-db could
+// just as easily have gone through pgcat-2 or pgcat-3. architecture.json only draws that downstream
+// edge from pgcat-1 (the representative instance - see that node's own details.purpose for why not
+// all 3), so this list animates the one edge that's actually on the graph.
 const REDIS_NODES = ['redis-master', 'redis-replica1', 'redis-replica2']
 const MONGO_NODES = ['mongo1', 'mongo2', 'mongo3']
 

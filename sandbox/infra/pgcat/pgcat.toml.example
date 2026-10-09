@@ -1,5 +1,10 @@
 # Rewritten live by control-api's pgcat pool-settings control (see PgcatService.SetPgcatPoolSettingsAsync).
 # One primary + 2 streaming replicas (postgres-replica1/2), same trio for all three databases.
+# This ONE file is mounted read-only into all 3 pgcat instances (pgcat-1/2/3, see
+# docker-compose.yml) behind haproxy - not 3 separate files to keep in sync. pool_size=20 (not the
+# pre-pooler-scaling 40) is sized for 3 instances: 20 x 3 pools x 3 instances = 180 worst-case real
+# connections to Postgres, under its max_connections=200 with headroom left over - see
+# sandbox/docs/pgcat-pool-sizing.md for the full math this number comes from.
 
 [general]
 host = "0.0.0.0"
@@ -34,7 +39,7 @@ primary_reads_enabled = true
 [pools.users_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 40
+pool_size = 20
 statement_timeout = 0
 
 [pools.users_db.shards.0]
@@ -51,7 +56,7 @@ primary_reads_enabled = true
 [pools.links_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 40
+pool_size = 20
 statement_timeout = 0
 
 [pools.links_db.shards.0]
@@ -68,7 +73,7 @@ primary_reads_enabled = true
 [pools.clicks_db.users.0]
 username = "postgres"
 password = "postgres"
-pool_size = 40
+pool_size = 20
 statement_timeout = 0
 
 [pools.clicks_db.shards.0]

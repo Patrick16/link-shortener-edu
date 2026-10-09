@@ -27,6 +27,7 @@ public sealed class CapabilityFactory
         ["replication-lag"] = sp => new ReplicationLagCapability(sp.GetRequiredService<IPostgresService>(), sp.GetRequiredService<ILogger<ReplicationLagCapability>>()),
         ["flush-cache"] = sp => new FlushCacheCapability(sp.GetRequiredService<IRedisInfraService>()),
         ["dlq-stats"] = sp => new DlqStatsCapability(sp.GetRequiredService<IRabbitMqService>(), sp.GetRequiredService<ILogger<DlqStatsCapability>>()),
+        ["haproxy-stats"] = sp => new HaproxyStatsCapability(sp.GetRequiredService<IHaproxyService>(), sp.GetRequiredService<ILogger<HaproxyStatsCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

@@ -226,6 +226,17 @@ export interface PostgresConnectionStats {
   total: number
 }
 
+// Pooler Scaling (2026-10-09) - HAProxy's own per-backend-server view of pgcat-1/2/3.
+export interface HaproxyServerStats {
+  name: string
+  up: boolean
+  currentSessions: number
+}
+
+export interface HaproxyStats {
+  servers: HaproxyServerStats[]
+}
+
 // One row per "{queue}.dead" queue RabbitMQ currently knows about - see ControlApi's
 // DeadLetterQueueStats. Nothing consumes these queues today, so a non-zero count means a message
 // exhausted its retries (or failed to deserialize) and is sitting there unread.

@@ -14,9 +14,12 @@ public sealed class PgcatService : IPgcatService
 
     // Mirrors pgcat.toml's shipped defaults. Raised from the original 10 after a 200-VU/20-replica
     // load test showed pgcat's pool - not the app or RabbitMQ - as the actual bottleneck: pool_size
-    // didn't scale with replica count, so requests queued for 10+ seconds behind it. See
+    // didn't scale with replica count, so requests queued for 10+ seconds behind it. Lowered from
+    // 40 to 20 when the Pooler Scaling feature (2026-10-09) went from 1 pgcat instance to 3 behind
+    // haproxy - 40 was sized for one instance's worst case against Postgres's max_connections=200;
+    // 3 instances at the old value could have opened up to 360 real connections. See
     // sandbox/docs/pgcat-pool-sizing.md.
-    private PgcatPoolSettings _pgcatPoolSettings = new("transaction", true, 40);
+    private PgcatPoolSettings _pgcatPoolSettings = new("transaction", true, 20);
 
     public PgcatService(IConfiguration configuration, IContainerRuntime runtime, ILogger<PgcatService> logger)
     {
@@ -28,9 +31,9 @@ public sealed class PgcatService : IPgcatService
     // `SHOW POOLS` columns (unaligned, pipe-separated): database|user|pool_mode|cl_idle|cl_active|
     // cl_waiting|cl_cancel_req|sv_active|sv_idle|sv_used|sv_tested|sv_login|maxwait|maxwait_us -
     // confirmed against a real pgcat before parsing anything.
-    public async Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(CancellationToken ct)
+    public async Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(string instanceId, CancellationToken ct)
     {
-        var container = await _runtime.FindAsync("pgcat", ct);
+        var container = await _runtime.FindAsync(instanceId, ct);
         if (container is null)
         {
             return null;
@@ -88,6 +91,7 @@ public sealed class PgcatService : IPgcatService
         var sb = new StringBuilder();
         sb.AppendLine("# Rewritten live by control-api's pgcat pool-settings control (see PgcatService.SetPgcatPoolSettingsAsync).");
         sb.AppendLine("# One primary + 2 streaming replicas (postgres-replica1/2), same trio for all three databases.");
+        sb.AppendLine("# This ONE file is mounted read-only into all 3 pgcat instances (pgcat-1/2/3) behind haproxy.");
         sb.AppendLine();
         sb.AppendLine("[general]");
         sb.AppendLine("host = \"0.0.0.0\"");

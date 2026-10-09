@@ -28,7 +28,7 @@ public class InfraToggleServiceCurrentStandingEnvTests
 
         var env = sut.CurrentStandingEnv();
 
-        Assert.Equal("pgcat", env["DB_HOST"]);
+        Assert.Equal("haproxy", env["DB_HOST"]);
         Assert.Equal("6432", env["DB_PORT"]);
         Assert.Equal("true", env["CACHE_ENABLED"]);
         Assert.Equal("100", env["NPGSQL_MAX_POOL_SIZE"]);

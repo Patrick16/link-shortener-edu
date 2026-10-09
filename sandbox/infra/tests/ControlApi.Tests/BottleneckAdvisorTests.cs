@@ -39,7 +39,7 @@ public class BottleneckAdvisorTests
         var verdict = BottleneckAdvisor.Analyze(EmptyReport(), resourceMaxima: [], traceHops: [], pgcatConnections);
 
         var suspect = Assert.Single(verdict.Suspects);
-        Assert.Equal("pgcat", suspect.ServiceId);
+        Assert.Equal("pgcat-1", suspect.ServiceId);
         Assert.Contains("3", suspect.Evidence);
         Assert.Contains("clicks_db", suspect.Evidence);
     }
@@ -226,7 +226,7 @@ public class BottleneckAdvisorTests
 
         Assert.Equal(2, verdict.Suspects.Count);
         // pgcat's ClientWaiting rule (severity 100) must outrank the slow-hop rule (severity 70).
-        Assert.Equal("pgcat", verdict.Suspects[0].ServiceId);
+        Assert.Equal("pgcat-1", verdict.Suspects[0].ServiceId);
         Assert.Equal("link-api", verdict.Suspects[1].ServiceId);
     }
 

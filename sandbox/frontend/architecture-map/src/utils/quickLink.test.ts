@@ -84,8 +84,13 @@ describe('getQuickLinks', () => {
     expect(getQuickLinks(component('links-db', 'database'))).toEqual([{ label: 'pgweb', url: 'http://localhost:8084' }])
   })
 
-  it('links pgcat (the pooler, not itself a "database"-typed component) to pgweb too', () => {
-    expect(getQuickLinks(component('pgcat', 'infrastructure'))).toEqual([{ label: 'pgweb', url: 'http://localhost:8084' }])
+  it('links every pgcat instance (the pooler, not itself a "database"-typed component) to pgweb too', () => {
+    expect(getQuickLinks(component('pgcat-1', 'infrastructure'))).toEqual([{ label: 'pgweb', url: 'http://localhost:8084' }])
+    expect(getQuickLinks(component('pgcat-3', 'infrastructure'))).toEqual([{ label: 'pgweb', url: 'http://localhost:8084' }])
+  })
+
+  it('links haproxy to its own stats page, not pgweb', () => {
+    expect(getQuickLinks(component('haproxy', 'infrastructure'))).toEqual([{ label: 'HAProxy stats', url: 'http://localhost:8405/stats' }])
   })
 
   it('links every postgres replica to pgweb too, even though it is "infrastructure"-typed', () => {

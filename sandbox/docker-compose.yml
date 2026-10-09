@@ -34,10 +34,13 @@ services:
     # harmless to set uniformly. max_connections is set explicitly (not left at the image default)
     # because a standby's own max_connections must be >= the primary's or it refuses to start hot
     # standby at all - postgres-replica1/2 read the *same* POSTGRES_MAX_CONNECTIONS value (see
-    # replica-entrypoint.sh) specifically so the two can never drift apart. Raised from 100 to 200:
-    # pgcat's pool_size=40 x 3 database pools (users_db/links_db/clicks_db) can each open up to 40
-    # connections to *this* primary, so worst case is 120 just from pgcat - 100 left no headroom at
-    # all for pgweb/exporters/admin psql. See sandbox/docs/pgcat-pool-sizing.md.
+    # replica-entrypoint.sh) specifically so the two can never drift apart. Raised from 100 to 200
+    # back when there was a single pgcat instance (pool_size=40 x 3 database pools could open up to
+    # 120 connections here, no headroom left for pgweb/exporters/admin psql at 100). Now 3 pgcat
+    # instances sit behind haproxy (see that service below) - pool_size was deliberately shrunk to
+    # 20 to keep the worst case (20 x 3 pools x 3 instances = 180) under this same 200 rather than
+    # raising max_connections further; that's the actual lesson the pooler-scaling feature exists
+    # to demonstrate. Full math: sandbox/docs/pgcat-pool-sizing.md.
     command: >
       postgres
       -c wal_level=replica
@@ -127,11 +130,17 @@ services:
       timeout: 5s
       retries: 10
 
-  pgcat:
+  # Pooler Scaling feature: 3 identically-configured pgcat instances instead of 1, behind the
+  # haproxy service below. All 3 mount the exact same pgcat.toml read-only (control-api's
+  # pool-settings control still only ever writes one file - the fan-out is "3 containers read the
+  # same config", not "3 separate configs to keep in sync"). A single instance's pool_size alone
+  # already showed real headroom pressure against Postgres's max_connections (see that comment
+  # above) - duplicating it 3x without resizing would have meant up to 360 real connections
+  # competing for 200 slots, which is the whole lesson this feature demonstrates. See
+  # sandbox/docs/pgcat-pool-sizing.md for the full math.
+  pgcat-1: &pgcat
     logging: *default-logging
     image: ghcr.io/postgresml/pgcat:latest
-    ports:
-      - "6432:6432" # exposed for local psql/inspection, same as postgres's own 5432 below
     volumes:
       - ./infra/pgcat/pgcat.toml:/etc/pgcat/pgcat.toml:ro
     depends_on:
@@ -146,6 +155,40 @@ services:
       # check - a real authenticated query against one of the actual pools both avoids the log
       # noise and proves pooling itself works, not just that the port accepts TCP connections.
       test: ["CMD-SHELL", "PGPASSWORD=postgres psql -h 127.0.0.1 -p 6432 -U postgres -d links_db -c 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgcat-2:
+    <<: *pgcat
+
+  pgcat-3:
+    <<: *pgcat
+
+  # TCP load balancer in front of the 3 pgcat instances above - the single entry point every
+  # DB-touching service actually connects to (see InfraToggleService's DB_HOST toggle, which
+  # points at this service's name, not at any one pgcat instance). HAProxy over nginx's own
+  # `stream` module specifically because you asked for HAProxy (2026-10-09) - its native
+  # `pgsql-check` understands the Postgres wire protocol well enough to tell a pgcat instance
+  # that's up-but-wedged from one that's genuinely healthy, which a bare TCP connect check (all
+  # nginx stream can do in the open-source build) can't.
+  haproxy:
+    logging: *default-logging
+    image: haproxy:alpine
+    ports:
+      - "6432:6432" # the pooler layer's single entry point - exposed for local psql/inspection, same as postgres's own 5432
+      - "8405:8405" # HAProxy's own stats page + Prometheus exporter, see infra/haproxy/haproxy.cfg
+    volumes:
+      - ./infra/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    depends_on:
+      pgcat-1:
+        condition: service_healthy
+      pgcat-2:
+        condition: service_healthy
+      pgcat-3:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -766,7 +809,7 @@ services:
       # own client-side pool, distinct from pgcat's server-side pool) is 100 by default - the
       # experimental control lets it be shrunk to demonstrate Npgsql's own pool-wait saturation
       # independent of pgcat's, see SetNpgsqlPoolSizeAsync.
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=users_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-haproxy};Port=${DB_PORT:-6432};Database=users_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
@@ -797,7 +840,7 @@ services:
       RateLimiting__PermitLimit: "${AUTH_RATE_LIMIT_PERMIT:-100000}"
       RateLimiting__WindowSeconds: "${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}"
     depends_on:
-      pgcat:
+      haproxy:
         condition: service_healthy
       # No otel-collector dependency here on purpose - it's behind the "otel" profile now
       # (start-stack's observability menu can skip it entirely), and Compose rejects a depends_on
@@ -823,7 +866,7 @@ services:
     # bind the same host port. nginx is the external entry point on 8082 instead (see below).
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-haproxy};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # Sentinel-aware form (StackExchange.Redis native support): endpoints are the 3 Sentinels, not
       # the master directly - the client asks them who's master, connects there, and gets told about
       # any failover automatically. No code change needed for this vs. a plain host:port string.
@@ -878,7 +921,7 @@ services:
           cpus: "1.5"
           memory: 512M
     depends_on:
-      pgcat:
+      haproxy:
         condition: service_healthy
       redis-sentinel-1:
         condition: service_healthy
@@ -903,7 +946,7 @@ services:
     # No host port mapping - see the note on link-api above; nginx exposes this on 8083 instead.
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-haproxy};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
       # See link-api's identical override - same (empty, shared) InstanceName, same reasoning.
       Redis__InstanceName: ""
@@ -937,7 +980,7 @@ services:
           cpus: "1.5"
           memory: 512M
     depends_on:
-      pgcat:
+      haproxy:
         condition: service_healthy
       redis-sentinel-1:
         condition: service_healthy
@@ -980,7 +1023,7 @@ services:
       context: ..
       dockerfile: src/backend/Services/ShortenerService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-haproxy};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=links_db;Username=postgres;Password=postgres"
@@ -1008,7 +1051,7 @@ services:
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
     depends_on:
-      pgcat:
+      haproxy:
         condition: service_healthy
       redis-sentinel-1:
         condition: service_healthy
@@ -1031,7 +1074,7 @@ services:
       context: ..
       dockerfile: src/backend/Services/TrafficService/Dockerfile
     environment:
-      ConnectionStrings__Postgres: "Host=${DB_HOST:-pgcat};Port=${DB_PORT:-6432};Database=clicks_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
+      ConnectionStrings__Postgres: "Host=${DB_HOST:-haproxy};Port=${DB_PORT:-6432};Database=clicks_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
       # EF migrations (DDL) go straight to the primary, bypassing PgCat entirely - see
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=clicks_db;Username=postgres;Password=postgres"
@@ -1063,7 +1106,7 @@ services:
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
     depends_on:
-      pgcat:
+      haproxy:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy

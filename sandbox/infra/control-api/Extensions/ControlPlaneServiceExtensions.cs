@@ -19,6 +19,7 @@ public static class ControlPlaneServiceExtensions
         services.AddSingleton<IContainerRuntime, ContainerRuntime>();
         services.AddSingleton<IChaosService, ChaosService>();
         services.AddSingleton<IPgcatService, PgcatService>();
+        services.AddSingleton<IHaproxyService, HaproxyService>();
         services.AddSingleton<IPostgresService, PostgresService>();
         services.AddSingleton<IRedisInfraService, RedisInfraService>();
         services.AddSingleton<IMongoTopologyService, MongoTopologyService>();

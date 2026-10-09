@@ -37,7 +37,13 @@ const COMPONENT_REGION: Record<string, string> = {
   'shortener-service': 'region-workers',
   'traffic-service': 'region-workers',
   'reporting-service': 'region-workers',
-  'pgcat': 'region-storage',
+  // haproxy is a load balancer, but region-lb above is nginx's client-facing one - haproxy sits
+  // entirely between the DB-touching services and Postgres (same position the old single pgcat
+  // node held), so it belongs with storage, not with nginx.
+  'haproxy': 'region-storage',
+  'pgcat-1': 'region-storage',
+  'pgcat-2': 'region-storage',
+  'pgcat-3': 'region-storage',
   'users-db': 'region-storage',
   'links-db': 'region-storage',
   'clicks-db': 'region-storage',

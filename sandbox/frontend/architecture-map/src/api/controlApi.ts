@@ -5,6 +5,7 @@ import type {
   DataSourceDefinition,
   DeadLetterQueueStats,
   EndpointDefinition,
+  HaproxyStats,
   InfraStatus,
   InfraTopology,
   ManagedContainer,
@@ -106,9 +107,11 @@ export const controlApi = {
   savePreset: (preset: Preset) => request<Preset>('/api/presets', 'POST', preset),
   deletePreset: (name: string) => send(`/api/presets/${encodeURIComponent(name)}`, 'DELETE'),
 
-  getPgcatConnections: () => request<PgcatConnectionStats>('/api/containers/pgcat/connections'),
+  // Parameterized (pgcat-1/2/3, Pooler Scaling 2026-10-09) - same shape as getReplicationLag below.
+  getPgcatConnections: (serviceId: string) => request<PgcatConnectionStats>(`/api/containers/${serviceId}/pgcat-connections`),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
   getDlqStats: () => request<DeadLetterQueueStats>('/api/infra/dlq-stats'),
+  getHaproxyStats: () => request<HaproxyStats>('/api/infra/haproxy-stats'),
 
   getRedisTopology: () => request<InfraTopology>('/api/containers/redis/topology'),
   getMongoTopology: () => request<InfraTopology>('/api/containers/mongo/topology'),

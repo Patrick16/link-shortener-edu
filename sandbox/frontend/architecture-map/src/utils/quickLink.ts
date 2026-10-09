@@ -59,11 +59,18 @@ export function getQuickLinks(component: ArchComponent): QuickLink[] {
     links.push({ label: 'Mongo Express', url: 'http://localhost:8085' })
   }
 
-  // Postgres family: the 3 logical databases on the primary, the two streaming replicas, and pgcat
-  // (the pooler sitting in front of all of them) - pgweb connects to the primary directly (see
-  // docker-compose.yml's pgweb service) and can switch databases from its own connection screen.
-  if (component.type === 'database' || component.id === 'pgcat' || component.id.startsWith('postgres-replica')) {
+  // Postgres family: the 3 logical databases on the primary, the two streaming replicas, and the 3
+  // pgcat instances (the pooler layer sitting in front of all of them) - pgweb connects to the
+  // primary directly (see docker-compose.yml's pgweb service) and can switch databases from its
+  // own connection screen.
+  if (component.type === 'database' || component.id.startsWith('pgcat') || component.id.startsWith('postgres-replica')) {
     links.push({ label: 'pgweb', url: 'http://localhost:8084' })
+  }
+
+  // Unlike pgcat, haproxy has its own operator UI worth linking directly rather than pgweb's -
+  // see infra/haproxy/haproxy.cfg's "observability" frontend.
+  if (component.id === 'haproxy') {
+    links.push({ label: 'HAProxy stats', url: 'http://localhost:8405/stats' })
   }
 
   return links

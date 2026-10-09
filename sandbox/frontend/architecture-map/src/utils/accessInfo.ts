@@ -78,14 +78,27 @@ export function getAccessInfo(component: ArchComponent): AccessInfo | null {
       }
     }
 
-    case 'pgcat':
+    case 'haproxy':
       return {
         entries: [
-          { label: 'Note', value: 'No dashboard UI of its own - pgcat is a connection pooler, connect with any Postgres client' },
-          { label: 'pgweb', value: 'http://localhost:8084 (connects to the primary directly, bypassing pgcat - there is nothing pooler-specific to browse)' },
+          { label: 'Stats page', value: 'http://localhost:8405/stats (live per-backend connection counts)' },
+          { label: 'Note', value: 'The single entry point in front of pgcat-1/2/3 (Pooler Scaling) - balances leastconn, same port pgcat alone used to expose' },
           { label: 'psql (e.g. links_db)', value: 'psql -h localhost -p 6432 -U postgres -d links_db' },
           { label: 'Password', value: 'postgres' },
           { label: 'Connection string', value: 'postgresql://postgres:postgres@localhost:6432/links_db' },
+        ],
+      }
+
+    case 'pgcat-1':
+    case 'pgcat-2':
+    case 'pgcat-3':
+      return {
+        entries: [
+          { label: 'Note', value: 'No dashboard UI of its own - pgcat is a connection pooler, connect with any Postgres client. No host port of its own either (only haproxy is host-exposed, see that node) - reach this specific instance via docker compose exec.' },
+          { label: 'pgweb', value: 'http://localhost:8084 (connects to the primary directly, bypassing the pooler entirely - there is nothing pooler-specific to browse)' },
+          { label: 'psql, this instance specifically', value: `docker compose exec ${component.id} psql -h 127.0.0.1 -p 6432 -U postgres -d links_db` },
+          { label: 'SHOW POOLS, this instance specifically', value: `docker compose exec ${component.id} psql -h 127.0.0.1 -p 6432 -U admin_user pgcat -c "SHOW POOLS"` },
+          { label: 'Password', value: 'postgres (admin_pass for the admin SHOW POOLS user above)' },
         ],
       }
 

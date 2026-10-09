@@ -24,8 +24,17 @@
       "type": "infrastructure",
       "icon": "🧭",
       "description": "External entry point for LinkApi and RedirectApi - the only reason either can have more than one replica",
-      "capabilities": ["nginx-toggle"],
-      "activeWhen": [{ "nginxBypassed": false }, { "messagingMode": "grpc" }],
+      "capabilities": [
+        "nginx-toggle"
+      ],
+      "activeWhen": [
+        {
+          "nginxBypassed": false
+        },
+        {
+          "messagingMode": "grpc"
+        }
+      ],
       "details": {
         "purpose": "Reverse proxy in front of link-api/redirect-api; re-resolves their service name against Docker's embedded DNS on a short TTL so it picks up replicas added/removed via Scale without a config reload. Also internally fans out gRPC calls (messaging-mode=grpc) to shortener-service/traffic-service on ports 9090/9091 - not published to the host, same resolve-based upstream pattern as its HTTP reverse-proxying. ReportingService has no gRPC endpoint to fan out to (see the redirect-api → nginx edge's own notes)",
         "technologies": [
@@ -88,7 +97,9 @@
       "type": "service",
       "icon": "🌐",
       "description": "Creates short links (hash generated here), reads them back through a cache",
-      "capabilities": ["scalable"],
+      "capabilities": [
+        "scalable"
+      ],
       "details": {
         "purpose": "POST /links generates the hash, optionally attaches userId from a Bearer token (no [Authorize] — anonymous still works), and publishes it; GET /links/{hash} is a cached read against links_db; GET /links (paginated) lists a user's own links",
         "technologies": [
@@ -111,7 +122,9 @@
       "type": "service",
       "icon": "↪️",
       "description": "Resolves a short link, issues a 302, bumps the click counter, and records the click",
-      "capabilities": ["scalable"],
+      "capabilities": [
+        "scalable"
+      ],
       "details": {
         "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; increments a Redis click counter (hot path, doesn't wait on Postgres) and publishes ClickTrackedEvent right before redirecting",
         "technologies": [
@@ -133,8 +146,14 @@
       "type": "infrastructure",
       "icon": "🐰",
       "description": "Durable queue between the two APIs and their workers",
-      "capabilities": ["rabbitmq-prefetch", "messaging-mode", "dlq-stats"],
-      "activeWhen": { "messagingMode": "rabbitmq" },
+      "capabilities": [
+        "rabbitmq-prefetch",
+        "messaging-mode",
+        "dlq-stats"
+      ],
+      "activeWhen": {
+        "messagingMode": "rabbitmq"
+      },
       "details": {
         "purpose": "Decouples each API's synchronous response from the actual Postgres/Mongo writes it triggers",
         "technologies": [
@@ -157,7 +176,9 @@
       "type": "worker",
       "icon": "⚙️",
       "description": "Consumes LinkCreatedEvent (persists the link) and ClickTrackedEvent (bumps its click count)",
-      "capabilities": ["scalable"],
+      "capabilities": [
+        "scalable"
+      ],
       "details": {
         "purpose": "Owns links_db (the only writer, and the only one that migrates it); both consumers are redelivery-safe - LinkCreated skips if the hash is already stored, ClickTracked just re-increments (an approximate display counter, not the audit trail - that's TrafficService's Clicks table)",
         "technologies": [
@@ -178,7 +199,9 @@
       "type": "worker",
       "icon": "📊",
       "description": "Consumes ClickTrackedEvent, persists the click record and its enriched metadata",
-      "capabilities": ["scalable"],
+      "capabilities": [
+        "scalable"
+      ],
       "details": {
         "purpose": "Owns clicks_db (the only writer, and the only one that migrates it) - Postgres Clicks is the exactly-once audit trail (skips if the event's Id is already stored); also parses the User-Agent and resolves geo-IP, then upserts a ClickMeta document into MongoDB, independently idempotent from the Postgres write",
         "technologies": [
@@ -195,22 +218,101 @@
       }
     },
     {
-      "id": "pgcat",
-      "name": "PgCat",
+      "id": "haproxy",
+      "name": "HAProxy",
+      "type": "infrastructure",
+      "icon": "⚖️",
+      "description": "TCP load balancer in front of the 3 pgcat instances - the pooler layer's single entry point, every DB-touching service connects here",
+      "capabilities": [
+        "pgcat-toggle",
+        "pgcat-pool",
+        "npgsql-pool-size",
+        "haproxy-stats"
+      ],
+      "activeWhen": {
+        "pgcatEnabled": true
+      },
+      "details": {
+        "purpose": "Balances (leastconn) across pgcat-1/pgcat-2/pgcat-3 using HAProxy's native Postgres-protocol health check (option pgsql-check) - distinguishes a pgcat instance that merely accepts a TCP connection from one that can actually complete a startup handshake, which a bare TCP check can't tell apart",
+        "technologies": [
+          "HAProxy"
+        ],
+        "port": 6432,
+        "links": {
+          "config": "sandbox/infra/haproxy/haproxy.cfg",
+          "compose": "sandbox/docker-compose.yml#haproxy"
+        }
+      }
+    },
+    {
+      "id": "pgcat-1",
+      "name": "PgCat 1",
       "type": "infrastructure",
       "icon": "🐈",
-      "description": "Connection pooler in front of Postgres - every service talks to pgcat, never to postgres directly",
-      "capabilities": ["pgcat-toggle", "pgcat-pool", "npgsql-pool-size", "pgcat-connections"],
-      "activeWhen": { "pgcatEnabled": true },
+      "description": "One of 3 identically-configured pgcat instances behind haproxy (Pooler Scaling) - connection pooler in front of Postgres",
+      "capabilities": [
+        "pgcat-connections"
+      ],
+      "activeWhen": {
+        "pgcatEnabled": true
+      },
       "details": {
-        "purpose": "One pool per physical database (users_db/links_db/clicks_db), each backed by the same 3 physical servers (primary + 2 replicas); query_parser_read_write_splitting auto-routes plain SELECTs across all 3 and everything else (writes, DDL, transactions) to the primary only - no app-side read/write split needed",
+        "purpose": "One pool per physical database (users_db/links_db/clicks_db), each backed by the same 3 physical servers (primary + 2 replicas); query_parser_read_write_splitting auto-routes plain SELECTs across all 3 and everything else (writes, DDL, transactions) to the primary only - no app-side read/write split needed. pgcat-2 and pgcat-3 connect to this exact same Postgres cluster - see this node's own edges below for the full picture; they aren't repeated on the other two instances to avoid a redundant 15-edge tangle (same convention as mongo1 standing in for mongo2/mongo3's identical replica-set wiring).",
         "technologies": [
           "PgCat"
         ],
         "port": 6432,
         "links": {
           "config": "sandbox/infra/pgcat/pgcat.toml",
-          "compose": "sandbox/docker-compose.yml#pgcat"
+          "compose": "sandbox/docker-compose.yml#pgcat-1"
+        }
+      }
+    },
+    {
+      "id": "pgcat-2",
+      "name": "PgCat 2",
+      "type": "infrastructure",
+      "icon": "🐈",
+      "description": "One of 3 identically-configured pgcat instances behind haproxy (Pooler Scaling) - connection pooler in front of Postgres",
+      "capabilities": [
+        "pgcat-connections"
+      ],
+      "activeWhen": {
+        "pgcatEnabled": true
+      },
+      "details": {
+        "purpose": "Identically configured to pgcat-1 (same pgcat.toml, mounted read-only into all 3 - see PgcatService.SetPgcatPoolSettingsAsync) and connects to the exact same Postgres cluster. Its own edges to users_db/links_db/clicks_db/the replicas aren't drawn separately - see pgcat-1's edges for the full picture.",
+        "technologies": [
+          "PgCat"
+        ],
+        "port": 6432,
+        "links": {
+          "config": "sandbox/infra/pgcat/pgcat.toml",
+          "compose": "sandbox/docker-compose.yml#pgcat-2"
+        }
+      }
+    },
+    {
+      "id": "pgcat-3",
+      "name": "PgCat 3",
+      "type": "infrastructure",
+      "icon": "🐈",
+      "description": "One of 3 identically-configured pgcat instances behind haproxy (Pooler Scaling) - connection pooler in front of Postgres",
+      "capabilities": [
+        "pgcat-connections"
+      ],
+      "activeWhen": {
+        "pgcatEnabled": true
+      },
+      "details": {
+        "purpose": "Identically configured to pgcat-1 (same pgcat.toml, mounted read-only into all 3 - see PgcatService.SetPgcatPoolSettingsAsync) and connects to the exact same Postgres cluster. Its own edges to users_db/links_db/clicks_db/the replicas aren't drawn separately - see pgcat-1's edges for the full picture.",
+        "technologies": [
+          "PgCat"
+        ],
+        "port": 6432,
+        "links": {
+          "config": "sandbox/infra/pgcat/pgcat.toml",
+          "compose": "sandbox/docker-compose.yml#pgcat-3"
         }
       }
     },
@@ -220,8 +322,13 @@
       "type": "infrastructure",
       "icon": "🗄️",
       "description": "Cache of hash → link, plus the atomic per-link click counter - the actual data-plane target once Sentinel discovery has picked it out",
-      "capabilities": ["cache-toggle", "flush-cache"],
-      "activeWhen": { "cacheEnabled": true },
+      "capabilities": [
+        "cache-toggle",
+        "flush-cache"
+      ],
+      "activeWhen": {
+        "cacheEnabled": true
+      },
       "details": {
         "purpose": "Cache-aside for links (read-through on miss, shared key format between LinkApi and RedirectApi) and an INCR-based click counter; link-api/redirect-api never dial this hostname directly - their Sentinel-aware connection string talks to redis-sentinel-1/2/3 first, which report back whichever node is currently master",
         "technologies": [
@@ -240,7 +347,9 @@
       "type": "infrastructure",
       "icon": "🗄️",
       "description": "Async replica of redis-master - not written to directly by the app, only ever a promotion target",
-      "activeWhen": { "cacheEnabled": true },
+      "activeWhen": {
+        "cacheEnabled": true
+      },
       "details": {
         "purpose": "Kept current via Redis's own async replication off redis-master; the three Sentinels promote one of the two replicas to master if redis-master stops responding",
         "technologies": [
@@ -257,7 +366,9 @@
       "type": "infrastructure",
       "icon": "🗄️",
       "description": "Async replica of redis-master - not written to directly by the app, only ever a promotion target",
-      "activeWhen": { "cacheEnabled": true },
+      "activeWhen": {
+        "cacheEnabled": true
+      },
       "details": {
         "purpose": "Kept current via Redis's own async replication off redis-master; the three Sentinels promote one of the two replicas to master if redis-master stops responding",
         "technologies": [
@@ -274,8 +385,12 @@
       "type": "infrastructure",
       "icon": "👁️",
       "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
-      "capabilities": ["sentinel-config"],
-      "activeWhen": { "cacheEnabled": true },
+      "capabilities": [
+        "sentinel-config"
+      ],
+      "activeWhen": {
+        "cacheEnabled": true
+      },
       "details": {
         "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
         "technologies": [
@@ -293,8 +408,12 @@
       "type": "infrastructure",
       "icon": "👁️",
       "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
-      "capabilities": ["sentinel-config"],
-      "activeWhen": { "cacheEnabled": true },
+      "capabilities": [
+        "sentinel-config"
+      ],
+      "activeWhen": {
+        "cacheEnabled": true
+      },
       "details": {
         "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
         "technologies": [
@@ -312,8 +431,12 @@
       "type": "infrastructure",
       "icon": "👁️",
       "description": "Watches redis-master/replica1/replica2 and votes with the other two Sentinels on failover (quorum 2 of 3)",
-      "capabilities": ["sentinel-config"],
-      "activeWhen": { "cacheEnabled": true },
+      "capabilities": [
+        "sentinel-config"
+      ],
+      "activeWhen": {
+        "cacheEnabled": true
+      },
       "details": {
         "purpose": "link-api/redirect-api's Redis client asks all three Sentinels who the current master is before ever touching cache data - this is what makes redis-master swappable on failover without an app restart or config change",
         "technologies": [
@@ -331,7 +454,9 @@
       "type": "infrastructure",
       "icon": "🍃",
       "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
-      "capabilities": ["mongo-read-preference"],
+      "capabilities": [
+        "mongo-read-preference"
+      ],
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [
@@ -351,7 +476,9 @@
       "type": "infrastructure",
       "icon": "🍃",
       "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
-      "capabilities": ["mongo-read-preference"],
+      "capabilities": [
+        "mongo-read-preference"
+      ],
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [
@@ -371,7 +498,9 @@
       "type": "infrastructure",
       "icon": "🍃",
       "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
-      "capabilities": ["mongo-read-preference"],
+      "capabilities": [
+        "mongo-read-preference"
+      ],
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [
@@ -391,7 +520,9 @@
       "type": "database",
       "icon": "🐘",
       "description": "Own physical database, not just a schema — real isolation from links_db/clicks_db",
-      "capabilities": ["postgres-connections"],
+      "capabilities": [
+        "postgres-connections"
+      ],
       "details": {
         "purpose": "Users(id, name, email, passwordHash, sault) + RefreshTokens(id, userId, tokenHash, expiresAt, revokedAt?)",
         "technologies": [
@@ -409,8 +540,10 @@
       "name": "links_db",
       "type": "database",
       "icon": "🐘",
-      "description": "Own physical database — target design shards this one (scenario 4)",
-      "capabilities": ["postgres-connections"],
+      "description": "Own physical database — the partitioned clicks-db demonstrates retention, not this one",
+      "capabilities": [
+        "postgres-connections"
+      ],
       "details": {
         "purpose": "Links(hash PK, originalLink, shortenLink, createdAt, userId?, clickCount)",
         "technologies": [
@@ -429,7 +562,9 @@
       "type": "database",
       "icon": "🐘",
       "description": "Own physical database",
-      "capabilities": ["postgres-connections"],
+      "capabilities": [
+        "postgres-connections"
+      ],
       "details": {
         "purpose": "Clicks(id, clickedAt, inboundLink, outboundLink, hash)",
         "technologies": [
@@ -448,7 +583,9 @@
       "type": "infrastructure",
       "icon": "🐘",
       "description": "Streaming (physical) replica of the whole cluster - bootstraps via pg_basebackup, then runs as an ordinary hot standby",
-      "capabilities": ["replication-lag"],
+      "capabilities": [
+        "replication-lag"
+      ],
       "details": {
         "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica2, and the primary",
         "technologies": [
@@ -468,7 +605,9 @@
       "type": "infrastructure",
       "icon": "🐘",
       "description": "Streaming (physical) replica of the whole cluster - bootstraps via pg_basebackup, then runs as an ordinary hot standby",
-      "capabilities": ["replication-lag"],
+      "capabilities": [
+        "replication-lag"
+      ],
       "details": {
         "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica1, and the primary",
         "technologies": [
@@ -488,7 +627,9 @@
       "type": "worker",
       "icon": "📈",
       "description": "CQRS read side: a third, independent consumer of ClickTrackedEvent - builds its own denormalized read model in ClickHouse, straight from the raw event, never from traffic-service's own Postgres/Mongo writes",
-      "capabilities": ["scalable"],
+      "capabilities": [
+        "scalable"
+      ],
       "details": {
         "purpose": "Owns reports_db in ClickHouse (the only writer) - parses the same raw UserAgent/geo-IP as traffic-service does independently, then does one bulk insert per consumed batch; single-row inserts are a real ClickHouse anti-pattern this service specifically avoids",
         "technologies": [
@@ -558,7 +699,9 @@
       "protocol": "HTTP (fetch + browser navigation)",
       "format": "JSON / redirect",
       "synchronous": true,
-      "activeWhen": { "nginxBypassed": false }
+      "activeWhen": {
+        "nginxBypassed": false
+      }
     },
     {
       "from": "k6",
@@ -567,7 +710,9 @@
       "protocol": "HTTP",
       "synchronous": true,
       "notes": "Only present while a traffic run is active from the traffic panel.",
-      "activeWhen": { "nginxBypassed": false }
+      "activeWhen": {
+        "nginxBypassed": false
+      }
     },
     {
       "from": "nginx",
@@ -576,7 +721,9 @@
       "protocol": "HTTP",
       "format": "JSON",
       "synchronous": true,
-      "activeWhen": { "nginxBypassed": false }
+      "activeWhen": {
+        "nginxBypassed": false
+      }
     },
     {
       "from": "nginx",
@@ -584,7 +731,9 @@
       "label": "Proxy: visit the short link",
       "protocol": "HTTP",
       "synchronous": true,
-      "activeWhen": { "nginxBypassed": false }
+      "activeWhen": {
+        "nginxBypassed": false
+      }
     },
     {
       "from": "nginx",
@@ -593,7 +742,9 @@
       "protocol": "gRPC",
       "synchronous": true,
       "notes": "Only active in messaging-mode=grpc. Internal port 9090, not published to the host - same `resolve`-based upstream pattern nginx already uses for link-api/redirect-api, so scaling shortener-service's replica count stays transport-agnostic.",
-      "activeWhen": { "messagingMode": "grpc" }
+      "activeWhen": {
+        "messagingMode": "grpc"
+      }
     },
     {
       "from": "nginx",
@@ -602,15 +753,19 @@
       "protocol": "gRPC",
       "synchronous": true,
       "notes": "Only active in messaging-mode=grpc. Internal port 9091, not published to the host.",
-      "activeWhen": { "messagingMode": "grpc" }
+      "activeWhen": {
+        "messagingMode": "grpc"
+      }
     },
     {
       "from": "auth-api",
-      "to": "pgcat",
+      "to": "haproxy",
       "label": "Write / read user",
       "protocol": "PostgreSQL wire (Npgsql)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
       "from": "link-api",
@@ -620,16 +775,20 @@
       "format": "link:{hash} → JSON",
       "synchronous": true,
       "notes": "Connects via Sentinel discovery (redis-sentinel-1/2/3) - the client asks them who's current master and reconnects automatically on failover, no code involved.",
-      "activeWhen": { "cacheEnabled": true }
+      "activeWhen": {
+        "cacheEnabled": true
+      }
     },
     {
       "from": "link-api",
-      "to": "pgcat",
+      "to": "haproxy",
       "label": "Read on cache miss",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "read-only from this service — ShortenerService owns writes/migrations",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
       "from": "link-api",
@@ -639,7 +798,9 @@
       "format": "{ hash, originalLink, shortenLink, createdAt, userId? } → JSON, routing key \"link.created\"",
       "synchronous": false,
       "notes": "Falls back to a local SQLite queue if the broker is unreachable; retried every 30s. Only active in messaging-mode=rabbitmq (the default) - see the alternative gRPC edge below.",
-      "activeWhen": { "messagingMode": "rabbitmq" }
+      "activeWhen": {
+        "messagingMode": "rabbitmq"
+      }
     },
     {
       "from": "link-api",
@@ -649,7 +810,9 @@
       "format": "PublishRequest { messageId, topic: \"link.created\", payload } - payload is the same JSON the RabbitMQ publish would send",
       "synchronous": true,
       "notes": "Only active in messaging-mode=grpc (control-api's messaging-mode toggle, now in the Topology panel) - the alternative to the AMQP edge above. CreateLink's HTTP response doesn't return until ShortenerService has actually persisted the row; a failed call fails the request (502/503) instead of falling back to a queue - see SyncGrpcDispatcher's own comment for why that's deliberate.",
-      "activeWhen": { "messagingMode": "grpc" }
+      "activeWhen": {
+        "messagingMode": "grpc"
+      }
     },
     {
       "from": "rabbitmq",
@@ -658,16 +821,20 @@
       "protocol": "AMQP 0-9-1",
       "synchronous": false,
       "notes": "Two independent queues, both bound here - LinkCreated persists the link, ClickTracked (fanned out alongside traffic-service below) just bumps its click count. Drawn as one connection since both land on this same node pair; see each queue's own consumer for the distinct handling.",
-      "activeWhen": { "messagingMode": "rabbitmq" }
+      "activeWhen": {
+        "messagingMode": "rabbitmq"
+      }
     },
     {
       "from": "shortener-service",
-      "to": "pgcat",
+      "to": "haproxy",
       "label": "Persist the link / increment its click count",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "the only writer for links_db; click count is an approximate display counter, not the audit trail - see traffic-service's own Clicks table for that",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
       "from": "redirect-api",
@@ -677,16 +844,20 @@
       "format": "link:{hash} → JSON (cache read) and link:{hash}:clicks → INCR (counter), both on every visit",
       "synchronous": true,
       "notes": "Connects via Sentinel discovery (redis-sentinel-1/2/3) - the client asks them who's current master and reconnects automatically on failover, no code involved. The counter increment is a hot-path fire-and-forget; the durable \"my links\" click count is synced separately, asynchronously, off ClickTrackedEvent via ShortenerService.",
-      "activeWhen": { "cacheEnabled": true }
+      "activeWhen": {
+        "cacheEnabled": true
+      }
     },
     {
       "from": "redirect-api",
-      "to": "pgcat",
+      "to": "haproxy",
       "label": "Read on cache miss",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "read-only from this service — ShortenerService owns writes/migrations",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
       "from": "redirect-api",
@@ -696,7 +867,9 @@
       "format": "{ id, hash, inboundLink, outboundLink, clickedAt, userAgent, referrer, ipAddress } → JSON, routing key \"click.tracked\"",
       "synchronous": false,
       "notes": "Published right before the 302 response; falls back to the same SQLite-queue pattern as LinkApi if the broker is unreachable. A 404 never publishes anything. Only active in messaging-mode=rabbitmq (the default) - see the alternative gRPC edge below.",
-      "activeWhen": { "messagingMode": "rabbitmq" }
+      "activeWhen": {
+        "messagingMode": "rabbitmq"
+      }
     },
     {
       "from": "redirect-api",
@@ -706,7 +879,9 @@
       "format": "PublishRequest { messageId, topic: \"click.tracked\", payload }",
       "synchronous": true,
       "notes": "Only active in messaging-mode=grpc - the alternative to the AMQP edge above. Targets TrafficService only - nothing is ever published to RabbitMQ in this mode, so the other two fan-out consumers of click.tracked (ShortenerService's click-count bump, ReportingService's ClickHouse write) never receive the event either; both go stale while gRPC mode is active, a known asymmetry of point-to-point RPC vs. pub/sub fan-out for this v1. The redirect itself doesn't return until TrafficService has persisted the click - the hottest path in the whole system becomes coupled to a downstream analytics write's availability, which is the entire point of this mode.",
-      "activeWhen": { "messagingMode": "grpc" }
+      "activeWhen": {
+        "messagingMode": "grpc"
+      }
     },
     {
       "from": "rabbitmq",
@@ -714,7 +889,9 @@
       "label": "Consume ClickTrackedEvent",
       "protocol": "AMQP 0-9-1",
       "synchronous": false,
-      "activeWhen": { "messagingMode": "rabbitmq" }
+      "activeWhen": {
+        "messagingMode": "rabbitmq"
+      }
     },
     {
       "from": "rabbitmq",
@@ -723,7 +900,9 @@
       "protocol": "AMQP 0-9-1",
       "synchronous": false,
       "notes": "A third, independent queue bound to the same click.tracked routing key traffic-service already consumes - redirect-api's publish side is unchanged; this is fan-out, not a chain.",
-      "activeWhen": { "messagingMode": "rabbitmq" }
+      "activeWhen": {
+        "messagingMode": "rabbitmq"
+      }
     },
     {
       "from": "reporting-service",
@@ -751,12 +930,14 @@
     },
     {
       "from": "traffic-service",
-      "to": "pgcat",
+      "to": "haproxy",
       "label": "Persist the click",
       "protocol": "PostgreSQL wire (Npgsql)",
       "format": "this is the only writer - the exactly-once audit trail",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
       "from": "traffic-service",
@@ -768,49 +949,92 @@
       "notes": "The driver is seeded with mongo1/2/3 and auto-discovers whichever is currently primary in the replica set - mongo1 here is just the representative seed node, not a fixed primary the way Postgres's primary is."
     },
     {
-      "from": "pgcat",
+      "from": "haproxy",
+      "to": "pgcat-1",
+      "label": "Load-balanced (leastconn)",
+      "protocol": "PostgreSQL wire",
+      "format": "option pgsql-check keeps a wedged-but-TCP-reachable instance out of rotation, not just a dead one",
+      "synchronous": true,
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
+    },
+    {
+      "from": "haproxy",
+      "to": "pgcat-2",
+      "label": "Load-balanced (leastconn)",
+      "protocol": "PostgreSQL wire",
+      "format": "option pgsql-check keeps a wedged-but-TCP-reachable instance out of rotation, not just a dead one",
+      "synchronous": true,
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
+    },
+    {
+      "from": "haproxy",
+      "to": "pgcat-3",
+      "label": "Load-balanced (leastconn)",
+      "protocol": "PostgreSQL wire",
+      "format": "option pgsql-check keeps a wedged-but-TCP-reachable instance out of rotation, not just a dead one",
+      "synchronous": true,
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
+    },
+    {
+      "from": "pgcat-1",
       "to": "users-db",
       "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
       "format": "pool_mode = transaction, 1 unsharded shard - every write lands here; this instance also takes a share of SELECT-only traffic since primary_reads_enabled = true, it just isn't the ONLY place reads can go (see the two read-path edges below)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
-      "from": "pgcat",
+      "from": "pgcat-1",
       "to": "links-db",
       "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
       "format": "pool_mode = transaction, 1 unsharded shard - every write lands here; this instance also takes a share of SELECT-only traffic since primary_reads_enabled = true, it just isn't the ONLY place reads can go (see the two read-path edges below)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
-      "from": "pgcat",
+      "from": "pgcat-1",
       "to": "clicks-db",
       "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
       "format": "pool_mode = transaction, 1 unsharded shard - every write lands here; this instance also takes a share of SELECT-only traffic since primary_reads_enabled = true, it just isn't the ONLY place reads can go (see the two read-path edges below)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
-      "from": "pgcat",
+      "from": "pgcat-1",
       "to": "postgres-replica1",
       "label": "Read path (load-balanced, never writes)",
       "protocol": "PostgreSQL wire",
       "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db) - a write here would be rejected by Postgres itself (read-only standby)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
-      "from": "pgcat",
+      "from": "pgcat-1",
       "to": "postgres-replica2",
       "label": "Read path (load-balanced, never writes)",
       "protocol": "PostgreSQL wire",
       "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db) - a write here would be rejected by Postgres itself (read-only standby)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": true }
+      "activeWhen": {
+        "pgcatEnabled": true
+      }
     },
     {
       "from": "links-db",
@@ -836,7 +1060,9 @@
       "label": "Async replication",
       "protocol": "Redis replication (PSYNC)",
       "synchronous": false,
-      "activeWhen": { "cacheEnabled": true }
+      "activeWhen": {
+        "cacheEnabled": true
+      }
     },
     {
       "from": "redis-master",
@@ -844,7 +1070,9 @@
       "label": "Async replication",
       "protocol": "Redis replication (PSYNC)",
       "synchronous": false,
-      "activeWhen": { "cacheEnabled": true }
+      "activeWhen": {
+        "cacheEnabled": true
+      }
     },
     {
       "from": "redis-sentinel-1",
@@ -853,7 +1081,9 @@
       "protocol": "Redis Sentinel protocol",
       "format": "quorum 2 of 3 to declare redis-master down and promote a replica",
       "synchronous": false,
-      "activeWhen": { "cacheEnabled": true }
+      "activeWhen": {
+        "cacheEnabled": true
+      }
     },
     {
       "from": "redis-sentinel-2",
@@ -862,7 +1092,9 @@
       "protocol": "Redis Sentinel protocol",
       "format": "quorum 2 of 3 to declare redis-master down and promote a replica",
       "synchronous": false,
-      "activeWhen": { "cacheEnabled": true }
+      "activeWhen": {
+        "cacheEnabled": true
+      }
     },
     {
       "from": "redis-sentinel-3",
@@ -871,7 +1103,9 @@
       "protocol": "Redis Sentinel protocol",
       "format": "quorum 2 of 3 to declare redis-master down and promote a replica",
       "synchronous": false,
-      "activeWhen": { "cacheEnabled": true }
+      "activeWhen": {
+        "cacheEnabled": true
+      }
     },
     {
       "from": "mongo1",
@@ -901,7 +1135,9 @@
       "protocol": "PostgreSQL wire (Npgsql)",
       "synchronous": true,
       "notes": "Matches what disabling pgcat actually does (see DockerService.SetPgcatEnabledAsync) - every DB-touching service reconnects straight to Postgres. No pooling, no read/write split across replicas - every query (reads included) goes to the primary.",
-      "activeWhen": { "pgcatEnabled": false }
+      "activeWhen": {
+        "pgcatEnabled": false
+      }
     },
     {
       "from": "link-api",
@@ -909,7 +1145,9 @@
       "label": "Read on cache miss (direct, pgcat bypassed)",
       "protocol": "PostgreSQL wire (Npgsql)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": false }
+      "activeWhen": {
+        "pgcatEnabled": false
+      }
     },
     {
       "from": "redirect-api",
@@ -917,7 +1155,9 @@
       "label": "Read on cache miss (direct, pgcat bypassed)",
       "protocol": "PostgreSQL wire (Npgsql)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": false }
+      "activeWhen": {
+        "pgcatEnabled": false
+      }
     },
     {
       "from": "shortener-service",
@@ -925,7 +1165,9 @@
       "label": "Persist the link / increment its click count (direct, pgcat bypassed)",
       "protocol": "PostgreSQL wire (Npgsql)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": false }
+      "activeWhen": {
+        "pgcatEnabled": false
+      }
     },
     {
       "from": "traffic-service",
@@ -933,7 +1175,9 @@
       "label": "Persist the click (direct, pgcat bypassed)",
       "protocol": "PostgreSQL wire (Npgsql)",
       "synchronous": true,
-      "activeWhen": { "pgcatEnabled": false }
+      "activeWhen": {
+        "pgcatEnabled": false
+      }
     },
     {
       "from": "frontend-app",
@@ -943,7 +1187,9 @@
       "format": "JSON",
       "synchronous": true,
       "notes": "Simplified for this diagram: the real nginx-bypass toggle (DockerService.SetNginxBypass) only reroutes k6's synthetic load-test traffic - nginx itself keeps running and the real app UI is unaffected. This edge visualizes the broader 'entry point removed entirely' topology the Topology panel's checkbox name implies, not a literal 1:1 trace of today's backend behavior.",
-      "activeWhen": { "nginxBypassed": true }
+      "activeWhen": {
+        "nginxBypassed": true
+      }
     },
     {
       "from": "frontend-app",
@@ -953,7 +1199,9 @@
       "format": "JSON / redirect",
       "synchronous": true,
       "notes": "Simplified for this diagram - see the frontend-app → link-api direct edge's own note.",
-      "activeWhen": { "nginxBypassed": true }
+      "activeWhen": {
+        "nginxBypassed": true
+      }
     },
     {
       "from": "k6",
@@ -962,7 +1210,9 @@
       "protocol": "HTTP",
       "synchronous": true,
       "notes": "Only present while a traffic run is active from the traffic panel. Unlike the frontend-app direct edges above, this one matches real backend behavior exactly (DockerService.SetNginxBypass) - k6 is genuinely the only traffic this toggle reroutes.",
-      "activeWhen": { "nginxBypassed": true }
+      "activeWhen": {
+        "nginxBypassed": true
+      }
     },
     {
       "from": "k6",
@@ -971,7 +1221,9 @@
       "protocol": "HTTP",
       "synchronous": true,
       "notes": "Only present while a traffic run is active from the traffic panel. Unlike the frontend-app direct edges above, this one matches real backend behavior exactly (DockerService.SetNginxBypass) - k6 is genuinely the only traffic this toggle reroutes.",
-      "activeWhen": { "nginxBypassed": true }
+      "activeWhen": {
+        "nginxBypassed": true
+      }
     }
   ]
 }

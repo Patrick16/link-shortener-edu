@@ -10,8 +10,11 @@ const POOL_MODE_OPTIONS: { value: PgcatPoolMode; label: string }[] = [
   { value: 'session', label: 'Session' },
 ]
 
-// Applies to all 3 pools (users_db/links_db/clicks_db) at once - see PgcatPoolSettings. Rewrites
-// pgcat.toml directly; pgcat's own autoreload picks the change up within ~15s, no recreate.
+// Applies to all 3 pools (users_db/links_db/clicks_db) AND all 3 pgcat instances at once (Pooler
+// Scaling, 2026-10-09 - pgcat-1/2/3 all mount the exact same pgcat.toml) - see PgcatPoolSettings.
+// Rewrites that one shared file directly; each instance's own autoreload picks the change up
+// within ~15s, no recreate. Lives on the haproxy node now, not any individual pgcat-N node, since
+// it's a pooler-tier-wide setting, not a per-instance one.
 export function PgcatPoolControl(_props: CapabilityControlProps) {
   const [settings, setSettings] = useState<PgcatPoolSettings | null>(null)
   const [draft, setDraft] = useState<PgcatPoolSettings | null>(null)
