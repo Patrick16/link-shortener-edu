@@ -770,45 +770,45 @@
     {
       "from": "pgcat",
       "to": "users-db",
-      "label": "Pooled connection",
+      "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
-      "format": "pool_mode = transaction, 1 unsharded shard - reads load-balanced across the primary + 2 replicas, writes always to the primary",
+      "format": "pool_mode = transaction, 1 unsharded shard - every write lands here; this instance also takes a share of SELECT-only traffic since primary_reads_enabled = true, it just isn't the ONLY place reads can go (see the two read-path edges below)",
       "synchronous": true,
       "activeWhen": { "pgcatEnabled": true }
     },
     {
       "from": "pgcat",
       "to": "links-db",
-      "label": "Pooled connection",
+      "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
-      "format": "pool_mode = transaction, 1 unsharded shard - see scenario 4 for sharding this one; reads load-balanced across the primary + 2 replicas, writes always to the primary",
+      "format": "pool_mode = transaction, 1 unsharded shard - every write lands here; this instance also takes a share of SELECT-only traffic since primary_reads_enabled = true, it just isn't the ONLY place reads can go (see the two read-path edges below)",
       "synchronous": true,
       "activeWhen": { "pgcatEnabled": true }
     },
     {
       "from": "pgcat",
       "to": "clicks-db",
-      "label": "Pooled connection",
+      "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
-      "format": "pool_mode = transaction, 1 unsharded shard - reads load-balanced across the primary + 2 replicas, writes always to the primary",
+      "format": "pool_mode = transaction, 1 unsharded shard - every write lands here; this instance also takes a share of SELECT-only traffic since primary_reads_enabled = true, it just isn't the ONLY place reads can go (see the two read-path edges below)",
       "synchronous": true,
       "activeWhen": { "pgcatEnabled": true }
     },
     {
       "from": "pgcat",
       "to": "postgres-replica1",
-      "label": "Pooled read (load-balanced)",
+      "label": "Read path (load-balanced, never writes)",
       "protocol": "PostgreSQL wire",
-      "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db)",
+      "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db) - a write here would be rejected by Postgres itself (read-only standby)",
       "synchronous": true,
       "activeWhen": { "pgcatEnabled": true }
     },
     {
       "from": "pgcat",
       "to": "postgres-replica2",
-      "label": "Pooled read (load-balanced)",
+      "label": "Read path (load-balanced, never writes)",
       "protocol": "PostgreSQL wire",
-      "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db)",
+      "format": "SELECT-only, shared by all three logical-database pools (users_db/links_db/clicks_db) - a write here would be rejected by Postgres itself (read-only standby)",
       "synchronous": true,
       "activeWhen": { "pgcatEnabled": true }
     },
