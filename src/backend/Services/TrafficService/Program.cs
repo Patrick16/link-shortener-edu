@@ -10,6 +10,7 @@ builder.AddGrpcKestrelEndpoint();
 builder.AddPostgresDbContextFactory<DatabaseContext>();
 builder.AddRabbitMqConsumer();
 builder.AddClickTracking();
+builder.AddPartitionMaintenance();
 // Always hosted - see GrpcMessagingExtensions.AddMessagingGrpcServer's own comment for why this
 // isn't itself gated on Messaging:Mode.
 builder.AddMessagingGrpcServer();

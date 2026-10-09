@@ -27,4 +27,13 @@ public static class TrafficServiceExtensions
         builder.Services.AddHostedService(sp => sp.GetRequiredService<ClickTrackedConsumer>());
         return builder;
     }
+
+    // Rolling partition maintenance for clicks_db's partitioned clicks table - see
+    // PartitionMaintenanceWorker's own comment for what it does and why it lives here rather than
+    // as a separate deployable (this service already owns clicks_db and its migration).
+    public static WebApplicationBuilder AddPartitionMaintenance(this WebApplicationBuilder builder)
+    {
+        builder.Services.AddHostedService<PartitionMaintenanceWorker>();
+        return builder;
+    }
 }
