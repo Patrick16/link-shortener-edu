@@ -70,64 +70,86 @@ public class PartitionMaintenanceWorker(
         var options = new DbContextOptionsBuilder<DatabaseContext>().UseNpgsql(connectionString).Options;
         await using var context = new DatabaseContext(options);
 
-        if (!await TryAcquireAdvisoryLockAsync(context, cancellationToken))
-        {
-            _logger.LogDebug("Partition maintenance: another replica holds the lock, skipping this tick");
-            return;
-        }
-
+        // Advisory locks are session-scoped (tied to one physical Postgres connection), but EF
+        // Core's own commands each implicitly open-then-close the connection by default - "closed"
+        // just returns the connector to Npgsql's client-side pool, with no guarantee the *next*
+        // open gets that same connector back. Without pinning one connection open for the whole
+        // acquire/work/release section, a pool handing back a different connector between acquire
+        // and release would unlock the wrong session, leaving the original session holding the
+        // lock forever (Postgres only releases a session-scoped advisory lock when that session
+        // ends) - every future tick's TryAcquire would then silently fail forever, logged only as
+        // "another replica holds the lock". Found in review, not by any test - explicit
+        // open/close is the fix EF Core itself documents for exactly this "same connection across
+        // several commands" requirement.
+        await context.Database.OpenConnectionAsync(cancellationToken);
         try
         {
-            var existingPartitions = await ListPartitionsAsync(context, cancellationToken);
+            if (!await TryAcquireAdvisoryLockAsync(context, cancellationToken))
+            {
+                _logger.LogDebug("Partition maintenance: another replica holds the lock, skipping this tick");
+                return;
+            }
 
-            // EF1002 flags interpolated-string SQL as injection risk, but a table/partition name
-            // can never be parameterized by ANY SQL client - identifiers aren't values. This is
-            // the exact same constraint ConvertClicksToPartitionedTable's migration worked around
-            // with Postgres's own format()/%I. Safe here because every interpolated value is
-            // server-computed by PartitionPlanner from DateOnly math (clicks_yYYYYmMM / ISO date
-            // strings) - never user input, never anything that reaches this method from outside
-            // the process.
+            try
+            {
+                var existingPartitions = await ListPartitionsAsync(context, cancellationToken);
+
+                // EF1002 flags interpolated-string SQL as injection risk, but a table/partition
+                // name can never be parameterized by ANY SQL client - identifiers aren't values.
+                // This is the exact same constraint ConvertClicksToPartitionedTable's migration
+                // worked around with Postgres's own format()/%I. Safe here because every
+                // interpolated value is server-computed by PartitionPlanner from DateOnly math
+                // (clicks_yYYYYmMM / ISO date strings) - never user input, never anything that
+                // reaches this method from outside the process.
 #pragma warning disable EF1002
-            var toCreate = PartitionPlanner.GetPartitionsToEnsure(nowUtc, LookAheadMonths)
-                .Where(p => !existingPartitions.Contains(p.Name, StringComparer.Ordinal))
-                .ToList();
-            foreach (var partition in toCreate)
-            {
-                // IF NOT EXISTS is a second safety net on top of the advisory lock (e.g. a
-                // partition created by hand between the list above and this statement) - belt and
-                // suspenders, not load-bearing on its own.
-                await context.Database.ExecuteSqlRawAsync(
-                    $"""
-                    CREATE TABLE IF NOT EXISTS "{partition.Name}" PARTITION OF clicks
-                    FOR VALUES FROM ('{partition.Start:yyyy-MM-dd}') TO ('{partition.End:yyyy-MM-dd}')
-                    """,
-                    cancellationToken);
-            }
+                var toCreate = PartitionPlanner.GetPartitionsToEnsure(nowUtc, LookAheadMonths)
+                    .Where(p => !existingPartitions.Contains(p.Name, StringComparer.Ordinal))
+                    .ToList();
+                foreach (var partition in toCreate)
+                {
+                    // IF NOT EXISTS is a second safety net on top of the advisory lock (e.g. a
+                    // partition created by hand between the list above and this statement) - belt
+                    // and suspenders, not load-bearing on its own.
+                    await context.Database.ExecuteSqlRawAsync(
+                        $"""
+                        CREATE TABLE IF NOT EXISTS "{partition.Name}" PARTITION OF clicks
+                        FOR VALUES FROM ('{partition.Start:yyyy-MM-dd}') TO ('{partition.End:yyyy-MM-dd}')
+                        """,
+                        cancellationToken);
+                }
 
-            var toDrop = PartitionPlanner.GetPartitionsToDrop(nowUtc, RetentionMonths, existingPartitions);
-            foreach (var name in toDrop)
-            {
-                await context.Database.ExecuteSqlRawAsync($"""DROP TABLE IF EXISTS "{name}" """, cancellationToken);
-            }
+                var toDrop = PartitionPlanner.GetPartitionsToDrop(nowUtc, RetentionMonths, existingPartitions);
+                foreach (var name in toDrop)
+                {
+                    await context.Database.ExecuteSqlRawAsync($"""DROP TABLE IF EXISTS "{name}" """, cancellationToken);
+                }
 #pragma warning restore EF1002
 
-            if (toCreate.Count > 0 || toDrop.Count > 0)
-            {
-                _logger.LogInformation(
-                    "Partition maintenance: created {CreatedCount} partition(s) [{Created}], dropped {DroppedCount} partition(s) [{Dropped}]",
-                    toCreate.Count,
-                    string.Join(", ", toCreate.Select(p => p.Name)),
-                    toDrop.Count,
-                    string.Join(", ", toDrop));
+                if (toCreate.Count > 0 || toDrop.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Partition maintenance: created {CreatedCount} partition(s) [{Created}], dropped {DroppedCount} partition(s) [{Dropped}]",
+                        toCreate.Count,
+                        string.Join(", ", toCreate.Select(p => p.Name)),
+                        toDrop.Count,
+                        string.Join(", ", toDrop));
+                }
+                else
+                {
+                    _logger.LogDebug("Partition maintenance: nothing to create or drop this tick");
+                }
             }
-            else
+            finally
             {
-                _logger.LogDebug("Partition maintenance: nothing to create or drop this tick");
+                // Released on the exact same physical connection it was acquired on, guaranteed by
+                // the explicit OpenConnectionAsync above - see that call's own comment for why that
+                // guarantee matters here specifically.
+                await ReleaseAdvisoryLockAsync(context, cancellationToken);
             }
         }
         finally
         {
-            await ReleaseAdvisoryLockAsync(context, cancellationToken);
+            await context.Database.CloseConnectionAsync();
         }
     }
 
