@@ -31,15 +31,29 @@ public sealed class PgcatService : IPgcatService
     // `SHOW POOLS` columns (unaligned, pipe-separated): database|user|pool_mode|cl_idle|cl_active|
     // cl_waiting|cl_cancel_req|sv_active|sv_idle|sv_used|sv_tested|sv_login|maxwait|maxwait_us -
     // confirmed against a real pgcat before parsing anything.
-    public async Task<PgcatConnectionStats?> GetPgcatConnectionsAsync(string instanceId, CancellationToken ct)
+    //
+    // pgcat is 3 identical replicas behind haproxy (Pooler Scaling, deploy.replicas in
+    // docker-compose.yml) - all 3 share the compose service label "pgcat", so this queries every
+    // one of them (via IContainerRuntime.ListAsync, not FindAsync's "just the primary") and labels
+    // each result by its container-number ("pgcat-1"/"pgcat-2"/"pgcat-3", matching the container's
+    // own real name) rather than returning just one instance's numbers.
+    public async Task<IReadOnlyList<PgcatInstanceConnections>> GetAllPgcatConnectionsAsync(CancellationToken ct)
     {
-        var container = await _runtime.FindAsync(instanceId, ct);
-        if (container is null)
+        var containers = await _runtime.ListAsync("pgcat", ct);
+        var result = new List<PgcatInstanceConnections>();
+        foreach (var container in containers)
         {
-            return null;
+            var number = container.Labels.TryGetValue("com.docker.compose.container-number", out var n) ? n : "?";
+            var stats = await GetPoolStatsAsync(container.ID, ct);
+            result.Add(new PgcatInstanceConnections($"pgcat-{number}", stats));
         }
 
-        var output = await _runtime.ExecAsync(container.ID, ["sh", "-c", "PGPASSWORD=admin_pass psql -h 127.0.0.1 -p 6432 -U admin_user pgcat -tAc \"SHOW POOLS\""], ct);
+        return result;
+    }
+
+    private async Task<PgcatConnectionStats> GetPoolStatsAsync(string containerId, CancellationToken ct)
+    {
+        var output = await _runtime.ExecAsync(containerId, ["sh", "-c", "PGPASSWORD=admin_pass psql -h 127.0.0.1 -p 6432 -U admin_user pgcat -tAc \"SHOW POOLS\""], ct);
         var pools = new List<PoolConnectionStats>();
         foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {

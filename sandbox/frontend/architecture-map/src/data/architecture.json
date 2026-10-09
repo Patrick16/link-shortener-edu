@@ -224,9 +224,6 @@
       "icon": "⚖️",
       "description": "TCP load balancer in front of the 3 pgcat instances - the pooler layer's single entry point, every DB-touching service connects here",
       "capabilities": [
-        "pgcat-toggle",
-        "pgcat-pool",
-        "npgsql-pool-size",
         "haproxy-stats"
       ],
       "activeWhen": {
@@ -245,74 +242,29 @@
       }
     },
     {
-      "id": "pgcat-1",
-      "name": "PgCat 1",
+      "id": "pgcat",
+      "name": "PgCat",
       "type": "infrastructure",
       "icon": "🐈",
-      "description": "One of 3 identically-configured pgcat instances behind haproxy (Pooler Scaling) - connection pooler in front of Postgres",
+      "description": "Connection pooler in front of Postgres, 3 identical replicas behind haproxy (Pooler Scaling) - every DB-touching service talks to haproxy, never to pgcat directly",
       "capabilities": [
+        "pgcat-toggle",
+        "pgcat-pool",
+        "npgsql-pool-size",
         "pgcat-connections"
       ],
       "activeWhen": {
         "pgcatEnabled": true
       },
       "details": {
-        "purpose": "One pool per physical database (users_db/links_db/clicks_db), each backed by the same 3 physical servers (primary + 2 replicas); query_parser_read_write_splitting auto-routes plain SELECTs across all 3 and everything else (writes, DDL, transactions) to the primary only - no app-side read/write split needed. pgcat-2 and pgcat-3 connect to this exact same Postgres cluster - see this node's own edges below for the full picture; they aren't repeated on the other two instances to avoid a redundant 15-edge tangle (same convention as mongo1 standing in for mongo2/mongo3's identical replica-set wiring).",
+        "purpose": "One pool per physical database (users_db/links_db/clicks_db), each backed by the same 3 physical servers (primary + 2 replicas); query_parser_read_write_splitting auto-routes plain SELECTs across all 3 and everything else (writes, DDL, transactions) to the primary only - no app-side read/write split needed. Scaled to 3 identical replicas (deploy.replicas in docker-compose.yml, same mechanism link-api/redirect-api/etc. use - see the ×3 badge on this node) behind haproxy, all 3 mounting the exact same pgcat.toml read-only.",
         "technologies": [
           "PgCat"
         ],
         "port": 6432,
         "links": {
           "config": "sandbox/infra/pgcat/pgcat.toml",
-          "compose": "sandbox/docker-compose.yml#pgcat-1"
-        }
-      }
-    },
-    {
-      "id": "pgcat-2",
-      "name": "PgCat 2",
-      "type": "infrastructure",
-      "icon": "🐈",
-      "description": "One of 3 identically-configured pgcat instances behind haproxy (Pooler Scaling) - connection pooler in front of Postgres",
-      "capabilities": [
-        "pgcat-connections"
-      ],
-      "activeWhen": {
-        "pgcatEnabled": true
-      },
-      "details": {
-        "purpose": "Identically configured to pgcat-1 (same pgcat.toml, mounted read-only into all 3 - see PgcatService.SetPgcatPoolSettingsAsync) and connects to the exact same Postgres cluster. Its own edges to users_db/links_db/clicks_db/the replicas aren't drawn separately - see pgcat-1's edges for the full picture.",
-        "technologies": [
-          "PgCat"
-        ],
-        "port": 6432,
-        "links": {
-          "config": "sandbox/infra/pgcat/pgcat.toml",
-          "compose": "sandbox/docker-compose.yml#pgcat-2"
-        }
-      }
-    },
-    {
-      "id": "pgcat-3",
-      "name": "PgCat 3",
-      "type": "infrastructure",
-      "icon": "🐈",
-      "description": "One of 3 identically-configured pgcat instances behind haproxy (Pooler Scaling) - connection pooler in front of Postgres",
-      "capabilities": [
-        "pgcat-connections"
-      ],
-      "activeWhen": {
-        "pgcatEnabled": true
-      },
-      "details": {
-        "purpose": "Identically configured to pgcat-1 (same pgcat.toml, mounted read-only into all 3 - see PgcatService.SetPgcatPoolSettingsAsync) and connects to the exact same Postgres cluster. Its own edges to users_db/links_db/clicks_db/the replicas aren't drawn separately - see pgcat-1's edges for the full picture.",
-        "technologies": [
-          "PgCat"
-        ],
-        "port": 6432,
-        "links": {
-          "config": "sandbox/infra/pgcat/pgcat.toml",
-          "compose": "sandbox/docker-compose.yml#pgcat-3"
+          "compose": "sandbox/docker-compose.yml#pgcat"
         }
       }
     },
@@ -950,39 +902,17 @@
     },
     {
       "from": "haproxy",
-      "to": "pgcat-1",
+      "to": "pgcat",
       "label": "Load-balanced (leastconn)",
       "protocol": "PostgreSQL wire",
-      "format": "option pgsql-check keeps a wedged-but-TCP-reachable instance out of rotation, not just a dead one",
+      "format": "server-template resolves the pgcat service DNS name to its current replica IPs (see haproxy.cfg) - option pgsql-check keeps a wedged-but-TCP-reachable replica out of rotation, not just a dead one",
       "synchronous": true,
       "activeWhen": {
         "pgcatEnabled": true
       }
     },
     {
-      "from": "haproxy",
-      "to": "pgcat-2",
-      "label": "Load-balanced (leastconn)",
-      "protocol": "PostgreSQL wire",
-      "format": "option pgsql-check keeps a wedged-but-TCP-reachable instance out of rotation, not just a dead one",
-      "synchronous": true,
-      "activeWhen": {
-        "pgcatEnabled": true
-      }
-    },
-    {
-      "from": "haproxy",
-      "to": "pgcat-3",
-      "label": "Load-balanced (leastconn)",
-      "protocol": "PostgreSQL wire",
-      "format": "option pgsql-check keeps a wedged-but-TCP-reachable instance out of rotation, not just a dead one",
-      "synchronous": true,
-      "activeWhen": {
-        "pgcatEnabled": true
-      }
-    },
-    {
-      "from": "pgcat-1",
+      "from": "pgcat",
       "to": "users-db",
       "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
@@ -993,7 +923,7 @@
       }
     },
     {
-      "from": "pgcat-1",
+      "from": "pgcat",
       "to": "links-db",
       "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
@@ -1004,7 +934,7 @@
       }
     },
     {
-      "from": "pgcat-1",
+      "from": "pgcat",
       "to": "clicks-db",
       "label": "Write path (+ shares in read load-balancing)",
       "protocol": "PostgreSQL wire",
@@ -1015,7 +945,7 @@
       }
     },
     {
-      "from": "pgcat-1",
+      "from": "pgcat",
       "to": "postgres-replica1",
       "label": "Read path (load-balanced, never writes)",
       "protocol": "PostgreSQL wire",
@@ -1026,7 +956,7 @@
       }
     },
     {
-      "from": "pgcat-1",
+      "from": "pgcat",
       "to": "postgres-replica2",
       "label": "Read path (load-balanced, never writes)",
       "protocol": "PostgreSQL wire",

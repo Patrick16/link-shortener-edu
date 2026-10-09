@@ -131,16 +131,30 @@ services:
       retries: 10
 
   # Pooler Scaling feature: 3 identically-configured pgcat instances instead of 1, behind the
-  # haproxy service below. All 3 mount the exact same pgcat.toml read-only (control-api's
-  # pool-settings control still only ever writes one file - the fan-out is "3 containers read the
-  # same config", not "3 separate configs to keep in sync"). A single instance's pool_size alone
-  # already showed real headroom pressure against Postgres's max_connections (see that comment
-  # above) - duplicating it 3x without resizing would have meant up to 360 real connections
-  # competing for 200 slots, which is the whole lesson this feature demonstrates. See
-  # sandbox/docs/pgcat-pool-sizing.md for the full math.
-  pgcat-1: &pgcat
+  # haproxy service below - one `pgcat` service definition at a fixed 3 replicas (Compose's own
+  # `deploy.replicas`, same native mechanism link-api/redirect-api/etc. use when scaled, not 3
+  # separately-named service blocks) so the architecture-map graph shows this the exact same way
+  # it already shows every other multi-replica service: one node, a "x3" badge
+  # (ServiceNode.tsx's existing instanceCount badge), not 3 identical-looking boxes. Deliberately
+  # NOT in control-api's generic ScalableServices list, unlike those services - not because
+  # haproxy's backend list is static (it isn't: haproxy.cfg uses `server-template`, which tracks
+  # the `pgcat` DNS name's A records at runtime, so a scale change here up to the template's
+  # reserved 6 slots would actually be picked up automatically), but because `pool_size` below is
+  # hand-calibrated for exactly 3 replicas against Postgres's max_connections - scaling through the
+  # generic control without also recalculating and reapplying pool_size would silently risk
+  # exhausting real Postgres connections, not just fail loudly. See haproxy.cfg's own
+  # server-template comment for the DNS-tracking mechanics. All 3 replicas mount the exact same
+  # pgcat.toml read-only (control-api's pool-settings control still only ever writes one file - the
+  # fan-out is "3 containers read the same config", not "3 separate configs to keep in sync"). A
+  # single instance's pool_size alone already showed real headroom pressure against Postgres's
+  # max_connections (see that comment above) - duplicating it 3x without resizing would have meant
+  # up to 360 real connections competing for 200 slots, which is the whole lesson this feature
+  # demonstrates. See sandbox/docs/pgcat-pool-sizing.md for the full math.
+  pgcat:
     logging: *default-logging
     image: ghcr.io/postgresml/pgcat:latest
+    deploy:
+      replicas: 3
     volumes:
       - ./infra/pgcat/pgcat.toml:/etc/pgcat/pgcat.toml:ro
     depends_on:
@@ -159,12 +173,6 @@ services:
       timeout: 5s
       retries: 10
 
-  pgcat-2:
-    <<: *pgcat
-
-  pgcat-3:
-    <<: *pgcat
-
   # TCP load balancer in front of the 3 pgcat instances above - the single entry point every
   # DB-touching service actually connects to (see InfraToggleService's DB_HOST toggle, which
   # points at this service's name, not at any one pgcat instance). HAProxy over nginx's own
@@ -181,11 +189,9 @@ services:
     volumes:
       - ./infra/haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     depends_on:
-      pgcat-1:
-        condition: service_healthy
-      pgcat-2:
-        condition: service_healthy
-      pgcat-3:
+      # One service name now (3 replicas, not 3 separately-named services) - Compose waits for
+      # every replica to report service_healthy before starting haproxy.
+      pgcat:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]

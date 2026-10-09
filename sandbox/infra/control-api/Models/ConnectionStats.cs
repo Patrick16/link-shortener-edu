@@ -7,6 +7,11 @@ public record PoolConnectionStats(string Database, int ClientIdle, int ClientAct
 
 public record PgcatConnectionStats(IReadOnlyList<PoolConnectionStats> Pools);
 
+// One pgcat replica's pool stats, labeled by which container it came from - pgcat is 3 identical
+// replicas behind haproxy (Pooler Scaling), each with its own independent pools, so a single-node
+// view of "pgcat" on the graph needs the per-instance breakdown, not just one replica's numbers.
+public record PgcatInstanceConnections(string InstanceName, PgcatConnectionStats Stats);
+
 // Real backend connections on Postgres itself (`pg_stat_activity`), grouped by database - directly
 // comparable to PgcatConnectionStats' server-side counts to confirm pooling is actually happening
 // (e.g. many pgcat clients but few real postgres backends).

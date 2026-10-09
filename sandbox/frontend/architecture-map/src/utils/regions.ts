@@ -41,9 +41,7 @@ const COMPONENT_REGION: Record<string, string> = {
   // entirely between the DB-touching services and Postgres (same position the old single pgcat
   // node held), so it belongs with storage, not with nginx.
   'haproxy': 'region-storage',
-  'pgcat-1': 'region-storage',
-  'pgcat-2': 'region-storage',
-  'pgcat-3': 'region-storage',
+  'pgcat': 'region-storage',
   'users-db': 'region-storage',
   'links-db': 'region-storage',
   'clicks-db': 'region-storage',

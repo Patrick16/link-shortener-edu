@@ -10,7 +10,7 @@ import type {
   InfraTopology,
   ManagedContainer,
   MessagingMode,
-  PgcatConnectionStats,
+  PgcatInstanceConnections,
   PgcatPoolSettings,
   MongoReadPreference,
   MongoReadPreferenceStatus,
@@ -107,8 +107,9 @@ export const controlApi = {
   savePreset: (preset: Preset) => request<Preset>('/api/presets', 'POST', preset),
   deletePreset: (name: string) => send(`/api/presets/${encodeURIComponent(name)}`, 'DELETE'),
 
-  // Parameterized (pgcat-1/2/3, Pooler Scaling 2026-10-09) - same shape as getReplicationLag below.
-  getPgcatConnections: (serviceId: string) => request<PgcatConnectionStats>(`/api/containers/${serviceId}/pgcat-connections`),
+  // Fixed route, not parameterized - "pgcat" is one graph node (3 replicas behind haproxy), the
+  // response is the per-instance list.
+  getPgcatConnections: () => request<PgcatInstanceConnections[]>('/api/containers/pgcat/connections'),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
   getDlqStats: () => request<DeadLetterQueueStats>('/api/infra/dlq-stats'),
   getHaproxyStats: () => request<HaproxyStats>('/api/infra/haproxy-stats'),

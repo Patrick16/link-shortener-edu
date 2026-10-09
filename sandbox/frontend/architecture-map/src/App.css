@@ -1615,6 +1615,18 @@ button:disabled {
   color: #ef4444;
 }
 
+/* Per-replica label (pgcat's 3-instances-in-one-panel view, Pooler Scaling) */
+.connection-stats-instance-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 10px 0 2px;
+}
+
+.connection-stats-instance-label:first-child {
+  margin-top: 0;
+}
+
 /* Enum toggle (pool mode / read preference pickers) */
 
 .enum-toggle-control {

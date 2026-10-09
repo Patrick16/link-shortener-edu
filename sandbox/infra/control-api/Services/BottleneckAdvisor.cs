@@ -30,12 +30,10 @@ public static class BottleneckAdvisor
         ["postgres"] = "postgres",
         ["postgres-replica1"] = "postgres",
         ["postgres-replica2"] = "postgres",
-        // All 3 map to the same "pgcat" type (Pooler Scaling, 2026-10-09) - same many-to-one shape
-        // already used for postgres-replica1/2 above, so RecommendationForCpu's switch below needs
-        // no new case.
-        ["pgcat-1"] = "pgcat",
-        ["pgcat-2"] = "pgcat",
-        ["pgcat-3"] = "pgcat",
+        // pgcat is one graph node (3 identical replicas behind haproxy, Pooler Scaling) - its
+        // resource stats are already summed/maxed across replicas the same way link-api/etc.'s are,
+        // so this needs only the one entry, same as every other scalable service above.
+        ["pgcat"] = "pgcat",
         ["haproxy"] = "haproxy",
         ["redis-master"] = "redis",
         ["redis-replica1"] = "redis",
@@ -64,19 +62,19 @@ public static class BottleneckAdvisor
 
         // Rule 1: pgcat clients queued waiting for a free server connection - the clearest possible
         // "connection pool is the bottleneck" signal, since it means requests were already refused a
-        // slot rather than merely running slowly. `pgcatConnections` only ever carries pgcat-1's own
-        // stats (TrafficRunCoordinator captures one representative instance, not all 3 - see its own
-        // comment) - the suspect is reported against that specific instance rather than the "pgcat"
-        // type/tier as a whole, since the other 2 instances' queues aren't visible to this rule at all.
+        // slot rather than merely running slowly. `pgcatConnections` only ever carries one replica's
+        // stats (TrafficRunCoordinator samples the first instance, not all 3 - see its own comment),
+        // so this is a representative signal, not a guarantee every replica's pools are this busy -
+        // the Evidence text says so explicitly rather than implying a full picture.
         foreach (var pool in pgcatConnections?.Pools ?? [])
         {
             if (pool.ClientWaiting > 0)
             {
                 suspects.Add(new BottleneckSuspect(
-                    "pgcat-1",
+                    "pgcat",
                     "pgcat",
                     Severity: 100,
-                    Evidence: $"{pool.ClientWaiting} client(s) were queued waiting on pgcat-1's pool '{pool.Database}' (Client Waiting > 0) - the other 2 pgcat instances aren't sampled by this check",
+                    Evidence: $"{pool.ClientWaiting} client(s) were queued waiting on pool '{pool.Database}' (Client Waiting > 0) on the sampled replica - the other 2 replicas aren't sampled by this check",
                     Recommendation: "The pgcat pool is exhausted - increase pool_size, enable/check read-write-splitting to replicas, or reduce concurrent load."));
             }
         }
@@ -196,7 +194,7 @@ public static class BottleneckAdvisor
         var waitingPool = pgcatConnections?.Pools.FirstOrDefault(p => p.ClientWaiting > 0);
         steps.Add(new ChecklistStep(
             "2. Pool/queue saturation",
-            "Check 'Client Waiting' on pgcat-1's panel (clients waiting for a free connection - the run snapshot only samples that one instance, check pgcat-2/3's own panels by hand too if load isn't balancing evenly) and RabbitMQ's queue depth - a sign that a queue built up in front of a node, not that the node itself is slow.",
+            "Check 'Client Waiting' on pgcat's panel (clients waiting for a free connection - the run snapshot only samples the first replica; the panel itself shows all 3, check there by hand if load isn't balancing evenly) and RabbitMQ's queue depth - a sign that a queue built up in front of a node, not that the node itself is slow.",
             waitingPool is null
                 ? "No waiting clients found in pgcat's pools."
                 : $"Pool '{waitingPool.Database}' has {waitingPool.ClientWaiting} client(s) waiting - the pgcat pool became a queue."));

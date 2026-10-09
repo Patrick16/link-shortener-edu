@@ -20,6 +20,10 @@ public interface IContainerRuntime
     // container-number wins (deterministic, matches the frontend's own instances[0] convention).
     Task<ContainerListResponse?> FindAsync(string serviceId, CancellationToken ct);
 
+    // Every container for a service, not just the primary - ordered the same way (lowest
+    // container-number first) for a per-instance view of a scaled service.
+    Task<List<ContainerListResponse>> ListAsync(string serviceId, CancellationToken ct);
+
     // Runs a command inside a container via Docker's exec API and returns whichever of
     // stdout/stderr actually has content.
     Task<string> ExecAsync(string containerId, IList<string> cmd, CancellationToken ct);

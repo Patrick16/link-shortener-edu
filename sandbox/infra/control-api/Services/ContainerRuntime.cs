@@ -50,6 +50,29 @@ public sealed class ContainerRuntime : IContainerRuntime
             .OrderBy(c => c.Labels.TryGetValue("com.docker.compose.container-number", out var n) && int.TryParse(n, out var parsed) ? parsed : int.MaxValue)
             .FirstOrDefault();
 
+    // Same ordering as SelectPrimary (by container-number, lowest first) but every match, not just
+    // the first - for a per-instance view of a scaled service (e.g. pgcat's connection-pool stats
+    // per replica), where FindAsync's "just the primary" would silently hide replicas 2 and 3.
+    public async Task<List<ContainerListResponse>> ListAsync(string serviceId, CancellationToken ct)
+    {
+        var containers = await Client.Containers.ListContainersAsync(new ContainersListParameters
+        {
+            All = true,
+            Filters = new Dictionary<string, IDictionary<string, bool>>
+            {
+                ["label"] = new Dictionary<string, bool>
+                {
+                    [$"com.docker.compose.project={ComposeProject}"] = true,
+                    [$"com.docker.compose.service={serviceId}"] = true,
+                },
+            },
+        }, ct);
+
+        return containers
+            .OrderBy(c => c.Labels.TryGetValue("com.docker.compose.container-number", out var n) && int.TryParse(n, out var parsed) ? parsed : int.MaxValue)
+            .ToList();
+    }
+
     public async Task<ContainerListResponse?> FindAsync(string serviceId, CancellationToken ct)
     {
         var containers = await Client.Containers.ListContainersAsync(new ContainersListParameters

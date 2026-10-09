@@ -154,13 +154,14 @@ public sealed class TrafficRunCoordinator(
             // (there's no way to know the expected count in advance).
             await Task.Delay(TimeSpan.FromSeconds(2), CancellationToken.None);
 
-            // pgcat-1 only, as a representative sample - not all 3 instances. Capturing and
-            // displaying 3 instances' worth of pool stats per run (RunSnapshot, RunHistoryPanel,
+            // The first replica only, as a representative sample - not all 3 instances. Capturing
+            // and displaying 3 instances' worth of pool stats per run (RunSnapshot, RunHistoryPanel,
             // CompareRunsModal all expect one PgcatConnectionStats today) would be a much bigger
             // shape change than this run-metadata feature warrants; see BottleneckAdvisor's own
             // comment on the same simplification. Each instance's live pools are still inspectable
-            // by hand via its own node panel at any time, same as before.
-            var pgcatConnections = await pgcat.GetPgcatConnectionsAsync("pgcat-1", CancellationToken.None);
+            // by hand via the pgcat node's own panel at any time (it shows all 3), same as before.
+            var allPgcatConnections = await pgcat.GetAllPgcatConnectionsAsync(CancellationToken.None);
+            var pgcatConnections = allPgcatConnections.Count > 0 ? allPgcatConnections[0].Stats : null;
             var traceHops = traceStore.GetHopStatsBetween(runStart, runEnd);
             var thresholds = bottleneckThresholds.Value;
             var verdict = BottleneckAdvisor.Analyze(report, resourceMaxima, traceHops, pgcatConnections, thresholds);

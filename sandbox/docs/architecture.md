@@ -125,10 +125,13 @@ Short version of what's real today:
   (`PartitionMaintenanceWorker`) that creates future partitions ahead of time and drops ones past
   the retention window — built 2026-10-09, closing the one gap this entry used to flag. Full
   write-up: **[`scenarios/04-partitioning.md`](scenarios/04-partitioning.md)**.
-- **Pooler scaling is built** — 3 pgcat instances (pgcat-1/2/3) behind an HAProxy TCP load
-  balancer (`balance leastconn`, native `option pgsql-check`), `pool_size` resized from 40 to 20 to
-  keep the aggregate connection count under Postgres's `max_connections` with 3 instances instead
-  of 1 — see `sandbox/docs/pgcat-pool-sizing.md`'s own addendum for the exact math.
+- **Pooler scaling is built** — pgcat scaled to 3 identical replicas (`deploy.replicas`, same
+  native mechanism link-api/redirect-api/etc. use when scaled — one `pgcat` node on the graph with
+  a `×3` badge, not 3 separate nodes) behind an HAProxy TCP load balancer (`balance leastconn`,
+  native `option pgsql-check`, `server-template` to track the replica count via DNS). `pool_size`
+  resized from 40 to 20 to keep the aggregate connection count under Postgres's `max_connections`
+  with 3 replicas instead of 1 — see `sandbox/docs/pgcat-pool-sizing.md`'s own addendum for the
+  exact math.
 
 ## TODO
 

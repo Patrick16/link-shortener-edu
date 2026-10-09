@@ -7,14 +7,11 @@ public static class InfraEndpoints
 {
     public static IEndpointRouteBuilder MapInfraEndpoints(this IEndpointRouteBuilder app)
     {
-        // Parameterized (not a fixed "pgcat" literal, unlike postgres/connections below) - there are
-        // 3 pgcat instances now (Pooler Scaling, 2026-10-09), each with its own pools, same shape as
-        // replication-lag's own {serviceId} route for postgres-replica1/2.
-        app.MapGet("/api/containers/{serviceId}/pgcat-connections", async (string serviceId, IPgcatService pgcat, CancellationToken ct) =>
-        {
-            var result = await pgcat.GetPgcatConnectionsAsync(serviceId, ct);
-            return result is null ? Results.NotFound() : Results.Ok(result);
-        });
+        // Fixed route, same shape as postgres/connections below - "pgcat" is one graph node (3
+        // identical replicas behind haproxy, Pooler Scaling), not 3 separately-addressable nodes.
+        // The response is a per-instance list, though - see GetAllPgcatConnectionsAsync.
+        app.MapGet("/api/containers/pgcat/connections", async (IPgcatService pgcat, CancellationToken ct) =>
+            Results.Ok(await pgcat.GetAllPgcatConnectionsAsync(ct)));
 
         app.MapGet("/api/containers/postgres/connections", async (IPostgresService postgres, CancellationToken ct) =>
         {

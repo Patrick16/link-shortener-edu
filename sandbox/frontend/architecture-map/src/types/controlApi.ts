@@ -221,6 +221,13 @@ export interface PgcatConnectionStats {
   pools: PoolConnectionStats[]
 }
 
+// One pgcat replica's pool stats, labeled by which container it came from - pgcat is 3 identical
+// replicas behind haproxy (Pooler Scaling), each with its own independent pools.
+export interface PgcatInstanceConnections {
+  instanceName: string
+  stats: PgcatConnectionStats
+}
+
 export interface PostgresConnectionStats {
   connectionsByDatabase: Record<string, number>
   total: number
