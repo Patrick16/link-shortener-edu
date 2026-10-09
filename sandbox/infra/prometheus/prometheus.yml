@@ -64,3 +64,13 @@ scrape_configs:
       family: ["queue_coarse_metrics"]
     static_configs:
       - targets: ["rabbitmq:15692"]
+
+  - job_name: rabbitmq-aggregate
+    scrape_interval: 5s
+    # The cluster-wide counters this job's own dashboard panels need (connections, channels,
+    # consumers, queue count, process memory) only live on the plain /metrics path - confirmed
+    # live, same as the job above's own comment. A separate job (not a second params= on the same
+    # job_name - Prometheus doesn't support that) rather than switching the job above to this path,
+    # since /metrics/detailed is still the only place the per-queue depth labels exist.
+    static_configs:
+      - targets: ["rabbitmq:15692"]
