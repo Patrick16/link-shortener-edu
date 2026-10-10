@@ -507,3 +507,5 @@ sandbox/infra/pgcat/pgcat.toml
 # On-demand Postgres dumps (see sandbox/scripts/dump-db.ps1) — named volumes are the
 # source of truth; these are just snapshots taken by hand when needed.
 sandbox/backups/
+
+*repomix*
