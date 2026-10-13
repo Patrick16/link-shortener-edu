@@ -30,13 +30,21 @@ public class LinksControllerTests
         out Mock<IEntityCacheService<Link>> cache,
         out Mock<IEventDispatcher> dispatcher,
         out Mock<IHashGenerator> hashGenerator,
+        out Mock<IClickCounterService> clickCounter,
         ClaimsPrincipal? user = null)
     {
         cache = new Mock<IEntityCacheService<Link>>();
         dispatcher = new Mock<IEventDispatcher>();
         hashGenerator = new Mock<IHashGenerator>();
+        clickCounter = new Mock<IClickCounterService>();
+        // Default: no Redis data for anything - existing tests' expected ClickCount (straight from
+        // Postgres) stays unchanged unless a test explicitly overrides this setup.
+        clickCounter
+            .Setup(x => x.GetManyAsync(It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, long>());
 
-        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, NullLogger<LinksController>.Instance)
+        var controller = new LinksController(
+            context, cache.Object, dispatcher.Object, hashGenerator.Object, clickCounter.Object, NullLogger<LinksController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -50,7 +58,7 @@ public class LinksControllerTests
     public async Task CreateLink_AnonymousCaller_PublishesEventWithNullUserId()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator);
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, out _);
         hashGenerator.Setup(x => x.Generate("https://example.com")).Returns("abc12345");
 
         var result = await sut.CreateLink(
@@ -73,7 +81,7 @@ public class LinksControllerTests
         var userId = Guid.NewGuid();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, out _, new ClaimsPrincipal(identity));
         hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
 
         await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
@@ -90,7 +98,7 @@ public class LinksControllerTests
         // pgcat-read-your-writes-race.md): RedirectApi is cache-first, so this is what lets an
         // immediate redirect right after create resolve without ever touching Postgres.
         await using var context = NewContext();
-        var sut = NewController(context, out var cache, out _, out var hashGenerator);
+        var sut = NewController(context, out var cache, out _, out var hashGenerator, out _);
         hashGenerator.Setup(x => x.Generate("https://example.com")).Returns("abc12345");
 
         await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
@@ -111,7 +119,7 @@ public class LinksControllerTests
         // all, and the request fails outright - caching first would leave a ghost entry for a hash
         // that will never resolve anywhere.
         await using var context = NewContext();
-        var sut = NewController(context, out var cache, out var dispatcher, out var hashGenerator);
+        var sut = NewController(context, out var cache, out var dispatcher, out var hashGenerator, out _);
         hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
         dispatcher
             .Setup(x => x.DispatchAsync(It.IsAny<LinkCreatedEvent>(), Topics.LinkCreated, It.IsAny<CancellationToken>()))
@@ -127,7 +135,7 @@ public class LinksControllerTests
     public async Task CreateLink_EmptyOriginalLink_ReturnsBadRequestWithoutPublishing()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator);
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, out _);
 
         var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "" }, CancellationToken.None);
 
@@ -149,7 +157,7 @@ public class LinksControllerTests
         // later calls Redirect(link.OriginalLink) on it verbatim - an open redirect out of a trusted
         // short-link domain to an arbitrary scheme.
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out _);
+        var sut = NewController(context, out _, out var dispatcher, out _, out _);
 
         var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = originalLink }, CancellationToken.None);
 
@@ -165,7 +173,7 @@ public class LinksControllerTests
     {
         await using var context = NewContext();
         var cachedLink = new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null);
-        var sut = NewController(context, out var cache, out _, out _);
+        var sut = NewController(context, out var cache, out _, out _, out _);
         cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cachedLink);
 
@@ -182,7 +190,7 @@ public class LinksControllerTests
         var stored = new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null);
         context.Links.Add(stored);
         await context.SaveChangesAsync();
-        var sut = NewController(context, out var cache, out _, out _);
+        var sut = NewController(context, out var cache, out _, out _, out _);
         cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .Returns<string, Func<Task<Link?>>, CancellationToken>((_, fetch, _) => fetch());
 
@@ -196,7 +204,7 @@ public class LinksControllerTests
     public async Task GetLink_NotFoundAnywhere_ReturnsNotFound()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out var cache, out _, out _);
+        var sut = NewController(context, out var cache, out _, out _, out _);
         cache.Setup(x => x.GetOrFetch("missing", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Link?)null);
 
@@ -215,7 +223,7 @@ public class LinksControllerTests
         context.Links.Add(new Link("ccc33333", "https://c.example", "ccc33333", DateTime.UtcNow, null));
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 1, CancellationToken.None);
 
@@ -224,6 +232,49 @@ public class LinksControllerTests
         var item = Assert.Single(response.Items);
         Assert.Equal("aaa11111", item.ShortenLink);
         Assert.Equal(3, item.ClickCount);
+    }
+
+    [Fact]
+    public async Task GetLinks_RedisCountAheadOfPostgres_ShowsTheHigherRedisCount()
+    {
+        // Redis is updated synchronously on every redirect, Postgres asynchronously via the message
+        // bus - Redis being ahead is the normal, expected case, not an edge case.
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, userId, ClickCount: 3));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, out var clickCounter, new ClaimsPrincipal(identity));
+        clickCounter
+            .Setup(x => x.GetManyAsync(It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, long> { ["aaa11111"] = 7 });
+
+        var result = await sut.GetLinks(page: 1, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        Assert.Equal(7, Assert.Single(response.Items).ClickCount);
+    }
+
+    [Fact]
+    public async Task GetLinks_RedisCountBehindPostgres_StaysOnThePostgresFloor()
+    {
+        // Simulates Redis's own sliding TTL having reset a long-dormant link's counter back down to
+        // a small number (RedisClickCounterService) - the displayed count must never drop below what
+        // Postgres already durably recorded.
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, userId, ClickCount: 50));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, out var clickCounter, new ClaimsPrincipal(identity));
+        clickCounter
+            .Setup(x => x.GetManyAsync(It.IsAny<IReadOnlyCollection<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<string, long> { ["aaa11111"] = 1 });
+
+        var result = await sut.GetLinks(page: 1, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        Assert.Equal(50, Assert.Single(response.Items).ClickCount);
     }
 
     [Fact]
@@ -241,7 +292,7 @@ public class LinksControllerTests
         context.Links.Add(new Link("ccc33333", "https://c.example", "ccc33333", DateTime.UtcNow, null));
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(Constants.InternalClaim, "true")], "InternalApiKey");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 1, CancellationToken.None);
 
@@ -261,7 +312,7 @@ public class LinksControllerTests
         }
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 2, CancellationToken.None);
 
@@ -282,7 +333,7 @@ public class LinksControllerTests
         context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, userId));
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 99_999_999, CancellationToken.None);
 
@@ -308,7 +359,7 @@ public class LinksControllerTests
         }
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var page1 = Assert.IsType<LinksPageResponse>((await sut.GetLinks(page: 1, CancellationToken.None)).Value);
         var page2 = Assert.IsType<LinksPageResponse>((await sut.GetLinks(page: 2, CancellationToken.None)).Value);
@@ -325,7 +376,7 @@ public class LinksControllerTests
     public async Task GetLinks_InvalidPage_ReturnsProblem()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out _, out _);
+        var sut = NewController(context, out _, out _, out _, out _);
 
         var result = await sut.GetLinks(page: 0, CancellationToken.None);
 

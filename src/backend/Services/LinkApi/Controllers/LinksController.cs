@@ -20,6 +20,7 @@ public class LinksController(
     IEntityCacheService<Link> service,
     IEventDispatcher dispatcher,
     IHashGenerator hashGenerator,
+    IClickCounterService clickCounter,
     ILogger<LinksController> logger) : Controller
 {
     private const int PageSize = 50;
@@ -39,6 +40,7 @@ public class LinksController(
     private readonly IEntityCacheService<Link> _service = service;
     private readonly IEventDispatcher _dispatcher = dispatcher;
     private readonly IHashGenerator _hashGenerator = hashGenerator;
+    private readonly IClickCounterService _clickCounter = clickCounter;
     private readonly ILogger<LinksController> _logger = logger;
 
     [HttpPost]
@@ -154,6 +156,20 @@ public class LinksController(
                 .Take(PageSize)
                 .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount))
                 .ToListAsync(cancellationToken);
+
+        // Postgres' own ClickCount is the durable floor (see ClickTrackedConsumer's own comment on
+        // why it can drift a click or two *under*-counted-in-time but never forgets history); Redis
+        // is the fresher half, updated synchronously on every redirect, but can itself fall behind
+        // right after its own TTL resets a long-dormant link back to a small count (see
+        // RedisClickCounterService). Max of the two never shows the caller a number lower than one
+        // they may have already seen, regardless of which side is currently ahead.
+        var redisCounts = await _clickCounter.GetManyAsync(
+            items.Select(x => x.ShortenLink).ToList(), cancellationToken);
+        items = items
+            .Select(x => redisCounts.TryGetValue(x.ShortenLink, out var redisCount) && redisCount > x.ClickCount
+                ? x with { ClickCount = (int)redisCount }
+                : x)
+            .ToList();
 
         return new LinksPageResponse(items, page, PageSize, totalCount, totalPages);
     }

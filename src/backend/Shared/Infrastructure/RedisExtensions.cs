@@ -2,6 +2,7 @@ using Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using StackExchange.Redis;
 
 namespace Infrastructure;
 
@@ -26,6 +27,20 @@ public static class RedisExtensions
             options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
         });
         builder.Services.AddHostedService<RedisWarmupService>();
+        return builder;
+    }
+
+    // Separate from the IDistributedCache registration above (a JSON-blob GET/SET abstraction with
+    // no atomic increment) - this is the raw client the click counter needs for INCR/batched GET.
+    // Shared by RedirectApi (writes on every redirect) and LinkApi (reads it back for GetLinks) -
+    // consolidated into one method instead of each service owning its own copy, same reasoning as
+    // GeoIpExtensions (see sandbox/docs/scenarios/pitfalls/geoip-cache-wiring-duplicated-across-
+    // services.md for the bug that exact pattern was found causing elsewhere).
+    public static IHostApplicationBuilder AddClickCounter(this IHostApplicationBuilder builder)
+    {
+        var redisConnectionString = builder.Configuration.GetConnectionString(Constants.RedisConnectionString);
+        builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisConnectionString!));
+        builder.Services.AddSingleton<IClickCounterService, RedisClickCounterService>();
         return builder;
     }
 }
