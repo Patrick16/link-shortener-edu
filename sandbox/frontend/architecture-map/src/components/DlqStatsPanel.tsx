@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { controlApi } from '../api/controlApi'
+import { controlApi, ControlApiError } from '../api/controlApi'
 import type { DeadLetterQueueStats } from '../types/controlApi'
 import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
@@ -15,6 +15,9 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
   // Tracks only "did the last poll fail", not the error detail - this is a stale-data flag for the
   // viewer, not a diagnostic surface (that's what control-api's own logs are for).
   const [isStale, setIsStale] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [clearResult, setClearResult] = useState<string | null>(null)
+  const [clearError, setClearError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -36,6 +39,26 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
     }
   }, [])
 
+  async function clearDlq() {
+    setClearing(true)
+    setClearError(null)
+    setClearResult(null)
+    try {
+      const res = await controlApi.clearDlq()
+      setClearResult(res.cleared === 0 ? 'Nothing to clear.' : `Cleared ${res.cleared} message${res.cleared === 1 ? '' : 's'}.`)
+      // The poll loop above would pick this up within DLQ_POLL_MS anyway, but refetching right away
+      // avoids the counters looking stuck at their pre-clear values for up to 3s after a successful clear.
+      controlApi
+        .getDlqStats()
+        .then(setDlqStats)
+        .catch(() => {})
+    } catch (err) {
+      setClearError(err instanceof ControlApiError ? err.message : String(err))
+    } finally {
+      setClearing(false)
+    }
+  }
+
   if (!dlqStats) {
     // Nothing fetched successfully yet - distinct from isStale, which only applies once there's a
     // previous reading on screen that a later poll failed to refresh.
@@ -55,11 +78,19 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
           </div>
         ))
       )}
+      <div className="flush-cache-control">
+        <button onClick={clearDlq} disabled={clearing || dlqStats.totalMessages === 0}>
+          {clearing ? 'Clearing...' : 'Clear DLQ'}
+        </button>
+        {clearResult && <span className="flush-cache-result">{clearResult}</span>}
+      </div>
+      {clearError && <p className="service-card-error">{clearError}</p>}
       <p className="connection-stats-hint">
         {isStale
           ? "Last update failed - showing the most recent known counts, not necessarily current."
           : 'Nothing consumes these today - a non-zero count means a message exhausted its retries (or failed to ' +
-            'deserialize) and is sitting there unread.'}
+            'deserialize) and is sitting there unread. "Clear DLQ" purges them for demo purposes only - this ' +
+            'project never changes its event contracts, so no real poison messages are expected here in practice.'}
       </p>
     </div>
   )

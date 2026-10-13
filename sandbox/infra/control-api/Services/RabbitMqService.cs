@@ -84,4 +84,42 @@ public sealed class RabbitMqService(IContainerRuntime runtime) : IRabbitMqServic
 
         return new DeadLetterQueueStats(deadQueues, deadQueues.Sum(q => q.MessageCount));
     }
+
+    public async Task<int?> ClearDeadLetterQueuesAsync(CancellationToken ct)
+    {
+        var container = await runtime.FindAsync("rabbitmq", ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var (exitCode, output) = await runtime.ExecWithExitCodeAsync(container.ID, ["rabbitmqctl", "list_queues", "name", "messages", "--formatter=json"], ct);
+        if (exitCode != 0)
+        {
+            throw new InvalidOperationException($"rabbitmqctl exited {exitCode}: {output}");
+        }
+
+        var deadQueues = ParseRabbitMqQueueList(output)
+            .Where(q => q.Name.EndsWith(".dead", StringComparison.Ordinal))
+            .ToList();
+
+        var totalPurged = 0;
+        foreach (var queue in deadQueues)
+        {
+            var (purgeExitCode, purgeOutput) = await runtime.ExecWithExitCodeAsync(container.ID, ["rabbitmqctl", "purge_queue", queue.Name], ct);
+            if (purgeExitCode != 0)
+            {
+                throw new InvalidOperationException($"rabbitmqctl purge_queue {queue.Name} exited {purgeExitCode}: {purgeOutput}");
+            }
+
+            // Counted from the listing taken just above, not from purge_queue's own output (which
+            // reports success/failure, not a count) - a message landing in a dead queue between the
+            // listing and its purge would be dropped without being counted here, but nothing in this
+            // project produces real dead-letter traffic outside manual testing, so that race isn't a
+            // practical concern for a teaching-only clear button.
+            totalPurged += queue.Messages;
+        }
+
+        return totalPurged;
+    }
 }

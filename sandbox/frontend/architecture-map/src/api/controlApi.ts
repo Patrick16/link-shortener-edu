@@ -112,6 +112,7 @@ export const controlApi = {
   getPgcatConnections: () => request<PgcatInstanceConnections[]>('/api/containers/pgcat/connections'),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
   getDlqStats: () => request<DeadLetterQueueStats>('/api/infra/dlq-stats'),
+  clearDlq: () => request<{ cleared: number }>('/api/infra/dlq-clear', 'POST'),
   getHaproxyStats: () => request<HaproxyStats>('/api/infra/haproxy-stats'),
 
   getRedisTopology: () => request<InfraTopology>('/api/containers/redis/topology'),

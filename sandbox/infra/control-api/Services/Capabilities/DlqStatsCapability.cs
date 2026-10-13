@@ -19,5 +19,19 @@ public sealed class DlqStatsCapability(IRabbitMqService rabbitMq, ILogger<DlqSta
                 return Results.Problem(ex.Message);
             }
         });
+
+        app.MapPost("/api/infra/dlq-clear", async (CancellationToken ct) =>
+        {
+            try
+            {
+                var result = await rabbitMq.ClearDeadLetterQueuesAsync(ct);
+                return result is null ? Results.NotFound() : Results.Ok(new { cleared = result.Value });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Clearing dead-letter queues failed");
+                return Results.Problem(ex.Message);
+            }
+        });
     }
 }
