@@ -54,6 +54,8 @@ two real bugs found in this exact code path.
   (coupling) — fixed
 - ⚠️ [A side-effect cache failure took down an entire gRPC request, not just the caching optimization](pitfall:geoip-cache-write-failure-fails-grpc-request)
   (resilience-gap) — fixed
+- ⚠️ [Fail-open that only caught RedisException let timeouts fail the redirect](pitfall:fail-open-catch-too-narrow)
+  (resilience-gap) — fixed
 
 ## Relatives
 

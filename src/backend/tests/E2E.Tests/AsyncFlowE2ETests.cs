@@ -131,13 +131,19 @@ public sealed class AsyncFlowE2ETests : IAsyncLifetime
         // Second async hop: the click above already made RedirectApi publish a ClickTrackedEvent -
         // traffic-service exposes no HTTP API of its own to ask about it, so this polls clicks_db
         // directly for the row traffic-service's consumer is expected to have written by now.
+        // clicks is partitioned by ClickedAt, so the lower bound on it lets Postgres skip every older
+        // partition. Without it, filtering on Hash alone scans them all. Five minutes of slack covers
+        // the whole poll window, since this click was recorded moments ago.
+        var since = DateTime.UtcNow.AddMinutes(-5);
         var clickPersisted = false;
         for (var attempt = 0; attempt < 30 && !clickPersisted; attempt++)
         {
             await using var connection = new NpgsqlConnection(_clicksDbConnectionString);
             await connection.OpenAsync();
-            await using var command = new NpgsqlCommand("SELECT 1 FROM clicks WHERE \"Hash\" = @hash LIMIT 1", connection);
+            await using var command = new NpgsqlCommand(
+                "SELECT 1 FROM clicks WHERE \"Hash\" = @hash AND \"ClickedAt\" >= @since LIMIT 1", connection);
             command.Parameters.AddWithValue("hash", hash);
+            command.Parameters.AddWithValue("since", since);
             clickPersisted = await command.ExecuteScalarAsync() is not null;
 
             if (!clickPersisted)

@@ -325,6 +325,7 @@ try {
         @{ Name = 'AuthApi';     Port = 8081 }
         @{ Name = 'LinkApi';     Port = 8082 }
         @{ Name = 'RedirectApi'; Port = 8083 }
+        @{ Name = 'ReportingApi'; Port = 8088 }
     )
     foreach ($api in $apis) {
         if (Wait-ForHealthReady -Port $api.Port) {
@@ -465,6 +466,7 @@ Write-Host "  Frontend (sandbox map): http://localhost:5174$(if (-not $sandboxMa
 Write-Host '  AuthApi:          http://localhost:8081/scalar/v1'
 Write-Host '  LinkApi:          http://localhost:8082/scalar/v1'
 Write-Host '  RedirectApi:      http://localhost:8083/scalar/v1'
+Write-Host '  ReportingApi:     http://localhost:8088/scalar/v1'
 if (-not $SkipRabbitMqUi) {
     Write-Host '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
 }

@@ -251,8 +251,8 @@ step "Starting backend (observability: $OBSERVABILITY; profiles: $profiles_desc)
 docker compose "${profile_args[@]}" up -d || die 'docker compose up failed - see output above.'
 
 step 'Waiting for the web APIs to become ready (/health/ready)'
-declare -A API_PORTS=([AuthApi]=8081 [LinkApi]=8082 [RedirectApi]=8083)
-for name in AuthApi LinkApi RedirectApi; do
+declare -A API_PORTS=([AuthApi]=8081 [LinkApi]=8082 [RedirectApi]=8083 [ReportingApi]=8088)
+for name in AuthApi LinkApi RedirectApi ReportingApi; do
     if wait_for_health_ready "${API_PORTS[$name]}"; then
         echo "  $name is ready"
     else
@@ -379,6 +379,7 @@ echo "  Frontend (sandbox map): http://localhost:5174$suffix"
 echo '  AuthApi:          http://localhost:8081/scalar/v1'
 echo '  LinkApi:          http://localhost:8082/scalar/v1'
 echo '  RedirectApi:      http://localhost:8083/scalar/v1'
+echo '  ReportingApi:     http://localhost:8088/scalar/v1'
 [[ "$SKIP_RABBITMQ_UI" == "0" ]] && echo '  RabbitMQ UI:      http://localhost:15672  (guest / guest)'
 [[ "$SKIP_REDIS_UI" == "0" ]] && echo '  RedisInsight:     http://localhost:5540  (add a DB: host "redis-master", port 6379)'
 [[ "$SKIP_POSTGRES_UI" == "0" ]] && echo '  pgweb:            http://localhost:8084'

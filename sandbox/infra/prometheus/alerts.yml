@@ -154,7 +154,7 @@ groups:
       # keeping up with publish rate (see sandbox/infra/control-api's rabbitmq-prefetch control for
       # one way to tune that live).
       - alert: RabbitMqQueueBacklog
-        expr: rabbitmq_queue_messages > 10000
+        expr: rabbitmq_detailed_queue_messages > 10000
         for: 1m
         labels:
           severity: warning

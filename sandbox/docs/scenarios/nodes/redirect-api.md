@@ -57,6 +57,8 @@ with a different purpose: it's disposable, the day buckets are a rolling aggrega
   (race-condition) — fixed; this node's cache-first read is what the fix relies on
 - 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
   (coupling) — fixed; this node's own cache reads were invisible to LinkApi/ShortenerService's writes
+- ⚠️ [Fail-open that only caught RedisException let timeouts fail the redirect](pitfall:fail-open-catch-too-narrow)
+  (resilience-gap) — fixed
 
 ## Relatives
 

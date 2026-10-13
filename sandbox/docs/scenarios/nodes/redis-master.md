@@ -42,6 +42,10 @@ with what was fetched.
   (architecture-bug) — fixed
 - 🐛 [Shared `Common` library pulled in the full Redis client just for one interface](pitfall:common-lib-full-redis-client-dependency)
   (coupling) — fixed
+- ⚠️ [A Redis blip at boot crashed the whole API](pitfall:redis-multiplexer-abort-on-connect-fail-crashes-host)
+  (resilience-gap) — fixed
+- ⚠️ [Fail-open that only caught RedisException let timeouts fail the redirect](pitfall:fail-open-catch-too-narrow)
+  (resilience-gap) — fixed
 
 ## Relatives
 
