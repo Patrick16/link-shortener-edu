@@ -10,7 +10,9 @@ namespace ControlApi.Services;
 
 public sealed class TrafficService : ITrafficService
 {
-    private const string K6Image = "grafana/k6:latest";
+    // Internal, not private: Program.cs's /health/ready check reads this too, so the image name
+    // stays defined in exactly one place.
+    internal const string K6Image = "grafana/k6:latest";
 
     // The real routes a traffic run's step sequence can be built from - the server-side source of
     // truth (see EndpointDefinition) so k6-scripts/flow.js stays a generic interpreter with no

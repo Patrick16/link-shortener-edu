@@ -29,6 +29,7 @@
    - [4.10 Load testing with k6](#410-load-testing-with-k6)
    - [4.11 Run history, reuse, and compare](#411-run-history-reuse-and-compare)
    - [4.12 Presets](#412-presets)
+   - [4.13 Demonstrating degraded modes](#413-demonstrating-degraded-modes)
 5. [Infrastructure browser UIs](#5-infrastructure-browser-uis)
 6. [Observability](#6-observability)
 7. [API docs (Scalar)](#7-api-docs-scalar)
@@ -91,7 +92,7 @@ each optional piece is its own Compose profile (`otel`, `observability`, `ui-pos
 | AuthApi / LinkApi / RedirectApi (Scalar docs at `/scalar/v1`) | 8081 / 8082 / 8083 | yes |
 | nginx (fronts LinkApi/RedirectApi for load balancing) | 8082 / 8083 | yes |
 | Postgres primary / replica 1 / replica 2 | 5432 / 5433 / 5434 | yes |
-| PgCat (pooler) | 6432 | yes |
+| HAProxy (pooler entry point, load-balances 3 PgCat instances) | 6432 | yes |
 | Redis master (via Sentinels, not dialed directly) | 6379 | yes |
 | Redis Sentinels 1 / 2 / 3 | 26379 / 26380 / 26381 | yes |
 | RabbitMQ (AMQP / management UI) | 5672 / 15672 | UI: unless `-SkipRabbitMqUi` |
@@ -107,6 +108,11 @@ each optional piece is its own Compose profile (`otel`, `observability`, `ui-pos
 `control-api` is bound to `127.0.0.1` only, not every interface — it holds the Docker socket
 (root-equivalent control over the whole stack) with no authentication on top, so it's reachable
 only from the machine running it.
+
+This table ties ports to the start-script flags that gate them; it skips a few things that aren't
+flag-gated (ClickHouse, ReportingApi, RabbitMQ's Prometheus metrics port, individual observability
+services). For the exhaustive list straight from `docker-compose.yml`, see
+[`ports.md`](./ports.md).
 
 ---
 
@@ -397,6 +403,28 @@ optionally links to one custom scenario so applying it also loads that load prof
 anything — nothing changes until you confirm:
 
 ![Previewing a preset — here, the stand already matches it](assets/user-guide/presets-preview.jpg)
+
+### 4.13 Demonstrating degraded modes
+
+Two of this project's dependencies are explicitly allowed to fail without taking the product down
+— graceful degradation is a feature here, not an accident, and it's worth seeing on purpose rather
+than only reading about:
+
+- **Stop `redis-master`** ([§4.3](#43-the-node-panel-and-generic-controls)'s generic Stop button).
+  Link creation and redirects keep working — `LinkApi`/`RedirectApi` fall back to reading/writing
+  Postgres directly, just slower. This used to 500 instead before a real bug was found and fixed;
+  see [the caching pattern doc](scenarios/patterns/caching.md) and
+  [that pitfall's before/after](scenarios/pitfalls/cache-read-no-error-handling.md).
+- **Stop `rabbitmq`**. `POST /Links` and clicks both keep returning successfully —
+  `LinkApi`/`RedirectApi` spill into a local SQLite fallback queue instead of blocking on the
+  publish. Watch it fill via the fallback-queue viewers ([§5](#5-infrastructure-browser-uis),
+  ports 8086/8087); restart `rabbitmq` and `RabbitMqRetryWorker` drains the queue within 30s. See
+  [the async-messaging pattern doc](scenarios/patterns/async-messaging.md) for the mechanism, and
+  its Pitfalls section for two real bugs found in this exact fallback path.
+
+Either way, the product app and `k6` traffic keep running throughout — that continuity *is* the
+demonstration. Compare with stopping `postgres` itself, which has no fallback by design, to see
+what the absence of a degraded mode looks like instead.
 
 ---
 
