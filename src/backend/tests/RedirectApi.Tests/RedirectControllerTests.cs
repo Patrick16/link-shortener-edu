@@ -79,7 +79,24 @@ public class RedirectControllerTests
     }
 
     [Fact]
-    public async Task RedirectToOrigin_LinkFound_IncrementsRedisClickCounter()
+    public async Task RedirectToOrigin_OwnedLink_RecordsClickForTheOwner()
+    {
+        var ownerId = Guid.NewGuid();
+        await using var context = NewContext();
+        var link = new Link("abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, ownerId);
+        var sut = NewController(context, out var cache, out _, out var clickCounter);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(link);
+
+        await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        clickCounter.Verify(
+            x => x.RecordClickAsync("abc12345", ownerId, It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_AnonymousLink_RecordsClickWithoutAnOwner()
     {
         await using var context = NewContext();
         var link = new Link("abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, null);
@@ -89,7 +106,9 @@ public class RedirectControllerTests
 
         await sut.RedirectToOrigin("abc12345", CancellationToken.None);
 
-        clickCounter.Verify(x => x.IncrementAsync("abc12345", It.IsAny<CancellationToken>()), Times.Once);
+        clickCounter.Verify(
+            x => x.RecordClickAsync("abc12345", null, It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -143,6 +162,8 @@ public class RedirectControllerTests
         dispatcher.Verify(
             x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
-        clickCounter.Verify(x => x.IncrementAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        clickCounter.Verify(
+            x => x.RecordClickAsync(It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

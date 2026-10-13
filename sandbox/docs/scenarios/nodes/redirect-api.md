@@ -11,8 +11,8 @@ case.
 
 ## How it works
 
-`GET /{hash}`: cache-aside lookup ([Caching](pattern:caching)), a Redis-backed click counter
-increment, publish a `ClickTrackedEvent` ([Async messaging](pattern:async-messaging)), then a 302.
+`GET /{hash}`: cache-aside lookup ([Caching](pattern:caching)), publish a `ClickTrackedEvent`
+([Async messaging](pattern:async-messaging)), record the click in the owner's Redis day bucket, then a 302.
 
 ## How it's implemented here
 
@@ -23,10 +23,11 @@ public async Task<IActionResult> RedirectToOrigin(string hash, CancellationToken
     var link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, ct);
     if (link is null) return NotFound();
 
-    await _clickCounter.IncrementAsync(hash, ct); // Redis INCR, cheap, doesn't touch Postgres
-
     var clickEvent = new ClickTrackedEvent { Id = Guid.NewGuid(), Hash = hash, /* ... */ };
-    await _publisher.PublishAsync(clickEvent, Topics.ClickTracked, ct);
+    await _dispatcher.DispatchAsync(clickEvent, Topics.ClickTracked, ct);
+
+    // Redis ZINCRBY into the owner's day bucket - no-op for anonymous links, never touches Postgres
+    await _clickCounter.RecordClickAsync(hash, link.UserId, clickEvent.ClickedAt, ct);
 
     return Redirect(link.OriginalLink); // 302, never permanent - the target can change
 }
@@ -37,10 +38,10 @@ Two separate consumers process `ClickTrackedEvent` downstream, for different rea
 the real audit trail (Postgres `Clicks` + Mongo click metadata) — see
 [ShortenerService](node:shortener-service)'s Pitfalls for a race this split surfaced.
 
-The click counter (`IClickCounterService`, a Redis `INCR` under `link:{hash}:clicks`) is
-independent of the request-response cache (`link:{hash}`) — same Redis instance, different key,
-different purpose: one is authoritative-ish (best-effort, synced from Postgres separately), the
-other is disposable.
+`IClickCounterService` writes each owned click into a per-user, per-day sorted set
+(`clicks:user:{userId}:day:{YYYYMMDD}`). ReportingApi reads those buckets for the live top-links
+view. The request-response cache (`link:{hash}`) is a separate key on the same Redis instance,
+with a different purpose: it's disposable, the day buckets are a rolling aggregate.
 
 ## Pitfalls
 
@@ -64,7 +65,7 @@ other is disposable.
 - [LinkApi](node:link-api) — the hashes this node resolves come from there
 - [ShortenerService](node:shortener-service) — see the click-tracking split note above
 - [TrafficService](node:traffic-service) — see the click-tracking split note above
-- [Redis](node:redis-master) — cache and click counter
+- [Redis](node:redis-master) — cache and per-user click day buckets
 - [RabbitMQ](node:rabbitmq) — carries `ClickTrackedEvent`
 
 ### Patterns

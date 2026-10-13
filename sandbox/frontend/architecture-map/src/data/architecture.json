@@ -121,12 +121,12 @@
       "name": "RedirectApi",
       "type": "service",
       "icon": "↪️",
-      "description": "Resolves a short link, issues a 302, bumps the click counter, and records the click",
+      "description": "Resolves a short link, issues a 302, records the click, and publishes it",
       "capabilities": [
         "scalable"
       ],
       "details": {
-        "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; increments a Redis click counter (hot path, doesn't wait on Postgres) and publishes ClickTrackedEvent right before redirecting",
+        "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; publishes ClickTrackedEvent, then records the click in the owner's Redis day bucket (hot path, doesn't wait on Postgres) before redirecting",
         "technologies": [
           ".NET 10",
           "ASP.NET Core",
@@ -273,7 +273,7 @@
       "name": "Redis (master)",
       "type": "infrastructure",
       "icon": "🗄️",
-      "description": "Cache of hash → link, plus the atomic per-link click counter - the actual data-plane target once Sentinel discovery has picked it out",
+      "description": "Cache of hash → link, plus per-user click day buckets for the top-links view - the actual data-plane target once Sentinel discovery has picked it out",
       "capabilities": [
         "cache-toggle",
         "flush-cache"
@@ -282,12 +282,12 @@
         "cacheEnabled": true
       },
       "details": {
-        "purpose": "Cache-aside for links (read-through on miss, shared key format between LinkApi and RedirectApi) and an INCR-based click counter; link-api/redirect-api never dial this hostname directly - their Sentinel-aware connection string talks to redis-sentinel-1/2/3 first, which report back whichever node is currently master",
+        "purpose": "Cache-aside for links (read-through on miss, shared key format between LinkApi and RedirectApi) and per-user, per-day sorted sets of clicks that ReportingApi turns into the live top-links view; link-api/redirect-api never dial this hostname directly - their Sentinel-aware connection string talks to redis-sentinel-1/2/3 first, which report back whichever node is currently master",
         "technologies": [
           "Redis 7"
         ],
         "port": 6379,
-        "keyFormat": "link:{hash} (cache), link:{hash}:clicks (counter)",
+        "keyFormat": "link:{hash} (cache), clicks:user:{userId}:day:{YYYYMMDD} (day buckets)",
         "links": {
           "code": "src/backend/Shared/Common/LinkCacheService.cs, src/backend/Shared/Infrastructure/RedisClickCounterService.cs"
         }
@@ -791,11 +791,11 @@
     {
       "from": "redirect-api",
       "to": "redis-master",
-      "label": "Cache lookup + increment click counter",
+      "label": "Cache lookup + record click",
       "protocol": "RESP",
-      "format": "link:{hash} → JSON (cache read) and link:{hash}:clicks → INCR (counter), both on every visit",
+      "format": "link:{hash} → JSON (cache read) on every visit; clicks:user:{userId}:day:{YYYYMMDD} → ZINCRBY and a change notification, for links that have an owner",
       "synchronous": true,
-      "notes": "Connects via Sentinel discovery (redis-sentinel-1/2/3) - the client asks them who's current master and reconnects automatically on failover, no code involved. The counter increment is a hot-path fire-and-forget; the durable \"my links\" click count is synced separately, asynchronously, off ClickTrackedEvent via ShortenerService.",
+      "notes": "Connects via Sentinel discovery (redis-sentinel-1/2/3) - the client asks them who's current master and reconnects automatically on failover, no code involved. The record is a hot-path fire-and-forget, one batched round trip; the durable \"my links\" click count is synced separately, asynchronously, off ClickTrackedEvent via ShortenerService.",
       "activeWhen": {
         "cacheEnabled": true
       }

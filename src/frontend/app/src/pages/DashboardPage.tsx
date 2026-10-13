@@ -4,6 +4,8 @@ import { buildShortUrl, getLinks } from '../api/linkApi'
 import { getClickSummary } from '../api/statsApi'
 import { ApiError } from '../api/client'
 import { ClicksByDayChart } from '../components/ClicksByDayChart'
+import { TopLinksPanel } from '../components/TopLinksPanel'
+import { useTopLinks } from '../hooks/useTopLinks'
 import type { ClickSummary, LinksPage } from '../types'
 
 // Keyed by hash. 'loading'/'error' are distinct from "not yet requested" (absent key) so toggling
@@ -46,6 +48,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null)
   const [expandedHash, setExpandedHash] = useState<string | null>(null)
   const [summaries, setSummaries] = useState<Record<string, SummaryState>>({})
+  const topLinks = useTopLinks(Boolean(user))
 
   // Guards the stats fetch below against setting state after unmount, same reason the getLinks
   // effect just below uses its own local `cancelled` flag - a ref (not state) since toggleStats is
@@ -117,6 +120,8 @@ export default function DashboardPage() {
 
   return (
     <div className="card dashboard">
+      <TopLinksPanel items={topLinks.items} status={topLinks.status} />
+
       <h2>My links</h2>
 
       {loading && <p className="hint">Loading…</p>}

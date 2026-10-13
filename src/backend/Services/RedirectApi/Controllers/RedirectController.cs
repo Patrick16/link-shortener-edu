@@ -72,14 +72,12 @@ public class RedirectController(
         // review - previously only the ReportingService half of this was documented).
         await _dispatcher.DispatchAsync(clickEvent, Topics.ClickTracked, cancellationToken);
 
-        // Incremented only after the dispatch above succeeds - doing this unconditionally before
-        // the dispatch (the original order) left the counter incremented for a click that, in
-        // gRPC mode, could still fail downstream and never get redirected or persisted anywhere
-        // (found during review: SyncGrpcDispatcher has no fallback queue, so a failed dispatch here
-        // throws and the whole request 502s/503s). Still cheap/atomic and still doesn't touch
-        // Postgres - the exact count shown on the "my links" page is synced from Postgres
-        // separately, asynchronously, off the ClickTrackedEvent above.
-        await _clickCounter.IncrementAsync(hash, cancellationToken);
+        // Recorded only after the dispatch above succeeds - doing this unconditionally before the
+        // dispatch (the original order) left a bucket incremented for a click that, in gRPC mode,
+        // could still fail downstream and never get redirected or persisted anywhere (found during
+        // review: SyncGrpcDispatcher has no fallback queue, so a failed dispatch here throws and the
+        // whole request 502s/503s). Anonymous links are a no-op inside the counter.
+        await _clickCounter.RecordClickAsync(hash, link.UserId, clickEvent.ClickedAt, cancellationToken);
 
         // Debug, not Information - this is the hottest path in the whole system under a load test
         // (every single click). Flip RedirectApi to Debug locally to watch redirect -> publish ->

@@ -55,3 +55,10 @@ export type ClickSummary = {
   byDevice: CountBucket[]
   byBrowser: CountBucket[]
 }
+
+// Mirrors ReportingApi's TopLinkEntry (src/backend/Shared/Infrastructure/TopLinks.cs). The hash is the
+// short link's code; alias/original-URL display comes later with link aliases.
+export type TopLinkEntry = {
+  hash: string
+  clicks: number
+}

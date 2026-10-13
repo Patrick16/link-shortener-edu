@@ -1,4 +1,5 @@
 using Infrastructure;
+using ReportingApi.Realtime;
 using ServiceDefaults;
 using WebDefaults;
 
@@ -15,8 +16,18 @@ builder.AddClickHouseReader();
 builder.AddJwtBearerAuthentication();
 builder.Services.AddFrontendCors(builder.Configuration);
 
+// The per-user top-links view: rolling day buckets written by RedirectApi, read here and pushed to
+// open dashboards over SignalR as clicks happen.
+builder.AddRedisMultiplexer();
+builder.Services.AddSingleton<ITopLinksReader, RedisTopLinksReader>();
+builder.Services.AddSingleton<TopLinksSubscriptions>();
+builder.Services.AddSingleton<TopLinksPushScheduler>();
+builder.Services.AddHostedService<TopLinksPushService>();
+builder.Services.AddSignalR();
+
 builder.Services.AddHealthChecks()
-    .AddClickHouseHealthCheck<IClickFactQueryService>();
+    .AddClickHouseHealthCheck<IClickFactQueryService>()
+    .AddRedisHealthCheck();
 
 var app = builder.Build();
 
@@ -29,6 +40,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<TopLinksHub>("/hub/top-links");
 app.MapHealthEndpoints();
 
 app.Run();

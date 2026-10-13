@@ -28,6 +28,22 @@ public static class JwtAuthenticationExtensions
                 // ClaimTypes.NameIdentifier URI, and User.FindFirst(JwtRegisteredClaimNames.Sub)
                 // would never find it. Keep claim types exactly as the token declares them.
                 options.MapInboundClaims = false;
+                // A browser WebSocket can't set an Authorization header, so SignalR clients send the
+                // token as ?access_token=. Only read from the query for hub paths - accepting it on
+                // ordinary REST endpoints would let tokens leak into access logs and URLs.
+                options.Events = new JwtBearerEvents
+                {
+                    OnMessageReceived = context =>
+                    {
+                        var token = context.Request.Query["access_token"];
+                        if (!string.IsNullOrEmpty(token) && context.HttpContext.Request.Path.StartsWithSegments("/hub"))
+                        {
+                            context.Token = token;
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                };
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
                     ValidateIssuer = true,

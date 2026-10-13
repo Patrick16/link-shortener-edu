@@ -20,6 +20,12 @@ vi.mock('../api/statsApi', () => ({
   getClickSummary: vi.fn(),
 }))
 
+// Keeps the dashboard tests off a real SignalR connection - the hub's own behaviour is covered by
+// useTopLinks.test.tsx.
+vi.mock('../hooks/useTopLinks', () => ({
+  useTopLinks: vi.fn(() => ({ items: [], status: 'live' })),
+}))
+
 vi.mock('../auth/AuthContext', async () => {
   const actual = await vi.importActual<typeof import('../auth/AuthContext')>('../auth/AuthContext')
   return {

@@ -34,6 +34,11 @@ public static class HealthChecksBuilderExtensions
     public static IHealthChecksBuilder AddMongoHealthCheck(this IHealthChecksBuilder builder)
         => builder.AddCheck<MongoHealthCheck>("mongo", tags: ReadyTags);
 
+    // Needs IConnectionMultiplexer registered (AddRedisMultiplexer), not just the IDistributedCache
+    // that AddRedisDistributedCache provides.
+    public static IHealthChecksBuilder AddRedisHealthCheck(this IHealthChecksBuilder builder)
+        => builder.AddCheck<RedisHealthCheck>("redis", tags: ReadyTags);
+
     // One generic method for any IPingable (IClickFactStore in ReportingService,
     // IClickFactQueryService in ReportingApi) - same shape as AddPostgresHealthCheck<TContext>
     // above, resolving TPingable straight from DI instead of a per-interface registration method.
