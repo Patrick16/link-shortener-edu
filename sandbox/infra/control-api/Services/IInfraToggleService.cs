@@ -5,11 +5,12 @@ namespace ControlApi.Services;
 public interface IInfraToggleService
 {
     // The standing infra toggles - see InfraStatus for what each one actually does and why
-    // they're not all implemented the same way (one's an in-memory flag, the rest recreate
-    // containers).
-    InfraStatus GetInfraStatus();
+    // they're not all implemented the same way (one's an in-memory flag, most recreate containers,
+    // and HaproxyEnabled is read live rather than cached at all). Async because assembling it reads
+    // haproxy's actual Docker state on every call - see InfraStatus's own comment on HaproxyEnabled.
+    Task<InfraStatus> GetInfraStatusAsync(CancellationToken ct);
 
-    InfraStatus SetNginxBypass(bool bypassed);
+    Task<InfraStatus> SetNginxBypassAsync(bool bypassed, CancellationToken ct);
 
     Task<InfraStatus> SetPgcatEnabledAsync(bool enabled, CancellationToken ct);
 

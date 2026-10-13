@@ -29,7 +29,7 @@ public class RunHistoryStoreTests : IDisposable
         return new RunHistoryStore(config);
     }
 
-    private static readonly InfraStatus DefaultInfra = new(NginxBypassed: false, PgcatEnabled: true, CacheEnabled: true, MessagingMode: "rabbitmq");
+    private static readonly InfraStatus DefaultInfra = new(NginxBypassed: false, PgcatEnabled: true, CacheEnabled: true, MessagingMode: "rabbitmq", HaproxyEnabled: true);
 
     private static RunSnapshot NewSnapshot(string id, DateTimeOffset? timestamp = null) => new(
         Id: id,

@@ -41,7 +41,6 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
     private bool _pgcatEnabled = true;
     private bool _cacheEnabled = true;
     private string _messagingMode = "rabbitmq";
-    private bool _haproxyEnabled = true;
 
     // Mirrors RabbitMqConsumer's own hardcoded-turned-configurable default.
     private int _rabbitMqPrefetch = 10;
@@ -132,13 +131,19 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             return poolSize;
         }, ct);
 
-    public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode, _haproxyEnabled);
+    // See InfraStatus's own comment on HaproxyEnabled for why that one field is read live here
+    // instead of joining _nginxBypassed/_pgcatEnabled/_cacheEnabled/_messagingMode as cached state.
+    public async Task<InfraStatus> GetInfraStatusAsync(CancellationToken ct) =>
+        new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode, await IsHaproxyRunningAsync(ct));
 
-    public InfraStatus SetNginxBypass(bool bypassed)
+    private async Task<bool> IsHaproxyRunningAsync(CancellationToken ct) =>
+        await runtime.FindAsync("haproxy", ct) is { State: "running" };
+
+    public async Task<InfraStatus> SetNginxBypassAsync(bool bypassed, CancellationToken ct)
     {
         logger.LogWarning("Nginx bypass for load-test traffic: {Bypassed}", bypassed);
         _nginxBypassed = bypassed;
-        return GetInfraStatus();
+        return await GetInfraStatusAsync(ct);
     }
 
     // --no-deps is load-bearing, not cosmetic: --force-recreate on named services also recreates
@@ -181,7 +186,7 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
                 await SyncHaproxyContainerAsync(false, ct);
             }
 
-            return GetInfraStatus();
+            return await GetInfraStatusAsync(ct);
         }, ct);
 
     public Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct) =>
@@ -200,7 +205,7 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             }
 
             _cacheEnabled = enabled;
-            return GetInfraStatus();
+            return await GetInfraStatusAsync(ct);
         }, ct);
 
     public Task<InfraStatus> SetMessagingModeAsync(string mode, CancellationToken ct)
@@ -228,7 +233,7 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             }
 
             _messagingMode = mode;
-            return GetInfraStatus();
+            return await GetInfraStatusAsync(ct);
         }, ct);
     }
 
@@ -252,14 +257,16 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             }
 
             await SyncHaproxyContainerAsync(enabled, ct);
-            return GetInfraStatus();
+            return await GetInfraStatusAsync(ct);
         }, ct);
 
     // Shared by SetPgcatEnabledAsync (one-directional: only ever calls this with false, to force
     // haproxy off alongside pgcat) and SetHaproxyEnabledAsync (the standalone sub-toggle, which
     // calls this with either value). Doesn't acquire RunExclusiveToggleAsync's gate itself, so
     // SetPgcatEnabledAsync can call it from inside its own already-gated delegate without a nested
-    // (and likely non-reentrant) acquire.
+    // (and likely non-reentrant) acquire. Doesn't write back to any field either - GetInfraStatusAsync
+    // reads haproxy's container state live (see InfraStatus's own comment on HaproxyEnabled), so
+    // there's nothing here to keep in sync.
     private async Task SyncHaproxyContainerAsync(bool enabled, CancellationToken ct)
     {
         var container = await runtime.FindAsync("haproxy", ct)
@@ -274,7 +281,5 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
         {
             await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
         }
-
-        _haproxyEnabled = enabled;
     }
 }

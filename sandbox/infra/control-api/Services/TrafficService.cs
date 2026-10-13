@@ -142,7 +142,7 @@ public sealed class TrafficService : ITrafficService
         // minutes apart for a long run; re-reading at each use let a toggle flip mid-run send the
         // preload through one URL and the actual run through the other, split across the same
         // request (found during review).
-        var nginxBypassed = _infraToggle.GetInfraStatus().NginxBypassed;
+        var nginxBypassed = (await _infraToggle.GetInfraStatusAsync(ct)).NginxBypassed;
 
         // A requested data pool is fetched from the real app now, before k6 even starts, and
         // reported through the same onProgress callback as the run itself (Phase "preparing") so

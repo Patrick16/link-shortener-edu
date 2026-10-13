@@ -22,6 +22,13 @@ namespace ControlApi.Models;
 // deliberately demonstrates the pooler layer's single entry point going down, not a graceful
 // bypass. Only meaningful while PgcatEnabled is true - see HaproxyToggleCapability/
 // InfraToggleService.SetHaproxyEnabledAsync.
+//
+// Unlike PgcatEnabled/CacheEnabled/MessagingMode above, this field is NOT cached in control-api's
+// memory - it's read live from the haproxy container's actual Docker state on every
+// GetInfraStatusAsync call (see InfraToggleService.IsHaproxyRunningAsync). A cached bool would go
+// stale the moment anyone used the generic per-container Start/Stop controls every node gets for
+// free (ContainerEndpoints.cs) on haproxy directly - those bypass SetHaproxyEnabledAsync entirely
+// and have no reason not to, so the only way to never lie about this one is to not cache it.
 public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled);
 
 public record InfraToggleRequest(bool Enabled);

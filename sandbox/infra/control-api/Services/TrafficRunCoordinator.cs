@@ -188,7 +188,7 @@ public sealed class TrafficRunCoordinator(
                 $"{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid().ToString("N")[..6]}",
                 DateTimeOffset.UtcNow,
                 request,
-                infraToggle.GetInfraStatus(),
+                await infraToggle.GetInfraStatusAsync(CancellationToken.None),
                 replicas,
                 pgcatConnections,
                 await postgres.GetPostgresConnectionsAsync(CancellationToken.None),
