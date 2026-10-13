@@ -17,14 +17,14 @@
 	<ItemGroup>
 		<!-- AddWebApiDefaults/MapApiDocumentation: OpenAPI + Scalar UI + ASP.NET Core OTel instrumentation
 		     (deliberately absent from ServiceDefaults, see the comment in its csproj). -->
-		<PackageReference Include="Grpc.Core.Api" Version="2.84.0" />
-		<PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.12" />
-		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
-		<PackageReference Include="Scalar.AspNetCore" Version="2.17.14" />
+		<PackageReference Include="Grpc.Core.Api" />
+		<PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
+		<PackageReference Include="Scalar.AspNetCore" />
 		<!-- JwtAuthenticationExtensions.AddJwtBearerAuthentication - shared JWT Bearer setup for every
 		     service that validates AuthApi-issued tokens. -->
-		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.12" />
-		<PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.23.0" />
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+		<PackageReference Include="System.IdentityModel.Tokens.Jwt" />
 	</ItemGroup>
 
 	<ItemGroup>

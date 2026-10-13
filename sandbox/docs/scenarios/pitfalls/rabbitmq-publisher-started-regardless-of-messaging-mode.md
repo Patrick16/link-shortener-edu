@@ -17,8 +17,7 @@ background loop, `LocalPublishQueueWorker`, and a SQLite fallback-store file, al
 nothing would ever call.
 
 ⚠️ **Mistake** — reconstructed; no diffable pre-fix commit exists (this feature was reviewed and
-fixed before its first commit — see
-`.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F7):
+fixed before its first commit, so there's no separate buggy commit to diff against):
 
 ```csharp
 // src/backend/Services/LinkApi/Program.cs
@@ -71,9 +70,8 @@ identical gate. Verified live: in gRPC mode, `link-api`'s logs contained zero me
 "rabbitmq" (no connection attempt, no health check registered); toggling back to rabbitmq mode
 confirmed `RabbitMqPublisher` actually re-activates.
 
-(see `.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F7 — fixed; no
-pre-fix commit hash cited, reconstructed from the finding's own Summary plus the current code at
-HEAD)
+(reconstructed from this project's own review notes plus the current code at HEAD — no pre-fix
+commit hash to cite since this was fixed before its first commit)
 
 ## Relatives
 

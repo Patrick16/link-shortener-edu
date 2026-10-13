@@ -1,4 +1,4 @@
-﻿namespace LinkApi.Models;
+namespace LinkApi.Models;
 
 public class LinkCreateRequest
 {

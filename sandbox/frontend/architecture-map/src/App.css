@@ -817,8 +817,8 @@ button:disabled {
   color: var(--text);
 }
 
-/* Learn modal (node/pattern docs, see .notes/documentation-plan.md) - same overlay/box pattern as
-   the access-modal above, just wider and scrollable for markdown content (headings, diffs). */
+/* Learn modal (node/pattern docs) - same overlay/box pattern as the access-modal above, just
+   wider and scrollable for markdown content (headings, diffs). */
 
 .learn-modal-overlay {
   position: fixed;

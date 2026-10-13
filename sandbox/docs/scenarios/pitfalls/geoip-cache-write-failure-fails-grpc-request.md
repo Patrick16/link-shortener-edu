@@ -28,8 +28,7 @@ correctly mapped to a 502 — "correct" handling of an exception that a pure cac
 should never have let escape in the first place.
 
 ⚠️ **Mistake** — reconstructed; no diffable pre-fix commit exists (this feature was reviewed and
-fixed before its first commit — see
-`.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F11):
+fixed before its first commit, so there's no separate buggy commit to diff against):
 
 ```csharp
 public async Task<GeoLocation> ResolveAsync(string? ipAddress, CancellationToken cancellationToken = default)
@@ -99,9 +98,8 @@ returned a 502 now returns a 302 — the underlying Redis `NOREPLICAS` condition
 real, repeatable flakiness in this project's Redis Sentinel replication, not a one-off), but now
 only logs a warning instead of failing the request.
 
-(see `.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F11 — fixed; no
-pre-fix commit hash cited, reconstructed from the finding's own description plus the current code
-at HEAD)
+(reconstructed from this project's own review notes plus the current code at HEAD — no pre-fix
+commit hash to cite since this was fixed before its first commit)
 
 ## Relatives
 

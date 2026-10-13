@@ -12,7 +12,7 @@ grow unbounded with no retention story anywhere in this project — not even Cli
 `reports_db.clicks`, which partitioned by day for dedup but had no `TTL` clause, so nothing
 anywhere ever actually deleted old data. Write-sharding was judged less valuable to demonstrate
 here than data lifecycle management, a distinct pattern this stand didn't cover at all — it's
-dropped, not deferred; see `.notes/PLAN.md`'s Mental Model section for the full reasoning.
+dropped, not deferred.
 
 ## What this demonstrates
 

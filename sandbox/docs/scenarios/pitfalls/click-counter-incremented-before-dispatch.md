@@ -22,8 +22,7 @@ dashboard's click count for a click that was never actually redirected or persis
 permanently drifting the displayed count from reality with no way to reconcile it.
 
 ⚠️ **Mistake** — reconstructed; no diffable pre-fix commit exists (this feature was reviewed and
-fixed before its first commit — see
-`.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F2):
+fixed before its first commit, so there's no separate buggy commit to diff against):
 
 ```csharp
 // src/backend/Services/RedirectApi/Controllers/RedirectController.cs
@@ -47,9 +46,8 @@ own call stack. Not independently live-tested with failure injection (would need
 TrafficService outage during a gRPC-mode redirect) — verified by code reading plus the passing
 build/test suite instead, per the source report.
 
-(see `.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F2 — fixed; no
-pre-fix commit hash cited, reconstructed from the finding's own Summary plus the current code at
-HEAD)
+(reconstructed from this project's own review notes plus the current code at HEAD — no pre-fix
+commit hash to cite since this was fixed before its first commit)
 
 ## Relatives
 

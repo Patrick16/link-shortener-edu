@@ -1,8 +1,8 @@
 // Node/pattern docs live outside this project (sandbox/docs/scenarios/{nodes,patterns}/*.md) so
 // they sit next to the other scenario docs (see docs/repository-map.md), not buried inside one frontend
 // app. import.meta.glob pulls them in as plain strings at build time - no runtime fetch, no
-// control-api involvement (see .notes/documentation-plan.md: static import was chosen deliberately
-// over serving markdown through an API, since this is a local-only project with no separately
+// control-api involvement (static import was chosen deliberately over serving markdown through
+// an API, since this is a local-only project with no separately
 // hosted frontend).
 //
 // Lookup is by id alone (the markdown filename, e.g. `redis.md` -> id `redis`) - not by an entry

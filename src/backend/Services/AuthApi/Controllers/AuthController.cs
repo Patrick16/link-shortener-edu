@@ -21,7 +21,7 @@ public class AuthController(
     IJwtTokenGenerator tokenGenerator,
     IRefreshTokenService refreshTokenService,
     IWebHostEnvironment environment,
-    ILogger<AuthController> logger) : Controller
+    ILogger<AuthController> logger) : ControllerBase
 {
     private static readonly PasswordHasher<User> PasswordHasher = new();
     private const string RefreshTokenCookieName = "refreshToken";

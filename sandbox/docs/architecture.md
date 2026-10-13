@@ -2,16 +2,15 @@
 
 This project demonstrates a set of independent high-load patterns (caching, async messaging, read
 replicas, HA/failover, partitioning, pooler scaling) you build, toggle, and observe live — not a
-fixed sequence of scenarios to climb in order; see `.notes/PLAN.md`'s Terminology section. This doc
-describes the **target** end-state architecture; see [Current Status](#current-status) below for
-what's actually implemented right now.
+fixed sequence of scenarios to climb in order. This doc describes the **target** end-state
+architecture; see [Current Status](#current-status) below for what's actually implemented right
+now.
 
 **Scenario 4 changed 2026-10-06** — it used to be write-sharding (`Postgres Links` split across 2
 shards via `ShardResolver` + per-shard `pgcat` pools). Replaced with Postgres native partitioning
 (data retention) for `clicks_db` after an external gap-analysis pass found unbounded data growth was
 a real, undemonstrated gap in this project. Write-sharding is **dropped, not deferred** — every
-mention of it below is corrected or removed; see `.notes/PLAN.md`'s Mental Model section for the
-full reasoning.
+mention of it below is corrected or removed.
 
 ## Components
 
@@ -117,8 +116,8 @@ Short version of what's real today:
   Postgres replicas (`query_parser_read_write_splitting`), Redis runs master + 2 replicas + 3
   Sentinels with real automatic failover, Mongo runs a 3-node replica set. The conceptual write-up
   lives in [`scenarios/patterns/read-replica-routing.md`](scenarios/patterns/read-replica-routing.md)
-  (no separate numbered walkthrough file — see `.notes/PLAN.md`'s Documentation note); the pitfall
-  docs under `scenarios/pitfalls/` cover the real bugs found getting failover to actually work.
+  (no separate numbered walkthrough file); the pitfall docs under `scenarios/pitfalls/` cover the
+  real bugs found getting failover to actually work.
 - **Data retention (Postgres partitioning) is done and verified live** — `clicks_db`
   is natively partitioned by `ClickedAt` (monthly), with a Mongo TTL index and a ClickHouse `TTL`
   clause covering the other two click-data stores, plus a partition-maintenance job

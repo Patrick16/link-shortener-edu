@@ -10,7 +10,7 @@ namespace TrafficService;
 // writes never fall through to the slower clicks_default catch-all in normal operation, and drops
 // partitions once they're fully past the retention window - the maintenance job
 // ConvertClicksToPartitionedTable's own bootstrap explicitly left for later (see that migration's
-// comment and .notes/PLAN.md's Feature: Data Retention).
+// comment).
 public class PartitionMaintenanceWorker(
     IConfiguration configuration,
     ILogger<PartitionMaintenanceWorker> logger) : BackgroundService

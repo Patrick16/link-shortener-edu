@@ -43,9 +43,9 @@ namespace TrafficService.Migrations
             // Bootstrap partitions relative to whenever this migration actually RUNS, not to when
             // it was authored (a date computed with `now()` here instead of hardcoded literals) -
             // 2 months back through 3 months ahead, monthly. A real deployment keeps rolling
-            // partitions created ahead of time via a scheduled job (not built yet - see
-            // .notes/PLAN.md's Scenario 4 Infra section); this bootstrap just means the DEFAULT
-            // partition below isn't the only place new rows can land on a freshly migrated stack.
+            // partitions created ahead of time via a scheduled job - PartitionMaintenanceWorker,
+            // built later; this bootstrap just means the DEFAULT partition below isn't the only
+            // place new rows can land on a freshly migrated stack.
             migrationBuilder.Sql(@"
                 DO $$
                 DECLARE

@@ -39,9 +39,9 @@ export function LearnModal({ title, nodeId, onClose, onSelectNode }: Props) {
       ? getPatternDoc(top.id)
       : getPitfallDoc(top.id)
 
-  // Doc-internal Relatives links use a `node:<id>` / `pattern:<id>` / `pitfall:<id>` scheme (see
-  // .notes/documentation-plan.md "Doc format") so a link's target kind is unambiguous without a
-  // shared id namespace between the three. A `node:` link hands off to the graph's own selection
+  // Doc-internal Relatives links use a `node:<id>` / `pattern:<id>` / `pitfall:<id>` scheme so a
+  // link's target kind is unambiguous without a shared id namespace between the three. A `node:`
+  // link hands off to the graph's own selection
   // and closes this modal; `pattern:`/`pitfall:` links have no graph node to select, so they push
   // onto this modal's own navigation stack instead, with a way back.
   const components: Components = {

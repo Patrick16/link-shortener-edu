@@ -69,7 +69,7 @@ public class ApiExceptionHandlingTests
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>();
         Assert.NotNull(problem);
-        Assert.Equal(404, problem!.Status);
+        Assert.Equal(404, problem.Status);
     }
 
     [Fact]
@@ -83,7 +83,7 @@ public class ApiExceptionHandlingTests
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>();
         Assert.NotNull(problem);
-        Assert.Equal("Downstream service unavailable.", problem!.Title);
+        Assert.Equal("Downstream service unavailable.", problem.Title);
     }
 
     [Fact]
@@ -101,6 +101,6 @@ public class ApiExceptionHandlingTests
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>();
         Assert.NotNull(problem);
-        Assert.NotEqual("Downstream service unavailable.", problem!.Title);
+        Assert.NotEqual("Downstream service unavailable.", problem.Title);
     }
 }

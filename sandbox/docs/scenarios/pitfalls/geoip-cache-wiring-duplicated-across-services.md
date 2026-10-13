@@ -21,9 +21,8 @@ with a comment admitting it had to be kept in sync with the other by hand for th
 actually work.
 
 ⚠️ **Mistake** — reconstructed (no diffable pre-fix commit; this feature was reviewed and fixed
-before its first commit — see
-`.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F9). The same block,
-independently present in both services' extension classes:
+before its first commit). The same block, independently present in both services' extension
+classes:
 
 ```csharp
 // TrafficServiceExtensions.cs AND, separately, ReportingServiceExtensions.cs -
@@ -75,9 +74,8 @@ same shape as [this project's `Common`/Redis-client coupling finding](pitfall:co
 just in the other direction: that one was about a shared lib pulling in *too much*, this one is
 about two services independently reinventing wiring that should have been shared from the start.
 
-(see `.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F9 — fixed; no
-pre-fix commit hash cited, reconstructed from the finding's own Summary plus the current code at
-HEAD)
+(reconstructed from this project's own review notes plus the current code at HEAD — no pre-fix
+commit hash to cite since this was fixed before its first commit)
 
 ## Relatives
 

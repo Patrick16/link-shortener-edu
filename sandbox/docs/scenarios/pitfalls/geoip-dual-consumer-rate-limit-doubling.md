@@ -25,8 +25,7 @@ budget.
 
 ⚠️ **Mistake** — reconstructed; no diffable pre-fix commit exists for this exact state (the
 feature was reviewed and fixed before being committed, so there's no separate buggy commit to
-`git show` — see `.notes/review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md`, F1). This
-mirrors what `ReportingServiceExtensions.AddReportIngestion` originally did, duplicating
+`git show`). This mirrors what `ReportingServiceExtensions.AddReportIngestion` originally did, duplicating
 `TrafficServiceExtensions`'s own pre-existing direct registration with no shared cache between
 them:
 
@@ -76,9 +75,8 @@ now just call `builder.AddGeoIpResolution()` — this consolidation of what was 
 separate copies of the wrapping code is itself a later, related fix, not part of this one; see
 [Shared-cache DI wiring copy-pasted across two independently deployed services](pitfall:geoip-cache-wiring-duplicated-across-services).
 
-(see `.notes/review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md`, F1 — fixed; no
-pre-fix commit hash cited, reconstructed from the finding's own Summary plus the current code at
-HEAD, per the usual caveat when a feature is reviewed and fixed before its first commit)
+(reconstructed from this project's own review notes plus the current code at HEAD, per the usual
+caveat when a feature is reviewed and fixed before its first commit)
 
 ## Relatives
 

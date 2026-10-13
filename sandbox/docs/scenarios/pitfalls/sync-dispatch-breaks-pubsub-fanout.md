@@ -32,9 +32,8 @@ actually changed is that the gap is now explicitly called out in `RedirectContro
 comment and in `architecture.json`'s edge notes, instead of being a silent, only-partially-known
 gap.
 
-(see `.notes/review-reports/2026-10-06-1430-messaging-toggle-grpc-review.md`, F3 — the source
-report marks this "fixed" in the sense that the gap is now documented everywhere it should be, but
-no architectural change closes it; written up here as a known limitation rather than a code
+(marked "fixed" in the sense that the gap is now documented everywhere it should be, but no
+architectural change closes it; written up here as a known limitation rather than a code
 before/after, since there is no code fix to show)
 
 ## Relatives

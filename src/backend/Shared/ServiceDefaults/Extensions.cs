@@ -12,7 +12,7 @@ namespace ServiceDefaults;
 // Shared OpenTelemetry + logging wiring for every service in this solution — the lightweight half
 // of the Aspire pattern. Ships traces/metrics/logs via OTLP to the Aspire Dashboard container (see
 // docker-compose.yml); doesn't include the AppHost/orchestration half, since docker-compose stays
-// the orchestrator here (see .notes/PLAN.md for why).
+// the orchestrator here.
 public static class Extensions
 {
     // Names of custom ActivitySources this solution's own code creates (e.g. for RabbitMQ

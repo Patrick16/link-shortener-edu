@@ -16,8 +16,8 @@ public sealed class MongoClickMetaStore : IClickMetaStore
     // .clicks (sandbox/infra/clickhouse/init.sql) so the story is consistent across every store
     // this project writes click data to, not a value with any other significance. Mongo's TTL
     // monitor runs roughly once a minute and deletes expired documents on its own - no job to build
-    // or schedule, unlike Postgres's partition-drop (see .notes/PLAN.md's Scenario 4 Infra section)
-    // or ClickHouse's merge-time TTL enforcement.
+    // or schedule, unlike Postgres's partition-drop (see PartitionMaintenanceWorker) or
+    // ClickHouse's merge-time TTL enforcement.
     private static readonly TimeSpan RetentionWindow = TimeSpan.FromDays(90);
 
     private readonly IMongoDatabase _database;

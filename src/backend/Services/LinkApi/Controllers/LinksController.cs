@@ -1,4 +1,4 @@
-﻿using System.IdentityModel.Tokens.Jwt;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using Common;
 using Common.Models;
@@ -160,7 +160,7 @@ public class LinksController(
 
     [HttpGet("{hash}")]
     public async Task<ActionResult<LinkResponse>> GetLink(
-        [FromRoute] string hash,CancellationToken cancellationToken)
+        [FromRoute] string hash, CancellationToken cancellationToken)
     {
         async Task<Link?> Fetch()
         {
@@ -168,7 +168,7 @@ public class LinksController(
             return res;
         }
         var res = await _service.GetOrFetch(hash, fetchFromDb: Fetch, cancellationToken);
-        if(res is null)
+        if (res is null)
         {
             return NotFound();
         }
