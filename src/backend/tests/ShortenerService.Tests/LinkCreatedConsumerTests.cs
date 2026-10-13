@@ -79,6 +79,67 @@ public class LinkCreatedConsumerTests
     }
 
     [Fact]
+    public async Task HandleBatchAsync_ConcurrentWorkersRaceSameHash_BothSucceedAndPersistOnce()
+    {
+        // shortener-service is a scalable, competing-consumers service: a redelivered message can
+        // land on a different replica than the one that first saw it, so two independent
+        // IDbContextFactory-backed DbContexts (not this file's usual shared EF Core InMemory
+        // database, which serializes everything through one in-process lock and so could never
+        // actually race) can both run HandleBatchAsync for the same hash at once - both see it as
+        // "not yet stored", both try to insert it, and exactly one hits a real unique-key violation
+        // against Postgres. A real on-disk SQLite file with Pooling=False and a busy timeout (same
+        // reasoning as RefreshTokenServiceTests.RotateAsync_TwoConcurrentCallsWithSameToken...) is
+        // what lets the two calls genuinely overlap through SQLite's own row-level locking, rather
+        // than this test's own await ordering deciding who "wins".
+        var dbPath = Path.Combine(Path.GetTempPath(), $"link-created-race-{Guid.NewGuid()}.db");
+        try
+        {
+            DbContextOptions<DatabaseContext> NewOptions() =>
+                new DbContextOptionsBuilder<DatabaseContext>()
+                    .UseSqlite($"Data Source={dbPath};Pooling=False;Default Timeout=5")
+                    .Options;
+
+            await using (var bootstrap = new DatabaseContext(NewOptions()))
+            {
+                await bootstrap.Database.EnsureCreatedAsync();
+            }
+
+            IDbContextFactory<DatabaseContext> NewFileFactory()
+            {
+                var factory = new Mock<IDbContextFactory<DatabaseContext>>();
+                factory.Setup(x => x.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(() => new DatabaseContext(NewOptions()));
+                return factory.Object;
+            }
+
+            var sutA = NewSut(NewFileFactory());
+            var sutB = NewSut(NewFileFactory());
+            var @event = NewEvent();
+
+            var taskA = sutA.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+            var taskB = sutB.HandleBatchAsync(NewBatch(@event), CancellationToken.None);
+            var outcomes = await Task.WhenAll(taskA, taskB);
+
+            // Neither call throws the unique-key violation out to the caller - it's caught and
+            // retried against the now-current state (see HandleBatchAsync's own DbUpdateException
+            // catch), not left to propagate into RabbitMqConsumer.HandleBatchFailureAsync, which
+            // would nack-with-requeue every other, unrelated message riding along in either real
+            // batch just because of this one hash's race.
+            Assert.All(outcomes, o => Assert.Equal(BatchOutcome.Success, o));
+
+            await using var verify = new DatabaseContext(NewOptions());
+            Assert.Equal(1, await verify.Links.CountAsync());
+        }
+        finally
+        {
+            if (File.Exists(dbPath))
+            {
+                File.Delete(dbPath);
+            }
+        }
+    }
+
+    [Fact]
     public async Task HandleBatchAsync_NewLink_PreWarmsCache()
     {
         // Regression: without this, RedirectApi's Redis cache was only ever populated lazily on its
