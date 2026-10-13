@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import type { DeadLetterQueueStats } from '../types/controlApi'
 import type { CapabilityControlProps } from '../utils/capabilityControlProps'
@@ -18,6 +18,15 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
   const [clearing, setClearing] = useState(false)
   const [clearResult, setClearResult] = useState<string | null>(null)
   const [clearError, setClearError] = useState<string | null>(null)
+  // Guards clearDlq's setState calls the same way the poll loop's own `cancelled` flag below guards
+  // its own - a ref (not state) since unmount detection doesn't need to trigger a re-render, and a
+  // plain boolean captured by the poll loop's closure wouldn't survive across clearDlq's own calls.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -45,17 +54,18 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
     setClearResult(null)
     try {
       const res = await controlApi.clearDlq()
+      if (!mountedRef.current) return
       setClearResult(res.cleared === 0 ? 'Nothing to clear.' : `Cleared ${res.cleared} message${res.cleared === 1 ? '' : 's'}.`)
       // The poll loop above would pick this up within DLQ_POLL_MS anyway, but refetching right away
       // avoids the counters looking stuck at their pre-clear values for up to 3s after a successful clear.
       controlApi
         .getDlqStats()
-        .then(setDlqStats)
+        .then((s) => mountedRef.current && setDlqStats(s))
         .catch(() => {})
     } catch (err) {
-      setClearError(err instanceof ControlApiError ? err.message : String(err))
+      if (mountedRef.current) setClearError(err instanceof ControlApiError ? err.message : String(err))
     } finally {
-      setClearing(false)
+      if (mountedRef.current) setClearing(false)
     }
   }
 
