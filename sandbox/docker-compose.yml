@@ -1233,8 +1233,8 @@ services:
   control-api:
     logging: *default-logging
     build:
-      context: ./infra/control-api
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: sandbox/infra/control-api/Dockerfile
     ports:
       # Bound to loopback, not all interfaces: this holds the host's Docker socket (root-equivalent
       # control over every container in this compose project) with no authentication on top of it -

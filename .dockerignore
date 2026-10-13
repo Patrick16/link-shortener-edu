@@ -5,6 +5,13 @@
 .notes/
 .claude/
 docs/
-sandbox/
+# Excluded wholesale except control-api, which the control-api Dockerfile builds from this same
+# repo-root context (needed so it can also reach the root Directory.Packages.props) - the
+# `dir/*` + `!dir/sub` pairs are required because a plain trailing-slash exclusion can't be
+# selectively un-excluded below it.
+sandbox/*
+!sandbox/infra
+sandbox/infra/*
+!sandbox/infra/control-api
 src/frontend/**/node_modules/
 src/frontend/**/dist/

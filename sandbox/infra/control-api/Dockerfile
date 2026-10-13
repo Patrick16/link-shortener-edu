@@ -9,9 +9,13 @@ COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-compose /
 
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY ["ControlApi.csproj", "./"]
-RUN dotnet restore "ControlApi.csproj"
+COPY ["sandbox/infra/control-api/ControlApi.csproj", "sandbox/infra/control-api/"]
+# Central package management: csproj files have no Version attribute, so restore needs this
+# file present before it can resolve package versions.
+COPY ["Directory.Packages.props", "./"]
+RUN dotnet restore "sandbox/infra/control-api/ControlApi.csproj"
 COPY . .
+WORKDIR "/src/sandbox/infra/control-api"
 RUN dotnet build "ControlApi.csproj" -c Release -o /app/build
 
 FROM build AS publish
@@ -20,5 +24,5 @@ RUN dotnet publish "ControlApi.csproj" -c Release -o /app/publish /p:UseAppHost=
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
-COPY k6-scripts ./k6-scripts
+COPY sandbox/infra/control-api/k6-scripts ./k6-scripts
 ENTRYPOINT ["dotnet", "ControlApi.dll"]
