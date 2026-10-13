@@ -14,11 +14,17 @@ public sealed class LocalPublishQueueWorker(
 {
     private const int WorkerCount = 8;
 
-    private readonly CancellationTokenSource _forceStopCts = new();
+    // Recreated on every StartAsync, not just at construction - IHostedService.StartAsync can be
+    // called more than once against the same instance (e.g. a reused test host), and a CTS already
+    // cancelled by a prior StopAsync would make every worker die immediately on the next start.
+    private CancellationTokenSource _forceStopCts = new();
     private readonly List<Task> _workers = [];
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        _forceStopCts = new CancellationTokenSource();
+        _workers.Clear();
+
         for (var i = 0; i < WorkerCount; i++)
         {
             // Task.Run, not awaited here - each loop runs for the lifetime of the host, way past this
@@ -56,10 +62,19 @@ public sealed class LocalPublishQueueWorker(
             // the host's own hard-kill timeout doing it anyway with no chance to log first.
             await _forceStopCts.CancelAsync();
 
-            // Taken right after the cancel above, with no further dequeues possible in between (every
-            // worker's ReadAllAsync observes _forceStopCts and stops pulling from the channel) - an
-            // accurate count of whatever never made it to PublishAsync, logged once here instead of
-            // racing all WorkerCount workers to drain-and-log their own partial share of it.
+            // The cancel above is a request, not a guarantee the loops have actually returned yet -
+            // without waiting here, this method could return (and the host go on to dispose shared
+            // resources a worker is still mid-Publish against) while a worker is still unwinding.
+            // No further timeout: every worker's ReadAllAsync observes _forceStopCts synchronously
+            // on its next await, so this resolves in practice as soon as each one's current iteration
+            // yields.
+            await Task.WhenAll(_workers);
+
+            // Taken right after the workers above have actually stopped, with no further dequeues
+            // possible by then (every worker's ReadAllAsync observed _forceStopCts and stopped pulling
+            // from the channel) - an accurate count of whatever never made it to PublishAsync, logged
+            // once here instead of racing all WorkerCount workers to drain-and-log their own partial
+            // share of it.
             var abandoned = queue.Reader.Count;
             if (abandoned > 0)
             {

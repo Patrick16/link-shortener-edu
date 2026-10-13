@@ -18,11 +18,20 @@ public static class BottleneckAdvisor
     // normalized per CORE: 100% means one full core saturated, and a container can show hundreds
     // of percent on a many-core host without the host itself being anywhere near saturated -
     // confirmed live (rabbitmq showed 593% during a small run on a 32-core machine). Dividing by
-    // the core count this control-api process itself sees turns it into "% of total host capacity"
-    // before comparing against thresholds.HighCpuPercent or showing it in evidence text - Environment.
-    // ProcessorCount matches ContainerLifecycleService's own onlineCpus fallback reasoning (both assume the
-    // container sees the host's full core set, true for this stack since nothing here sets a
-    // per-container cpuset/cpu-quota limit).
+    // Environment.ProcessorCount (this control-api process's own visible core count, used as a
+    // stand-in for every node's) turns it into "% of total host capacity" before comparing against
+    // thresholds.HighCpuPercent or showing it in evidence text.
+    //
+    // Known limitation, not fixed here: this assumes every node sees the host's full core set, which
+    // is only true for the services that don't have a `cpus:` limit in docker-compose.yml (most of
+    // them). link-api/redirect-api are capped at `cpus: "1.5"` - .NET inside those two containers
+    // picks up the cgroup quota on its own (their own Environment.ProcessorCount reflects ~2, not the
+    // host's full count), so this rule is reasonably accurate for them, but for every unlimited
+    // service on a many-core host the denominator is too large and HighCpuPercent becomes close to
+    // unreachable (e.g. one saturated core on a 32-core host normalizes to ~3%). A correct fix needs
+    // each node's actual configured limit (readable from Docker's own container inspect,
+    // HostConfig.NanoCpus/CpuQuota), not a single process-wide constant - a bigger change than this
+    // comment's scope, left for whoever picks this up next.
     private static double NormalizedCpuPercent(double rawCpuPercent) => rawCpuPercent / Environment.ProcessorCount;
 
     private static readonly IReadOnlyDictionary<string, string> NodeTypes = new Dictionary<string, string>

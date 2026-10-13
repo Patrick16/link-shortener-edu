@@ -26,10 +26,16 @@ $outFile = Join-Path $backupsDir "postgres-$timestamp.sql"
 Push-Location $sandboxRoot
 try {
     Write-Host "==> Dumping all databases from the postgres container" -ForegroundColor Cyan
-    docker compose exec -T postgres pg_dumpall -U postgres | Out-File -FilePath $outFile -Encoding utf8
+    $dump = docker compose exec -T postgres pg_dumpall -U postgres | Out-String
     if ($LASTEXITCODE -ne 0) {
         Write-Error 'pg_dumpall failed - see output above.'
     }
+
+    # Out-File -Encoding utf8 adds a BOM on Windows PowerShell 5.1 (fixed in PowerShell 7, but this
+    # script has to run on both) - a BOM at the start of the file makes psql choke on restore. The
+    # fix (-Encoding utf8NoBOM) isn't a valid value on 5.1 at all, so writing via the .NET API
+    # directly is the one approach that's actually BOM-free on both.
+    [System.IO.File]::WriteAllText($outFile, $dump, [System.Text.UTF8Encoding]::new($false))
 } finally {
     Pop-Location
 }

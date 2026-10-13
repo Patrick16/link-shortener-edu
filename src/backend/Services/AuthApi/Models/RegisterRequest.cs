@@ -4,6 +4,7 @@ namespace AuthApi.Models;
 
 public class RegisterRequest
 {
+    [MaxLength(100, ErrorMessage = "Name must be at most 100 characters long.")]
     public required string Name { get; init; }
 
     // Also rejects whitespace-only input (e.g. "   ") before it reaches AuthController's

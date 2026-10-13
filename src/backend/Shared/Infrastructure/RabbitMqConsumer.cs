@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -148,11 +149,18 @@ public sealed class RabbitMqConsumer(
         CancellationToken cancellationToken)
     {
         using var activity = StartConsumerActivity(ea);
-        var messageId = ea.BasicProperties.MessageId ?? ea.DeliveryTag.ToString();
 
         // Snapshotted before any await - RabbitMQ.Client may reuse ea.Body's underlying buffer once
         // this handler yields, so anything read from it has to happen synchronously up front.
         var rawBody = ea.Body.ToArray();
+
+        // DeliveryTag changes on every redelivery of the same logical message, so it can't be used
+        // as _deliveryAttempts' key - a message without a MessageId would then get a fresh key (and
+        // a fresh attempt count of 1) on every redelivery, never tripping MaxDeliveryAttempts and
+        // hot-looping forever instead of eventually dead-lettering. Every publisher in this project
+        // sets MessageId, so this only matters for a hypothetical external one; a hash of the body
+        // is stable across redeliveries of that same message, unlike DeliveryTag.
+        var messageId = ea.BasicProperties.MessageId ?? $"sha256:{Convert.ToHexString(SHA256.HashData(rawBody))}";
 
         TMessage? message;
         try

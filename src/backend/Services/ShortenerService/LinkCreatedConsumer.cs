@@ -47,7 +47,35 @@ public sealed class LinkCreatedConsumer(
         var newLinks = distinctByHash.Where(x => !alreadyStored.Contains(x.Hash)).ToList();
         var newLinkEntities = newLinks.Select(e => new Link(e.Hash, e.OriginalLink, e.ShortenLink, e.CreatedAt, e.UserId)).ToList();
         context.Links.AddRange(newLinkEntities);
-        await context.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            // A second replica of this same consumer (competing consumers on one queue - shortener-
+            // service can be scaled to N instances) can race this exact check: both see a hash as
+            // "not yet stored" above and both try to insert it, one wins, the other hits this unique
+            // violation. Without this catch, the whole batch would propagate up to
+            // RabbitMqConsumer.HandleBatchFailureAsync and nack-with-requeue every other, unrelated
+            // message in it too, just to retry one real conflict. Detaching and re-checking against
+            // Postgres keeps the race local to the one hash it actually affects.
+            foreach (var entry in context.ChangeTracker.Entries<Link>().ToList())
+            {
+                entry.State = EntityState.Detached;
+            }
+
+            var nowStored = await context.Links
+                .Where(x => hashes.Contains(x.Hash))
+                .Select(x => x.Hash)
+                .ToHashSetAsync(cancellationToken);
+            newLinkEntities = newLinkEntities.Where(x => !nowStored.Contains(x.Hash)).ToList();
+            newLinks = newLinks.Where(x => !nowStored.Contains(x.Hash)).ToList();
+
+            context.Links.AddRange(newLinkEntities);
+            await context.SaveChangesAsync(cancellationToken);
+        }
 
         // Pre-warms Redis right after the row genuinely exists in Postgres - without this,
         // RedirectApi's cache only ever gets populated lazily on its own miss, so a client that
@@ -59,10 +87,11 @@ public sealed class LinkCreatedConsumer(
             await _cache.CacheAsync(link, link.Hash, cancellationToken);
         }
 
-        if (alreadyStored.Count > 0)
+        var skippedCount = distinctByHash.Count - newLinks.Count;
+        if (skippedCount > 0)
         {
             _logger.LogInformation(
-                "{Count} link(s) in this batch were already persisted, skipping their inserts", alreadyStored.Count);
+                "{Count} link(s) in this batch were already persisted, skipping their inserts", skippedCount);
         }
 
         _logger.LogInformation("Persisted {Count} new link(s) from this batch", newLinks.Count);

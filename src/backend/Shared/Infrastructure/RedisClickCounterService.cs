@@ -12,6 +12,13 @@ public class RedisClickCounterService(
     IConnectionMultiplexer connectionMultiplexer,
     ILogger<RedisClickCounterService> logger) : IClickCounterService
 {
+    // Sliding, not absolute - refreshed on every click (below) so a link still being clicked never
+    // loses its counter. Without any TTL at all, every hash ever created keeps its own key forever,
+    // even long after the link stopped being clicked - an unbounded memory leak at scale. Postgres
+    // (Links.ClickCount) is the durable count regardless, so losing a cold key here is just a UI
+    // number resetting to 0 on its next click, not data loss.
+    private static readonly TimeSpan CounterTtl = TimeSpan.FromDays(7);
+
     private readonly IConnectionMultiplexer _connectionMultiplexer = connectionMultiplexer;
     private readonly ILogger<RedisClickCounterService> _logger = logger;
 
@@ -20,7 +27,9 @@ public class RedisClickCounterService(
         try
         {
             var db = _connectionMultiplexer.GetDatabase();
-            await db.StringIncrementAsync($"link:{hash}:clicks");
+            var key = $"link:{hash}:clicks";
+            await db.StringIncrementAsync(key);
+            await db.KeyExpireAsync(key, CounterTtl);
         }
         catch (RedisException ex)
         {

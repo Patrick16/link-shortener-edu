@@ -28,36 +28,45 @@ public sealed class TrafficRunCoordinator(
     IOptions<BottleneckThresholds> bottleneckThresholds,
     ILogger<TrafficRunCoordinator> logger)
 {
-    // 0 = idle, 1 = running.
-    private int _runActive;
-
-    // Set right before the run's Task.Run starts and cleared in its finally, guarded the same way as
-    // _runActive (only one run - and so only one writer - at a time). Volatile.Read/Write rather than
-    // a plain field so TryCancel, called from a different request's thread, is guaranteed to see the
-    // latest value instead of a stale cached one.
+    // Guards _runActive and _runCts together so TryStart's claim-and-publish is atomic from
+    // TryCancel's point of view - with those as two separate lock-free steps (the previous
+    // Interlocked.CompareExchange + Volatile.Write), a TryCancel landing in the gap between them
+    // could read a stale/null _runCts and report "no active run" even though _runActive was
+    // already claimed. Called at human-interaction rate (Start/Cancel buttons), never on a hot
+    // path, so a real lock costs nothing here.
+    private readonly Lock _gate = new();
+    private bool _runActive;
     private CancellationTokenSource? _runCts;
 
     // Returns false when another run already holds the slot. Callers validate the request first: the
     // slot is only claimed here, so a rejected request never blocks a real run from starting.
     public bool TryStart(TrafficRequest request)
     {
-        if (Interlocked.CompareExchange(ref _runActive, 1, 0) != 0)
+        CancellationTokenSource cts;
+        lock (_gate)
         {
-            return false;
+            if (_runActive)
+            {
+                return false;
+            }
+
+            _runActive = true;
+            cts = new CancellationTokenSource();
+            _runCts = cts;
         }
 
-        var cts = new CancellationTokenSource();
-        Volatile.Write(ref _runCts, cts);
         _ = Task.Run(() => RunAsync(request, cts));
         return true;
     }
 
-    // Read-then-Cancel is fine without a lock: at most one run (and so one CancellationTokenSource)
-    // is ever active at a time, and the reference is only ever nulled out after the run has already
-    // stopped reading from it, so a cancel that lands after that just sees null.
     public bool TryCancel()
     {
-        var activeCts = Volatile.Read(ref _runCts);
+        CancellationTokenSource? activeCts;
+        lock (_gate)
+        {
+            activeCts = _runCts;
+        }
+
         if (activeCts is null)
         {
             return false;
@@ -95,8 +104,7 @@ public sealed class TrafficRunCoordinator(
             // above, and nothing else SaveSnapshotAsync touches depends on _runActive. Without this,
             // a new run attempted during that delay gets rejected with a stale 409 even though
             // nothing is visibly running anymore.
-            Volatile.Write(ref _runCts, null);
-            Volatile.Write(ref _runActive, 0);
+            ReleaseSlot();
 
             if (report is not null)
             {
@@ -121,8 +129,16 @@ public sealed class TrafficRunCoordinator(
         {
             // No-op on the success path (already reset above, before SaveSnapshotAsync) - this is
             // the safety net for the cancellation/exception paths, which never reach that early reset.
-            Volatile.Write(ref _runCts, null);
-            Volatile.Write(ref _runActive, 0);
+            ReleaseSlot();
+        }
+    }
+
+    private void ReleaseSlot()
+    {
+        lock (_gate)
+        {
+            _runCts = null;
+            _runActive = false;
         }
     }
 
