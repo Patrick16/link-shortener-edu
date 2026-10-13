@@ -44,12 +44,27 @@ node's Pitfalls for the two real DNS bugs that proved why.
 Every DB-touching service's `DB_HOST` default points here (`haproxy:6432`), not at `pgcat` — one
 line in `InfraToggleService` is what the pgcat-bypass control actually pivots on.
 
+**The standing "stop/start this container" toggle.** Unlike the pre-existing standing toggles
+(nginx bypass, pgcat bypass, cache, messaging mode — each of which reroutes *consumers* around the
+thing being bypassed via an env-var recreate), HAProxy also gets a toggle that stops/starts the real
+`haproxy` container itself (`InfraToggleService.SetHaproxyEnabledAsync`), so a user can watch every
+DB-touching request fail even though PgCat's 3 replicas underneath are perfectly healthy — a live
+single-point-of-failure demo for the whole pooler layer, not a graceful bypass. It lives in the
+architecture-map UI's global "Topology" modal, nested directly under "Connection pooling (pgcat)"
+(not on this node's own panel) — reflecting that it's only meaningful while pgcat is in play. Three
+rules govern the coupling: turning pgcat off force-stops haproxy as a side effect; turning pgcat back
+on does **not** auto-start haproxy (bringing a node up is always an explicit action); and the
+standalone toggle rejects turning haproxy on while pgcat is off. `InfraStatus.HaproxyEnabled` is
+deliberately **not cached** — see this node's Pitfalls below for why.
+
 ## Pitfalls
 
 - 🐛 [A statically-resolved backend hostname failed on first boot against Docker's embedded DNS](pitfall:haproxy-static-resolve-races-docker-dns)
   (infrastructure-bug) — fixed
 - 🐛 [Scaling a Compose service made per-replica hostnames stop resolving entirely](pitfall:haproxy-server-template-replaces-static-server-list)
   (infrastructure-bug) — fixed
+- ⚠️ [A cached "is it running" flag went stale the instant a second, unguarded control path touched the same container](pitfall:haproxy-toggle-cached-state-bypassed-by-generic-controls)
+  (concurrency) — fixed
 
 ## Relatives
 

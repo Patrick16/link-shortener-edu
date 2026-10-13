@@ -71,6 +71,14 @@ scaling through the generic control without also recalculating and reapplying `p
 silently risk exhausting real Postgres connections, not just fail loudly the way a missing route
 would.
 
+**A live failure-demo control for this pattern.** Beyond the pgcat-bypass standing toggle (which
+reroutes DB-touching services around the whole pooler layer, replicas included), there's a separate
+toggle that stops/starts the real `haproxy` container itself — see [HAProxy](node:haproxy)'s own
+"standing toggle" section for the mechanics. It's the one way to demonstrate live that PgCat's 3
+replicas being perfectly healthy doesn't help if the single load balancer in front of them is down —
+every DB-touching service keeps dialing `haproxy:6432` regardless, so this is a genuine outage, not a
+graceful bypass. Only meaningful (and only legal to re-enable) while pgcat itself is on.
+
 ## How it's implemented here
 
 ```yaml
