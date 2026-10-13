@@ -11,6 +11,12 @@ export function createTopLinksConnection(): HubConnection {
   return new HubConnectionBuilder()
     .withUrl(`${REPORTING_API_URL}/hub/top-links`, {
       accessTokenFactory: () => getAccessToken() ?? '',
+      // Auth is the bearer token, not cookies. The SignalR client sends credentials by default, and
+      // a cross-origin credentialed request needs Access-Control-Allow-Credentials on the server,
+      // which ReportingApi deliberately doesn't grant - so the browser rejects negotiate and the
+      // panel stays offline. Turning credentials off avoids that and leaves no cookie for an XSS to
+      // ride on.
+      withCredentials: false,
     })
     .withAutomaticReconnect()
     .configureLogging(LogLevel.Warning)

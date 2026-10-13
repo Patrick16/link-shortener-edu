@@ -37,10 +37,11 @@ public class RedisClickCounterService(
 
             await Task.WhenAll(increment, expire, publish);
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Same fail-open stance as EntityCacheService: a Redis hiccup shouldn't take the redirect
-            // down with it. The lost click only costs one entry in a rolling top list.
+            // Fail-open: a Redis failure of any kind (including timeouts, which don't derive from
+            // RedisException) must not turn an already-dispatched click into a failed redirect. The
+            // lost click only costs one entry in a rolling top list.
             _logger.LogWarning(ex, "Failed to record click for hash {Hash} in the top-links counter", hash);
         }
     }

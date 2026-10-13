@@ -95,6 +95,33 @@ describe('useTopLinks', () => {
     await waitFor(() => expect(result.current.status).toBe('offline'))
   })
 
+  it('retries a failed start after the delay and recovers to live', async () => {
+    vi.useFakeTimers()
+    try {
+      const connection = fakeConnection()
+      connection.start.mockReset()
+      connection.start
+        .mockRejectedValueOnce(new Error('hub unreachable'))
+        .mockResolvedValue(undefined)
+      vi.mocked(topLinksApi.createTopLinksConnection).mockReturnValue(connection as never)
+
+      const { result } = renderHook(() => useTopLinks(true))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(result.current.status).toBe('offline')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000)
+      })
+
+      expect(connection.start).toHaveBeenCalledTimes(2)
+      expect(result.current.status).toBe('live')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('stops the connection on unmount', async () => {
     const connection = fakeConnection()
     vi.mocked(topLinksApi.createTopLinksConnection).mockReturnValue(connection as never)

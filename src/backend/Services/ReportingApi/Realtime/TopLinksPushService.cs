@@ -31,15 +31,7 @@ public sealed class TopLinksPushService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await _connectionMultiplexer.GetSubscriber().SubscribeAsync(
-            RedisChannel.Literal(TopLinks.ChangedChannel),
-            (_, message) =>
-            {
-                if (Guid.TryParseExact(message.ToString(), "N", out var userId))
-                {
-                    _scheduler.MarkDirty(userId);
-                }
-            });
+        await SubscribeWithRetryAsync(stoppingToken);
 
         using var timer = new PeriodicTimer(CheckInterval);
         while (await timer.WaitForNextTickAsync(stoppingToken))
@@ -48,10 +40,43 @@ public sealed class TopLinksPushService(
             {
                 if (!_subscriptions.IsWatched(userId))
                 {
+                    _scheduler.Forget(userId);
                     continue;
                 }
 
                 await PushAsync(userId, stoppingToken);
+            }
+        }
+    }
+
+    // Only the first subscribe needs this: once established, StackExchange.Redis re-subscribes on
+    // its own after a reconnect. Retrying here keeps a Redis outage at boot from stopping the host,
+    // which would also take down the ClickHouse report endpoints this service serves.
+    private async Task SubscribeWithRetryAsync(CancellationToken stoppingToken)
+    {
+        var delay = TimeSpan.FromSeconds(1);
+        while (true)
+        {
+            try
+            {
+                await _connectionMultiplexer.GetSubscriber().SubscribeAsync(
+                    RedisChannel.Literal(TopLinks.ChangedChannel),
+                    (_, message) =>
+                    {
+                        // Only watched users need a push. Marking every owner dirty would leave
+                        // throttle state behind for each one, since most owners never have a dashboard open.
+                        if (Guid.TryParseExact(message.ToString(), "N", out var userId) && _subscriptions.IsWatched(userId))
+                        {
+                            _scheduler.MarkDirty(userId);
+                        }
+                    });
+                return;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Failed to subscribe to {Channel}, retrying in {Delay}", TopLinks.ChangedChannel, delay);
+                await Task.Delay(delay, stoppingToken);
+                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, TimeSpan.FromSeconds(30).Ticks));
             }
         }
     }
@@ -68,6 +93,17 @@ public sealed class TopLinksPushService(
             }
 
             _scheduler.RecordPayload(userId, payload);
+
+            // Re-checked after recording: a disconnect that landed during the query above would
+            // otherwise have its Forget() run before RecordPayload re-added this user's payload.
+            // Recording first and checking second closes that window, since a disconnect always
+            // updates the subscription registry before it calls Forget().
+            if (!_subscriptions.IsWatched(userId))
+            {
+                _scheduler.Forget(userId);
+                return;
+            }
+
             await _hub.Clients.Group(TopLinksHub.GroupFor(userId))
                 .SendAsync(TopLinksHub.TopLinksMethod, top, cancellationToken);
         }

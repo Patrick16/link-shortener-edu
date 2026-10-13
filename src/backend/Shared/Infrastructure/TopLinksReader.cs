@@ -41,7 +41,7 @@ public sealed class RedisTopLinksReader(
                 .Select(entry => new TopLinkEntry((string)entry.Element!, (long)entry.Score))
                 .ToList();
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Returns an empty list instead of failing the connection, so the dashboard keeps working.
             // While Redis is down it shows "no recent clicks", which is wrong but harmless, and the
