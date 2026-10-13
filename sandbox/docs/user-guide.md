@@ -239,11 +239,23 @@ Here's what each one actually does, grouped by the node that carries it.
 - *Npgsql client pool size* — the **client-side** pool (distinct from PgCat's own server-side one),
   across every DB-touching service. Recreates those 5 services.
 - *Connections* — a read-only table, polled every 3s, of client vs. server connection counts per
-  pool (`clients: apps → pgcat`, `servers: pgcat → postgres`).
+  pool, **broken out per replica** (`pgcat-1`/`pgcat-2`/`pgcat-3`) since PgCat is 3 identical
+  instances behind HAProxy now, not one — see
+  [Pooler scaling](scenarios/patterns/pooler-scaling.md).
 
 ![Pool settings: mode, read/write splitting, pool size, Npgsql pool size](assets/user-guide/pgcat-panel-2.jpg)
 
-![PgCat's live connections table and a per-instance CPU/Memory sparkline](assets/user-guide/pgcat-panel-3-connections.jpg)
+![PgCat's live per-replica connections table and CPU/Memory sparklines](assets/user-guide/pgcat-panel-3-connections.jpg)
+
+**HAProxy** — the load balancer in front of PgCat's 3 replicas gets one read-only capability: live
+per-backend status and session counts, polled from HAProxy's own stats endpoint (no docker-exec,
+unlike every other capability above):
+
+![HAProxy's panel: 3 pgcat backends UP, 3 reserved slots DOWN (unused headroom)](assets/user-guide/haproxy-panel-backends.jpg)
+
+`pgcat4`/`pgcat5`/`pgcat6` showing `DOWN` is expected, not a problem — `server-template` reserves 2×
+headroom over the 3 replicas that actually exist (see [HAProxy](scenarios/nodes/haproxy.md)), and an
+unused slot has nothing to connect to.
 
 **Redis (master)** — caching toggle and a manual flush:
 
@@ -315,7 +327,9 @@ elsewhere. Columns are click-to-sort; each row can be unpinned individually.
 
 Click the **k6 (load test)** node to open its configuration panel. It isn't a real
 docker-compose service with persistent state — it's a one-off container control-api spins up per
-run — so selecting it only configures the *next* run, nothing live.
+run — so selecting it only configures the *next* run, nothing live. For what actually matters once
+you're pushing real throughput (config knobs, real bugs only load reveals), see
+[`load-testing.md`](load-testing.md) — this section is only the UI mechanics.
 
 **What to call** — pick a service and one of its real endpoints, then **+ Add step** to append it
 to an ordered sequence (order matters: a "Create link" step produces a hash a later "Resolve link"
@@ -572,5 +586,7 @@ A short loop that touches most of what's above:
   `scenarios/patterns/`, and `scenarios/pitfalls/` (real bugs found and fixed, with before/after
   snippets).
 - [`pgcat-pool-sizing.md`](pgcat-pool-sizing.md) — the reasoning behind PgCat's default pool sizes.
+- [`load-testing.md`](load-testing.md) — config that actually matters for real throughput, and real
+  bugs found only by running a load test against the live stack.
 - [`adding-a-component.md`](adding-a-component.md) — how to add a new node or a new
   component-specific control to architecture-map yourself.

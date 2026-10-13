@@ -80,6 +80,7 @@ Verified by reading the code and by `TopLinksPushSchedulerTests`. Memory growth 
 
 ### Nodes
 
+- [ReportingApi](node:reporting-api) — hosts the push service this leak was in
 - [Redis](node:redis-master) — its pub/sub channel drives the push loop that marked every owner dirty
 
 ### Patterns

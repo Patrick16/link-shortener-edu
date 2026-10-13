@@ -47,6 +47,7 @@ loop under a real outage.
 
 ### Nodes
 
+- [ReportingApi](node:reporting-api) — the host this crashed at boot
 - [Redis](node:redis-master) — the dependency whose unavailability at boot took the host down
 - [Redis Sentinel](node:redis-sentinel-1) — the endpoint that was not yet reachable during parallel startup
 

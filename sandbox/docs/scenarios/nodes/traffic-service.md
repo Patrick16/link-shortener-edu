@@ -77,6 +77,8 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
 
 ## Pitfalls
 
+- 🐛 [A session-scoped advisory lock could be released on the wrong connection](pitfall:partition-maintenance-advisory-lock-session-mismatch)
+  (connection-pooling) — fixed
 - 🐛 [Mongo ClickMeta write was permanently skipped after a Postgres-committed redelivery](pitfall:traffic-mongo-write-skipped-on-redelivery)
   (resilience-gap) — fixed
 - 🐛 [Docker-internal IPs were misclassified as public, hitting a real external API on every click](pitfall:traffic-geoip-dualstack-misclassified)
@@ -94,9 +96,11 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
 
 - [RedirectApi](node:redirect-api) — publishes what this node consumes
 - [ShortenerService](node:shortener-service) — the other, independent `ClickTrackedEvent` consumer
+- [ReportingService](node:reporting-service) — a third, independent `ClickTrackedEvent` consumer (CQRS fan-out)
 - [RabbitMQ](node:rabbitmq)
 - [clicks_db](node:clicks-db)
 
 ### Patterns
 
 - [Async messaging](pattern:async-messaging)
+- [Data retention](pattern:data-retention-partitioning) — this node owns `clicks_db`'s partitioning and its maintenance job

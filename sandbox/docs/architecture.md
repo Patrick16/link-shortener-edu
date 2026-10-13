@@ -44,7 +44,7 @@ schemas) — closer to real microservice isolation, and it's the model `pgcat` p
 - `Redis Links` — cache of hash → link for fast redirects (shared key format across LinkApi/RedirectApi)
 - `clicks_db` (owned by TrafficService) — Clicks(id, clickedAt, inboundLink, outboundLink, hash),
   **natively partitioned** by `clickedAt` (`PARTITION BY RANGE`, monthly) — see
-  `scenarios/04-partitioning.md`
+  `scenarios/patterns/data-retention-partitioning.md`
 - `clicks_meta_db` (Mongo, owned by TrafficService) — clicks collection, one ClickMeta document per
   click, `_id` = the same id as the Postgres row: (hash, clickedAt, userAgent, referrer, ipAddress,
   browser?, os?, deviceType?, country?, city?)
@@ -123,14 +123,15 @@ Short version of what's real today:
   clause covering the other two click-data stores, plus a partition-maintenance job
   (`PartitionMaintenanceWorker`) that creates future partitions ahead of time and drops ones past
   the retention window — built 2026-10-09, closing the one gap this entry used to flag. Full
-  write-up: **[`scenarios/04-partitioning.md`](scenarios/04-partitioning.md)**.
+  write-up: **[`scenarios/patterns/data-retention-partitioning.md`](scenarios/patterns/data-retention-partitioning.md)**.
 - **Pooler scaling is built** — pgcat scaled to 3 identical replicas (`deploy.replicas`, same
   native mechanism link-api/redirect-api/etc. use when scaled — one `pgcat` node on the graph with
   a `×3` badge, not 3 separate nodes) behind an HAProxy TCP load balancer (`balance leastconn`,
   native `option pgsql-check`, `server-template` to track the replica count via DNS). `pool_size`
   resized from 40 to 20 to keep the aggregate connection count under Postgres's `max_connections`
   with 3 replicas instead of 1 — see `sandbox/docs/pgcat-pool-sizing.md`'s own addendum for the
-  exact math.
+  exact math, or **[`scenarios/patterns/pooler-scaling.md`](scenarios/patterns/pooler-scaling.md)**
+  for the full write-up.
 
 ## TODO
 

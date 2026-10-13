@@ -50,6 +50,7 @@ behaviour was verified by reading the code.
 ### Nodes
 
 - [RedirectApi](node:redirect-api) — records the click after dispatch and must not fail the redirect
+- [ReportingApi](node:reporting-api) — `RedisTopLinksReader` had the identical catch-too-narrow bug
 - [Redis](node:redis-master) — the dependency whose timeouts escaped the catch
 
 ### Patterns

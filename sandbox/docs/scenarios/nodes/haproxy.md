@@ -1,0 +1,64 @@
+## What it is
+
+A TCP load balancer in front of [PgCat](node:pgcat)'s 3 replicas — the single entry point every
+DB-touching service connects to for Postgres. Nothing connects to a `pgcat` replica directly
+anymore; `DB_HOST` points at `haproxy` everywhere (see [Pooler scaling](pattern:pooler-scaling)).
+
+## What it solves
+
+Scaling PgCat to several replicas (see [Pooler scaling](pattern:pooler-scaling) for why) means
+something has to pick which replica a given connection actually goes to, and detect one that's
+stopped working. A bare round-robin or a DNS round-robin can't tell a pgcat instance that merely
+accepts a TCP connection from one that's up but wedged (out of file descriptors, deadlocked,
+etc.) — this needs a health check that actually speaks the protocol being proxied.
+
+## How it works
+
+HAProxy runs in `mode tcp` for the real Postgres traffic — it doesn't need to understand Postgres's
+wire protocol to balance it, just to pick a backend and pass bytes through unmodified. Health
+checking is the one place protocol awareness matters: `option pgsql-check` sends a real Postgres
+startup packet and only counts a reply as healthy, which catches a wedged instance a plain TCP
+connect check cannot. Balancing is `leastconn` — send the next connection to whichever backend
+currently holds the fewest.
+
+A separate HTTP frontend (port 8405) carries operator/observability surfaces only — HAProxy's
+built-in stats page (`/stats`) and its native Prometheus exporter (`/metrics`, no sidecar container
+needed) — kept off the Postgres-traffic port entirely.
+
+## How it's implemented here
+
+```
+# sandbox/infra/haproxy/haproxy.cfg
+backend pgcat_back
+    balance leastconn
+    option pgsql-check user postgres
+    # pgcat is one Compose service at deploy.replicas: 3, not 3 separately-named services - its DNS
+    # name resolves to however many A records currently exist, not to individually-addressable
+    # hostnames. server-template tracks that at runtime instead of a fixed server list.
+    server-template pgcat 6 pgcat:6432 check inter 3s fall 3 rise 2 resolvers docker_dns init-addr none
+```
+
+`server-template`, not 3 static `server` lines, is load-bearing here, not a style choice — see this
+node's Pitfalls for the two real DNS bugs that proved why.
+
+Every DB-touching service's `DB_HOST` default points here (`haproxy:6432`), not at `pgcat` — one
+line in `InfraToggleService` is what the pgcat-bypass control actually pivots on.
+
+## Pitfalls
+
+- 🐛 [A statically-resolved backend hostname failed on first boot against Docker's embedded DNS](pitfall:haproxy-static-resolve-races-docker-dns)
+  (infrastructure-bug) — fixed
+- 🐛 [Scaling a Compose service made per-replica hostnames stop resolving entirely](pitfall:haproxy-server-template-replaces-static-server-list)
+  (infrastructure-bug) — fixed
+
+## Relatives
+
+### Nodes
+
+- [PgCat](node:pgcat) — the backend this balances across
+- [LinkApi](node:link-api)
+- [RedirectApi](node:redirect-api)
+
+### Patterns
+
+- [Pooler scaling](pattern:pooler-scaling)
