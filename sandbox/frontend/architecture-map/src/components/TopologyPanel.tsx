@@ -16,7 +16,13 @@ const MESSAGING_MODE_OPTIONS: { value: MessagingMode; label: string }[] = [
 ]
 
 function sameStatus(a: InfraStatus, b: InfraStatus): boolean {
-  return a.nginxBypassed === b.nginxBypassed && a.pgcatEnabled === b.pgcatEnabled && a.cacheEnabled === b.cacheEnabled && a.messagingMode === b.messagingMode
+  return (
+    a.nginxBypassed === b.nginxBypassed &&
+    a.pgcatEnabled === b.pgcatEnabled &&
+    a.cacheEnabled === b.cacheEnabled &&
+    a.messagingMode === b.messagingMode &&
+    a.haproxyEnabled === b.haproxyEnabled
+  )
 }
 
 // Global (not node-scoped) modal, same reason PresetsModal is one - this reconfigures several
@@ -113,7 +119,25 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
           description="Off reconnects every DB-touching service straight to Postgres, bypassing pgcat - no pooling, no read/write split across replicas."
           enabled={draft.pgcatEnabled}
           busy={busy}
-          onToggle={(enabled) => setDraft({ ...draft, pgcatEnabled: enabled })}
+          // One-directional, mirroring the backend (SetPgcatEnabledAsync only ever forces haproxy
+          // OFF, never back on): off means the whole pooler layer is off, so haproxy's draft value
+          // is forced false too, not left showing a stale "ON" it's no longer safe to apply. Turning
+          // pgcat back on does NOT restore haproxy's draft value - bringing a node up is always an
+          // explicit action (the sub-toggle below + Save), never an automatic side effect of this one.
+          onToggle={(enabled) => setDraft({ ...draft, pgcatEnabled: enabled, haproxyEnabled: enabled ? draft.haproxyEnabled : false })}
+        />
+        <InfraToggleControl
+          label="HAProxy (in front of pgcat)"
+          description={
+            draft.pgcatEnabled
+              ? 'Off stops the haproxy container itself - DB-touching services keep dialing it anyway (connection pooling is still on), so this is a real single-point-of-failure demo for the pooler layer, not a graceful bypass.'
+              : 'Only meaningful while connection pooling is on - nothing routes through haproxy while pgcat is bypassed.'
+          }
+          enabled={draft.haproxyEnabled}
+          busy={busy}
+          disabled={!draft.pgcatEnabled}
+          nested
+          onToggle={(enabled) => setDraft({ ...draft, haproxyEnabled: enabled })}
         />
         <InfraToggleControl
           label="Caching (Redis)"

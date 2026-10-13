@@ -1,4 +1,5 @@
 using ControlApi.Models;
+using Docker.DotNet.Models;
 
 namespace ControlApi.Services;
 
@@ -40,6 +41,7 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
     private bool _pgcatEnabled = true;
     private bool _cacheEnabled = true;
     private string _messagingMode = "rabbitmq";
+    private bool _haproxyEnabled = true;
 
     // Mirrors RabbitMqConsumer's own hardcoded-turned-configurable default.
     private int _rabbitMqPrefetch = 10;
@@ -130,7 +132,7 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             return poolSize;
         }, ct);
 
-    public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode);
+    public InfraStatus GetInfraStatus() => new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode, _haproxyEnabled);
 
     public InfraStatus SetNginxBypass(bool bypassed)
     {
@@ -165,6 +167,20 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             }
 
             _pgcatEnabled = enabled;
+
+            // One-directional, deliberately: disabling pgcat means the whole pooler layer is off, so
+            // it also stops haproxy rather than leaving it dangling in front of nothing. Re-enabling
+            // pgcat does NOT symmetrically start haproxy back up, though - bringing a node up is an
+            // explicit action (the sub-toggle + Save/Apply), never an automatic side effect of
+            // flipping something else, so haproxy stays off until the user turns it back on
+            // themselves. Calls the un-gated helper directly, not SetHaproxyEnabledAsync itself -
+            // this whole delegate already runs inside RunExclusiveToggleAsync's gate, which isn't
+            // reentrant.
+            if (!enabled)
+            {
+                await SyncHaproxyContainerAsync(false, ct);
+            }
+
             return GetInfraStatus();
         }, ct);
 
@@ -214,5 +230,51 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             _messagingMode = mode;
             return GetInfraStatus();
         }, ct);
+    }
+
+    // Unlike every toggle above, this doesn't touch CurrentStandingEnv or recreate any consumer -
+    // DB_HOST/DB_PORT stay pointed at "haproxy" the whole time (see InfraStatus's own comment on
+    // HaproxyEnabled), so stopping it while pgcat routing is still live genuinely takes the pooler
+    // layer's single entry point down, same as degrading/stopping any other node here. Only legal to
+    // turn ON while pgcat is enabled - SetPgcatEnabledAsync(false) already forces this off as a side
+    // effect (nothing routes through haproxy once pgcat is bypassed), so allowing a standalone "turn
+    // it back on" here while pgcat stays off would just leave a load balancer in front of nothing.
+    // Turning it OFF is always allowed, including while pgcat is already off, so SetPgcatEnabledAsync
+    // and this method never fight over a legal value. Shares the same exclusive gate as the
+    // env-rewriting toggles purely for consistency - nothing else here reads or writes haproxy's
+    // container state outside that gate, so there's no actual race to prevent.
+    public Task<InfraStatus> SetHaproxyEnabledAsync(bool enabled, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            if (enabled && !_pgcatEnabled)
+            {
+                throw new InvalidOperationException("Cannot turn haproxy on while connection pooling (pgcat) is disabled - nothing routes through it.");
+            }
+
+            await SyncHaproxyContainerAsync(enabled, ct);
+            return GetInfraStatus();
+        }, ct);
+
+    // Shared by SetPgcatEnabledAsync (one-directional: only ever calls this with false, to force
+    // haproxy off alongside pgcat) and SetHaproxyEnabledAsync (the standalone sub-toggle, which
+    // calls this with either value). Doesn't acquire RunExclusiveToggleAsync's gate itself, so
+    // SetPgcatEnabledAsync can call it from inside its own already-gated delegate without a nested
+    // (and likely non-reentrant) acquire.
+    private async Task SyncHaproxyContainerAsync(bool enabled, CancellationToken ct)
+    {
+        var container = await runtime.FindAsync("haproxy", ct)
+            ?? throw new InvalidOperationException("haproxy container not found");
+
+        logger.LogWarning("Switching haproxy container to {Enabled}", enabled);
+        if (enabled)
+        {
+            await runtime.Client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
+        }
+        else
+        {
+            await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
+        }
+
+        _haproxyEnabled = enabled;
     }
 }

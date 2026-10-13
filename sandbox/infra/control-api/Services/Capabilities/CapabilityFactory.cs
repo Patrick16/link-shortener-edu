@@ -28,6 +28,7 @@ public sealed class CapabilityFactory
         ["flush-cache"] = sp => new FlushCacheCapability(sp.GetRequiredService<IRedisInfraService>()),
         ["dlq-stats"] = sp => new DlqStatsCapability(sp.GetRequiredService<IRabbitMqService>(), sp.GetRequiredService<ILogger<DlqStatsCapability>>()),
         ["haproxy-stats"] = sp => new HaproxyStatsCapability(sp.GetRequiredService<IHaproxyService>(), sp.GetRequiredService<ILogger<HaproxyStatsCapability>>()),
+        ["haproxy-toggle"] = sp => new HaproxyToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<HaproxyToggleCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

@@ -14,7 +14,15 @@ namespace ControlApi.Models;
 // MessagingMode ("rabbitmq" or "grpc") is the fourth real-container-state toggle, same category as
 // PgcatEnabled/CacheEnabled above (same drift-on-restart caveat applies) - see
 // MessagingToggleCapability/InfraToggleService.SetMessagingModeAsync.
-public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode);
+//
+// HaproxyEnabled is a different kind of real-container-state toggle from the three above: those
+// recreate the *consumer* services with a different connection string/flag, while this one starts/
+// stops the haproxy container itself - DB_HOST stays "haproxy" the whole time (see
+// InfraToggleService.CurrentStandingEnv), so turning it off while PgcatEnabled is still true
+// deliberately demonstrates the pooler layer's single entry point going down, not a graceful
+// bypass. Only meaningful while PgcatEnabled is true - see HaproxyToggleCapability/
+// InfraToggleService.SetHaproxyEnabledAsync.
+public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled);
 
 public record InfraToggleRequest(bool Enabled);
 

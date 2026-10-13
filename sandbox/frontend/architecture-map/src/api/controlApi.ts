@@ -98,6 +98,7 @@ export const controlApi = {
   setPgcatEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/pgcat', 'POST', { enabled }),
   setCacheEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/cache', 'POST', { enabled }),
   setMessagingMode: (mode: MessagingMode) => request<InfraStatus>('/api/infra/messaging-mode', 'POST', { mode }),
+  setHaproxyEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/haproxy', 'POST', { enabled }),
 
   listScenarios: () => request<CustomScenario[]>('/api/scenarios'),
   saveScenario: (scenario: CustomScenario) => request<CustomScenario>('/api/scenarios', 'POST', scenario),

@@ -1562,6 +1562,20 @@ button:disabled {
   margin: 6px 0 0;
 }
 
+.infra-toggle-control-disabled .infra-toggle-label,
+.infra-toggle-control-disabled .infra-toggle-description {
+  opacity: 0.5;
+}
+
+/* Sub-item nested under another toggle (e.g. HAProxy under Connection pooling) - indented and
+   borderless so it reads as a dependent of the row above rather than a sibling. */
+.infra-toggle-control-nested {
+  margin-top: 6px;
+  padding-top: 0;
+  padding-left: 16px;
+  border-top: none;
+}
+
 /* Connection stats (pgcat / postgres node panels) */
 
 .connection-stats {

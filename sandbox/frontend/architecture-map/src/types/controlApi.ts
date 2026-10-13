@@ -124,6 +124,7 @@ export interface InfraStatus {
   pgcatEnabled: boolean
   cacheEnabled: boolean
   messagingMode: MessagingMode
+  haproxyEnabled: boolean
 }
 
 export type MessagingMode = 'rabbitmq' | 'grpc'

@@ -224,7 +224,8 @@
       "icon": "⚖️",
       "description": "TCP load balancer in front of the 3 pgcat instances - the pooler layer's single entry point, every DB-touching service connects here",
       "capabilities": [
-        "haproxy-stats"
+        "haproxy-stats",
+        "haproxy-toggle"
       ],
       "activeWhen": {
         "pgcatEnabled": true

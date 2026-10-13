@@ -17,6 +17,10 @@ public interface IInfraToggleService
 
     Task<InfraStatus> SetMessagingModeAsync(string mode, CancellationToken ct);
 
+    // Starts/stops the haproxy container itself, not a connection-string flip on its consumers -
+    // see InfraStatus's own comment on HaproxyEnabled for why.
+    Task<InfraStatus> SetHaproxyEnabledAsync(bool enabled, CancellationToken ct);
+
     // Consumer QoS - read once at RabbitMqConsumer startup, so this recreates shortener-service and
     // traffic-service (same env-var + --force-recreate --no-deps shape as the pgcat/cache toggles).
     int GetRabbitMqPrefetch();
