@@ -13,6 +13,7 @@
          real request/message spans, which is just noise. The three real web APIs add this
          instrumentation via WebDefaults' AddWebApiDefaults() (called right after
          AddServiceDefaults() in their Program.cs). -->
+    <PackageReference Include="Microsoft.Extensions.Configuration" VersionOverride="10.0.13" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
