@@ -20,23 +20,37 @@ with.
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/ShortenerService/LinkCreatedConsumer.cs:25
-internal async Task<BatchOutcome> HandleBatchAsync(
-    IReadOnlyList<BatchItem<LinkCreatedEvent>> batch, CancellationToken cancellationToken)
+// src/backend/Services/ShortenerService/LinkCreatedConsumer.cs, HandleBatchAsync (trimmed)
+await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
+var poisonMessages = new List<PoisonMessage>();
+
+// Same hash more than once in one batch: identical OriginalLink is an intra-batch redelivery
+// (silently dropped), a different one is a genuine conflict (reported, see ClassifyAgainstExisting).
+var distinctByHash = /* GroupBy(Hash), compare content within each group - see source */;
+
+var existingLinks = await context.Links.Where(x => hashes.Contains(x.Hash)).ToDictionaryAsync(x => x.Hash, cancellationToken);
+var newItems = ClassifyAgainstExisting(distinctByHash, existingLinks, poisonMessages);
+context.Links.AddRange(newItems.Select(BuildEntity));
+
+try { await context.SaveChangesAsync(cancellationToken); }
+catch (DbUpdateException)
 {
-    await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
-
-    var distinctByHash = batch.Select(x => x.Payload).GroupBy(x => x.Hash).Select(g => g.Last()).ToList();
-    var alreadyStored = await context.Links
-        .Where(x => distinctByHash.Select(e => e.Hash).Contains(x.Hash))
-        .Select(x => x.Hash).ToHashSetAsync(cancellationToken);
-
-    var newLinks = distinctByHash.Where(x => !alreadyStored.Contains(x.Hash));
-    context.Links.AddRange(newLinks.Select(e => new Link(e.Hash, e.OriginalLink, e.ShortenLink, e.CreatedAt, e.UserId)));
+    // Re-check against Postgres - the sync-gRPC batch-of-one race actually resolves here, not
+    // in the pre-check above (both racers see "not yet stored" before either commits).
+    var nowExisting = await context.Links.Where(x => hashes.Contains(x.Hash)).ToDictionaryAsync(x => x.Hash, cancellationToken);
+    newItems = ClassifyAgainstExisting(newItems, nowExisting, poisonMessages);
+    context.Links.AddRange(newItems.Select(BuildEntity));
     await context.SaveChangesAsync(cancellationToken);
-    return BatchOutcome.Success;
 }
+
+return poisonMessages.Count > 0 ? BatchOutcome.WithPoison(poisonMessages) : BatchOutcome.Success;
 ```
+
+`ClassifyAgainstExisting` is what actually implements the redelivery-safety rule: a hash with no
+existing row is new; an existing row with the SAME `OriginalLink` is a true duplicate (silently
+skipped); an existing row with a DIFFERENT `OriginalLink` is a genuine conflict, appended to
+`poisonMessages` with a reason read off the *existing* (winning) row's `HasCustomAlias` - see
+[Custom aliases](pattern:custom-aliases) for why that distinction has to live on the winning side.
 
 As a `BackgroundService` (no per-request DI scope), it takes `IDbContextFactory<DatabaseContext>`
 rather than the request-scoped `DatabaseContext` pattern the two web APIs use — see this node's
@@ -67,6 +81,8 @@ redelivery still is — see [Custom aliases](pattern:custom-aliases) for the ful
 - 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
   (coupling) — fixed; this node's own Redis pre-warm (`LinkCreatedConsumer.cs`, not shown in the
   snippet above) never actually reached RedirectApi's cache before this fix
+- ⚠️ [Intra-batch same-hash dedup silently dropped a genuine conflict, not just a redelivery](pitfall:shortener-batch-dedup-drops-conflicting-duplicate)
+  (resilience-gap) — fixed
 
 ## Relatives
 

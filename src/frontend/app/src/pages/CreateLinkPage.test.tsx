@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../api/client'
 import * as linkApi from '../api/linkApi'
+import * as authContext from '../auth/AuthContext'
 import CreateLinkPage from './CreateLinkPage'
 
 vi.mock('../api/linkApi', async () => {
@@ -13,9 +14,29 @@ vi.mock('../api/linkApi', async () => {
   }
 })
 
+vi.mock('../auth/AuthContext', async () => {
+  const actual = await vi.importActual<typeof import('../auth/AuthContext')>('../auth/AuthContext')
+  return {
+    ...actual,
+    useAuth: vi.fn(),
+  }
+})
+
+function mockUser(user: { email: string; name: string } | null) {
+  vi.mocked(authContext.useAuth).mockReturnValue({
+    user,
+    login: vi.fn(),
+    register: vi.fn(),
+    logout: vi.fn(),
+  })
+}
+
 describe('CreateLinkPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Signed in by default - most tests below exercise the plain-hash path, which behaves
+    // identically either way; the alias-specific tests set their own auth state explicitly.
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
   })
 
   it('renders the shorten form', () => {
@@ -37,7 +58,7 @@ describe('CreateLinkPage', () => {
     await user.type(input, 'https://example.com/a/long/path')
     await user.click(screen.getByRole('button', { name: 'Shorten' }))
 
-    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com/a/long/path'))
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com/a/long/path', undefined))
     expect(screen.getByRole('link', { name: linkApi.buildShortUrl('abc12345') })).toBeInTheDocument()
     expect(input).toHaveValue('')
   })
@@ -107,5 +128,70 @@ describe('CreateLinkPage', () => {
     unmount()
 
     expect(clearTimeoutSpy).toHaveBeenCalled()
+  })
+
+  it('disables the alias field and shows a sign-in hint when signed out', () => {
+    mockUser(null)
+    render(<CreateLinkPage />)
+
+    expect(screen.getByPlaceholderText('my-cool-link')).toBeDisabled()
+    expect(screen.getByText('Sign in to pick your own short link instead of a random one.')).toBeInTheDocument()
+  })
+
+  it('does not show the sign-in hint, and the alias field is enabled, when signed in', () => {
+    render(<CreateLinkPage />)
+
+    expect(screen.getByPlaceholderText('my-cool-link')).toBeEnabled()
+    expect(screen.queryByText('Sign in to pick your own short link instead of a random one.')).not.toBeInTheDocument()
+  })
+
+  it('sends the alias when signed in and one is entered', async () => {
+    const user = userEvent.setup()
+    vi.mocked(linkApi.createLink).mockResolvedValue({ shortenLink: 'my-link', createdAt: '2099-01-01T00:00:00Z' })
+    render(<CreateLinkPage />)
+
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.type(screen.getByPlaceholderText('my-cool-link'), 'my-link')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', 'my-link'))
+    expect(screen.getByPlaceholderText('my-cool-link')).toHaveValue('')
+  })
+
+  it('omits the alias when the field is left empty', async () => {
+    const user = userEvent.setup()
+    vi.mocked(linkApi.createLink).mockResolvedValue({ shortenLink: 'abc12345', createdAt: '2099-01-01T00:00:00Z' })
+    render(<CreateLinkPage />)
+
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', undefined))
+  })
+
+  it('shows the "ready right away" hint for an alias result instead of the async-delay one', async () => {
+    const user = userEvent.setup()
+    vi.mocked(linkApi.createLink).mockResolvedValue({ shortenLink: 'my-link', createdAt: '2099-01-01T00:00:00Z' })
+    render(<CreateLinkPage />)
+
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.type(screen.getByPlaceholderText('my-cool-link'), 'my-link')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+
+    expect(await screen.findByText('Ready to use right away.')).toBeInTheDocument()
+    expect(screen.getByText('Custom alias')).toBeInTheDocument()
+    expect(screen.queryByText(/created asynchronously/)).not.toBeInTheDocument()
+  })
+
+  it('shows an alias-conflict error message from the backend', async () => {
+    const user = userEvent.setup()
+    vi.mocked(linkApi.createLink).mockRejectedValue(new ApiError(409, "Alias 'taken' is already taken."))
+    render(<CreateLinkPage />)
+
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.type(screen.getByPlaceholderText('my-cool-link'), 'taken')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+
+    expect(await screen.findByText("Alias 'taken' is already taken.")).toBeInTheDocument()
   })
 })

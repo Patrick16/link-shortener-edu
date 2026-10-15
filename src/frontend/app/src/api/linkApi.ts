@@ -9,8 +9,12 @@ export function buildShortUrl(hash: string): string {
   return `${REDIRECT_API_URL}/${hash}`
 }
 
-export function createLink(originalLink: string): Promise<LinkResponse> {
-  const request: LinkCreateRequest = { originalLink }
+// alias is only honored by the backend for an authenticated caller (401 otherwise) - auth: true is
+// unconditional here regardless, same as before aliases existed: a present-but-expired/absent token
+// just means no Authorization header goes out (see apiFetch), so an anonymous plain-hash request is
+// unaffected.
+export function createLink(originalLink: string, alias?: string): Promise<LinkResponse> {
+  const request: LinkCreateRequest = alias ? { originalLink, alias } : { originalLink }
   return apiFetch<LinkResponse>(LINK_API_URL, '/links', { method: 'POST', body: request, auth: true })
 }
 

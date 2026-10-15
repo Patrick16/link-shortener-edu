@@ -19,6 +19,7 @@ export type AuthResponse = {
 
 export type LinkCreateRequest = {
   originalLink: string
+  alias?: string
 }
 
 export type LinkResponse = {
@@ -31,6 +32,7 @@ export type LinkListItem = {
   originalLink: string
   createdAt: string
   clickCount: number
+  hasCustomAlias: boolean
 }
 
 export type LinksPage = {

@@ -141,14 +141,33 @@ if (existing.OriginalLink == item.Payload.OriginalLink)
     continue; // same link, already persisted - redelivery or a losing racing replica, not an error
 }
 
-poisonMessages.Add(new PoisonMessage(item.MessageId, ConflictReason(item.Payload.Hash, existing)));
+poisonMessages.Add(new PoisonMessage(item.MessageId, ConflictReason(item.Payload.Hash, existing.HasCustomAlias)));
 ```
+
+The same comparison also had to be applied to the intra-batch dedup step itself
+(`batch.GroupBy(x => x.Payload.Hash)`, not just the two against-Postgres checks above) — the first
+pass of this fix only caught the pre-check and the `DbUpdateException` recovery; a losing message
+sharing a hash with another message in the *same* batch still vanished untraced until a follow-up
+fix compared it against the batch's own surviving item the same way.
 
 `GrpcAliasCreator`/`ICustomAliasCreator`'s DI registration (`AddAliasGrpcClient`,
 `Shared/Infrastructure/GrpcMessagingExtensions.cs`) is deliberately separate from the standing
 `AddEventDispatcher` — `RedirectApi` also calls `AddEventDispatcher` and has no use for an alias
 client, so the gRPC channel this feature needs is registered only in `LinkApi`'s own composition
 root, not folded into shared wiring every `IEventDispatcher` consumer would otherwise pay for.
+
+The product's own UI (`src/frontend/app`, not part of this `sandbox/docs/` node/pattern system -
+see `docs/repository-map.md` for why the two are kept separate) has a plain field for it too:
+`CreateLinkPage`'s "Custom alias" input is disabled with a sign-in hint for an anonymous caller
+(mirroring the backend's own 401), and the backend's `ProblemDetails.detail` text (taken/reserved/
+invalid-format) surfaces as-is through the existing `ApiError` handling every form on that app
+already has - no alias-specific error UI was needed. `DashboardPage`'s link list shows a "Custom
+alias" badge driven by `LinkListItem.hasCustomAlias`.
+
+## Pitfalls
+
+- ⚠️ [Intra-batch same-hash dedup silently dropped a genuine conflict, not just a redelivery](pitfall:shortener-batch-dedup-drops-conflicting-duplicate)
+  (resilience-gap) — fixed
 
 ## Relatives
 
@@ -161,4 +180,5 @@ root, not folded into shared wiring every `IEventDispatcher` consumer would othe
 ### Patterns
 
 - [Async messaging](pattern:async-messaging) — the transport this reuses, but bypasses the mode
-  selection of
+  selection of it: plain-hash creation still goes through whichever transport `Messaging:Mode`
+  currently picks, aliases always go straight to the synchronous gRPC path regardless

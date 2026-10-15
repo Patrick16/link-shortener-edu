@@ -137,6 +137,7 @@ export default function DashboardPage() {
                 <a href={buildShortUrl(item.shortenLink)} target="_blank" rel="noreferrer">
                   {buildShortUrl(item.shortenLink)}
                 </a>
+                {item.hasCustomAlias && <span className="alias-badge">Custom alias</span>}
                 <span className="link-list-original">{item.originalLink}</span>
                 <span className="link-list-clicks">
                   {item.clickCount} {item.clickCount === 1 ? 'click' : 'clicks'}

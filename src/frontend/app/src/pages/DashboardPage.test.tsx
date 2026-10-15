@@ -82,8 +82,8 @@ describe('DashboardPage', () => {
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
         items: [
-          { shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5 },
-          { shortenLink: 'def67890', originalLink: 'https://example.com/b', createdAt: '2099-01-01T00:00:00Z', clickCount: 1 },
+          { shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false },
+          { shortenLink: 'def67890', originalLink: 'https://example.com/b', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false },
         ],
         totalCount: 2,
       }),
@@ -94,6 +94,25 @@ describe('DashboardPage', () => {
     expect(await screen.findByText('5 clicks')).toBeInTheDocument()
     expect(screen.getByText('1 click')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: linkApi.buildShortUrl('abc12345') })).toBeInTheDocument()
+    expect(screen.queryByText('Custom alias')).not.toBeInTheDocument()
+  })
+
+  it('shows a "Custom alias" badge only for links created with one', async () => {
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [
+          { shortenLink: 'my-link', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: true },
+          { shortenLink: 'abc12345', originalLink: 'https://example.com/b', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false },
+        ],
+        totalCount: 2,
+      }),
+    )
+
+    render(<DashboardPage />)
+
+    expect(await screen.findByRole('link', { name: linkApi.buildShortUrl('my-link') })).toBeInTheDocument()
+    expect(screen.getAllByText('Custom alias')).toHaveLength(1)
   })
 
   it('shows the ApiError message when loading fails', async () => {
@@ -117,6 +136,7 @@ describe('DashboardPage', () => {
               originalLink: 'https://example.com',
               createdAt: '2099-01-01T00:00:00Z',
               clickCount: 0,
+              hasCustomAlias: false,
             },
           ],
           page: requestedPage,
@@ -142,7 +162,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5 }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false }],
         totalCount: 1,
       }),
     )
@@ -173,7 +193,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0 }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false }],
         totalCount: 1,
       }),
     )
@@ -190,7 +210,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1 }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false }],
         totalCount: 1,
       }),
     )
@@ -229,7 +249,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5 }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false }],
         totalCount: 1,
       }),
     )
@@ -258,7 +278,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1 }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false }],
         totalCount: 1,
       }),
     )
