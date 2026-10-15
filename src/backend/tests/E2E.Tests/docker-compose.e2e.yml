@@ -80,6 +80,13 @@ services:
       ConnectionStrings__RabbitMqFallback: "Data Source=/data/rabbitmq-fallback.db"
       Jwt__SigningKey: "dev-only-signing-key-do-not-use-in-production-1234567890"
       Internal__ApiKey: "dev-only-internal-api-key-do-not-use-in-production-1234567890"
+      # AddAliasGrpcClient (custom-alias creation) reads this unconditionally at startup,
+      # independent of Messaging:Mode - without it, link-api throws InvalidOperationException and
+      # the container exits immediately. No nginx in this trimmed-down stack (see this file's own
+      # header comment), so this points straight at shortener-service's own gRPC Kestrel endpoint
+      # (GrpcKestrelExtensions.GrpcPort) rather than through an nginx upstream like
+      # sandbox/docker-compose.yml's equivalent override does.
+      Messaging__Grpc__TargetUrl: "http://shortener-service:8090"
     volumes:
       - link-api-data:/data
     ports:
