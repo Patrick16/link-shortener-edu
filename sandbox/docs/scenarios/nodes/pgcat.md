@@ -51,12 +51,29 @@ at the old default (`ban_time = 20`). `pool_size` is **20**, not the 40 a single
 would use — see [Pooler scaling](pattern:pooler-scaling) for the exact connection-count math behind
 that number.
 
+**Scales with the HAProxy toggle.** This node's replica count isn't user-selectable on its own —
+it's always exactly 1 or 3, driven entirely by whether [HAProxy](node:haproxy) is on or off.
+Turning HAProxy off runs `docker compose up -d --scale pgcat=1 --no-recreate --no-deps pgcat`;
+turning it back on scales to 3 the same way. The point isn't resource savings, it's keeping the
+graph's `×N` badge honest: with HAProxy down, nothing is actually load-balancing across whatever
+`pgcat` replicas exist (every DB-touching service still dials `haproxy:6432` specifically, not
+pgcat's own DNS name), so the badge collapsing to `×1` reflects that truthfully instead of implying
+load-balancing that isn't happening. `pgcat` stays deliberately out of the generic per-service scale
+control for this reason — see [Pooler scaling](pattern:pooler-scaling) for why an arbitrary replica
+count isn't safe here the way it is for a stateless API service. The same coupling also runs the
+other direction: disabling pgcat itself forces HAProxy off and collapses this node back to 1
+replica.
+
 ## Pitfalls
 
 - 🐛 [PgCat routed DDL and writes to a read-only replica](pitfall:pgcat-missing-read-write-split)
   (architecture-bug) — fixed
 - 🐛 [A read immediately after a write can land on a lagging replica](pitfall:pgcat-read-your-writes-race)
   (race-condition) — fixed
+- ⚠️ [Rewriting a config file a process polls on a timer is not the same as that process having read it](pitfall:pgcat-toml-rewrite-not-reloaded-immediately)
+  (race-condition) — fixed
+- ⚠️ [A docker compose up --scale call without --no-deps silently restarts whatever it depends on](pitfall:pgcat-scale-missing-no-deps-restarts-stopped-replicas)
+  (infrastructure-bug) — fixed
 
 ## Relatives
 

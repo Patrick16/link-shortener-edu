@@ -30,6 +30,17 @@ Reads go through `EntityCacheService<T>.GetOrFetch` (`src/backend/Shared/Common/
 EntityCacheService.cs:79`) — check cache, fall back to `fetchFromDb` on a miss, populate the cache
 with what was fetched.
 
+## Standing toggle
+
+A "Redis" row in the architecture-map UI's Topology panel starts/stops this container and moves
+`CacheEnabled` with it **in both directions** — unlike most other standing toggles, where a parent
+forces a dependent off but restoring the parent never auto-restores the dependent. A `redis-master`
+nobody's allowed to read from would be a node with no reason to exist, so there's deliberately no
+"up but unusable" state reachable through this control. Turning it OFF also force-disables the
+nested [Redis Sentinel (HA)](node:redis-sentinel-1) toggle (nothing left to fail over to); turning
+it back ON does **not** auto-restore Sentinel — that stays its own explicit action. Equivalent API:
+`POST /api/infra/redis {"enabled": bool}`.
+
 ## Pitfalls
 
 - 🐛 [Redis outage used to 500 every link read](pitfall:cache-read-no-error-handling)
@@ -45,6 +56,8 @@ with what was fetched.
 - ⚠️ [A Redis blip at boot crashed the whole API](pitfall:redis-multiplexer-abort-on-connect-fail-crashes-host)
   (resilience-gap) — fixed
 - ⚠️ [Fail-open that only caught RedisException let timeouts fail the redirect](pitfall:fail-open-catch-too-narrow)
+  (resilience-gap) — fixed
+- ⚠️ [A CLI flag baked in on every container start can quietly undo a runtime CONFIG SET](pitfall:redis-min-replicas-to-write-not-resynced-on-restart)
   (resilience-gap) — fixed
 
 ## Relatives

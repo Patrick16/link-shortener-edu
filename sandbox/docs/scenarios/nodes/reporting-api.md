@@ -27,6 +27,24 @@ parameterized SQL query against ClickHouse and returns the aggregate. No ORM her
 is the one place in the project meant to show what a real columnar OLAP query looks like, not
 hidden behind a query builder.
 
+**Owner-scoped reports.** The endpoint only ever returns data for hashes the caller owns.
+`ClickHouseClickFactQueryService.GetSummaryAsync` runs the 4 per-owner bucket queries (now filtered
+`AND user_id = callerId`) alongside a 5th scalar query — `count() WHERE hash = ? AND user_id IS NOT
+NULL AND user_id != callerId` — concurrently via `Task.WhenAll`; that 5th query is the only thing
+distinguishing "owned, zero clicks yet" (ordinary all-zero `200`) from "owned by someone else"
+(`null` from the query service, which `ReportsController` turns into a plain `404`). The owner
+travels with the click itself (`RedirectController` already holds `link.UserId` when it publishes
+`ClickTrackedEvent`; `ClickTrackedConsumer` carries it into `ClickFact.UserId` — no extra lookup
+anywhere in the chain), so this is additive, not a new network hop.
+
+**404, not 403, is deliberate.** A caller who doesn't own a hash gets exactly the same response as a
+caller querying a hash that never existed, on purpose — this endpoint can't be used to probe which
+hashes belong to other users. An anonymously-created link (`user_id IS NULL` on every one of its
+click rows) has no reporting view for *anyone*, not a shared public one either — `NULL`-owner rows
+never match any caller's `user_id = callerId` filter, and are explicitly excluded from the
+"owned by someone else" check too, so every caller sees the same all-zero `200`, never real data
+and never a `404`.
+
 **Live top links**, three pieces working together:
 
 1. **`TopLinksHub`** (`/hub/top-links`, SignalR) — on connect, adds the caller to a per-user group

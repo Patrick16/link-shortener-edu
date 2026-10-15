@@ -43,6 +43,18 @@ Neither needed app-level code changes — both drivers (`StackExchange.Redis`, `
 an HA-aware connection string as-is and handle re-discovering the current primary themselves after
 a failover.
 
+**Live demo controls for this pattern.** Both implementations now have a standing toggle in the
+architecture-map UI's Topology panel that stops/starts their real HA containers and re-renders the
+graph to match — previously the only way to see either story degrade was chaos-killing a container
+by hand and watching the system cope, with no clean "turn HA off, see a plain single node, turn it
+back on" path. Redis: a "Redis" toggle (the node itself) with a nested "Redis Sentinel (HA)" toggle
+underneath — see [Redis (master)](node:redis-master) and
+[Redis Sentinel 1](node:redis-sentinel-1)'s own "Standing toggle" sections. MongoDB: a "Replicas
+(MongoDB)" toggle — see [Mongo 1](node:mongo1)'s own "Standing toggle" section, including the
+voting-configuration quirk that makes Mongo's version of this control structurally harder than
+Redis's or Postgres's (a plain container stop here would leave the one remaining member unable to
+reach a voting majority, unlike either other store).
+
 ## Pitfalls
 
 - 🐛 [Replica healthchecks proved the process was up, not that replication was happening](pitfall:postgres-replica-healthcheck-doesnt-verify-streaming)
@@ -55,6 +67,10 @@ a failover.
   (infrastructure-bug) — fixed
 - 🐛 [Only the Redis master asked Sentinel who's in charge before rejoining - the replicas didn't](pitfall:redis-replica-ignores-sentinel-on-rejoin)
   (architecture-bug) — fixed
+- ⚠️ [A CLI flag baked in on every container start can quietly undo a runtime CONFIG SET](pitfall:redis-min-replicas-to-write-not-resynced-on-restart)
+  (resilience-gap) — fixed
+- ⚠️ [A failed "temporarily change state, then undo it" sequence can throw before the undo ever runs](pitfall:mongo-reconfig-timeout-leaves-priorities-skewed)
+  (resilience-gap) — fixed
 
 ## Relatives
 

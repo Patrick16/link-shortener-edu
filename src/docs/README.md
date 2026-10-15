@@ -12,8 +12,10 @@ scenario walkthroughs, and the target system architecture, see `sandbox/docs/` i
 - `Services/RedirectApi` — resolves a hash and redirects, reads `links_db`
 - `Services/ShortenerService` (worker) — consumes `LinkCreatedEvent`, owns `links_db`
 - `Services/TrafficService` (worker) — consumes `ClickTrackedEvent`, owns `clicks_db`
-- `Services/ReportingApi` — read side: ClickHouse summaries, plus the live top-links SignalR hub
-  (`Realtime/`: hub, per-user subscription registry, throttled push service and scheduler)
+- `Services/ReportingApi` — read side: ClickHouse summaries (owner-scoped — `GET
+  /reports/{hash}/summary` returns 404, not 403, for a hash that exists but isn't the caller's),
+  plus the live top-links SignalR hub (`Realtime/`: hub, per-user subscription registry, throttled
+  push service and scheduler)
 - `Shared/Contracts` — event DTOs shared between publishers and consumers (single source of truth
   — never duplicate these on either side)
 - `Shared/Infrastructure` — RabbitMQ client/publisher/consumer, shard resolver, Redis helpers

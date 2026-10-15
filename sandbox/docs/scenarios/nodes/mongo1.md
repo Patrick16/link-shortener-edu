@@ -46,10 +46,48 @@ like this.
 
 No auth (keyless replica set) — matches the rest of this stack's no-auth dev posture.
 
+## Standing toggle
+
+A "Replicas (MongoDB)" row in the architecture-map UI's Topology panel drops `mongo2`/`mongo3` out
+of `rs0`'s voting configuration and stops their containers (OFF), or starts them back up and
+`rs.add()`s them back in (ON) — equivalent API: `POST /api/infra/mongo-replicas {"enabled": bool}`.
+
+Unlike Postgres/Redis, a plain container stop here is actively dangerous, not just incomplete:
+`mongo1`/`mongo2`/`mongo3` were baked into `rs0`'s own voting configuration by the one-shot
+`mongo-init` job's `rs.initiate()` call. Simply stopping `mongo2`/`mongo3` without first removing
+them from that configuration would leave `mongo1` able to see only 1 of 3 *configured* voting
+members — not a majority — so `mongo1` would step down to SECONDARY and refuse writes entirely, the
+opposite of "simplify to one working instance." OFF therefore reconfigures `rs0` down to a 1-member
+set *before* stopping the containers; ON starts the containers first (MongoDB gates a freshly added
+member's eligibility to vote/serve reads until its initial sync completes, so there's no window of
+routing to a member that isn't ready), then `rs.add()`s each one back.
+
+Three real, live-discovered quirks this toggle has to handle:
+
+1. **`rs.reconfig()`/`rs.add()` only succeed when run against the *current primary*.** MongoDB
+   elects a primary among whichever members exist at `rs.initiate()` time with no regard for
+   container naming — a fresh stack has come up with `mongo3` as primary on a real run. The toggle
+   resolves the real primary by querying each node's own `rs.status()`, never assumes `mongo1`.
+2. **A non-forced `rs.reconfig()` can only add or remove one voting member per call.** The OFF path
+   removes `mongo2`/`mongo3` one `rs.reconfig()` at a time, re-reading `rs.conf()` fresh before each
+   iteration.
+3. **MongoDB refuses to let a node reconfigure itself out of the member list**, even with
+   `{force: true}`. Since `mongo1` is the one permanent member, every removal has to run from
+   `mongo1`'s own connection — which only works if `mongo1` is already primary. If it isn't (a
+   normal occurrence per quirk 1), the toggle temporarily boosts `mongo1`'s priority to 2 and steps
+   the current primary down, polling for `mongo1` to take over — see
+   [this node's pitfall](pitfall:mongo-reconfig-timeout-leaves-priorities-skewed) for what happens,
+   and how it's handled, when that poll times out instead of succeeding.
+
+This whole sequence runs inside the same exclusive-toggle gate every standing toggle uses, so a
+worst-case run (priority bump + stepdown + a full poll) blocks any other toggle call for up to
+~15-20 seconds — acceptable for this single-operator admin tool, and non-deadlocking either way, but
+worth knowing if a toggle call seems to hang briefly.
+
 ## Pitfalls
 
-None yet — unlike Redis's Sentinel setup, nothing broke getting this one running. Worth staying
-honest about: that's not the same as "nothing can go wrong here," just that nothing has yet.
+- ⚠️ [A failed "temporarily change state, then undo it" sequence can throw before the undo ever runs](pitfall:mongo-reconfig-timeout-leaves-priorities-skewed)
+  (resilience-gap) — fixed
 
 ## Relatives
 

@@ -57,6 +57,15 @@ on does **not** auto-start haproxy (bringing a node up is always an explicit act
 standalone toggle rejects turning haproxy on while pgcat is off. `InfraStatus.HaproxyEnabled` is
 deliberately **not cached** — see this node's Pitfalls below for why.
 
+**This toggle also scales [PgCat](node:pgcat)'s replica count, in lockstep.** Turning HAProxy off
+collapses `pgcat` to 1 replica; turning it back on scales it back to 3 — see that node's own
+"Scales with the HAProxy toggle" section for the mechanics and why (the `×N` badge should always
+mean load-balancing is actually happening, not just that containers exist). Scaling `pgcat` *up*
+surfaced a real path-resolution bug: `docker compose up --scale` run from inside control-api's own
+container needs pgcat.toml's bind-mount path resolved against the Docker daemon's view of the host
+filesystem, not control-api's own — fixed by resolving that path live via Docker's own
+container-inspect metadata (`GetOwnPgcatConfigHostPathAsync`) rather than a hardcoded relative path.
+
 ## Pitfalls
 
 - 🐛 [A statically-resolved backend hostname failed on first boot against Docker's embedded DNS](pitfall:haproxy-static-resolve-races-docker-dns)
@@ -65,6 +74,8 @@ deliberately **not cached** — see this node's Pitfalls below for why.
   (infrastructure-bug) — fixed
 - ⚠️ [A cached "is it running" flag went stale the instant a second, unguarded control path touched the same container](pitfall:haproxy-toggle-cached-state-bypassed-by-generic-controls)
   (concurrency) — fixed
+- ⚠️ [A docker compose up --scale call without --no-deps silently restarts whatever it depends on](pitfall:pgcat-scale-missing-no-deps-restarts-stopped-replicas)
+  (infrastructure-bug) — fixed
 
 ## Relatives
 

@@ -77,7 +77,10 @@ toggle that stops/starts the real `haproxy` container itself — see [HAProxy](n
 "standing toggle" section for the mechanics. It's the one way to demonstrate live that PgCat's 3
 replicas being perfectly healthy doesn't help if the single load balancer in front of them is down —
 every DB-touching service keeps dialing `haproxy:6432` regardless, so this is a genuine outage, not a
-graceful bypass. Only meaningful (and only legal to re-enable) while pgcat itself is on.
+graceful bypass. Only meaningful (and only legal to re-enable) while pgcat itself is on. This toggle
+now also scales [PgCat](node:pgcat) itself down to 1 replica while HAProxy is off (and back to 3
+when it's on), so the graph's `×N` badge genuinely tracks whether load-balancing is active across
+real, serving instances — not just whether HAProxy happens to be running.
 
 ## How it's implemented here
 
@@ -108,6 +111,10 @@ backend pgcat_back
 - 🐛 [A statically-resolved backend hostname failed on first boot against Docker's embedded DNS](pitfall:haproxy-static-resolve-races-docker-dns)
   (infrastructure-bug) — fixed
 - 🐛 [Scaling a Compose service made per-replica hostnames stop resolving entirely](pitfall:haproxy-server-template-replaces-static-server-list)
+  (infrastructure-bug) — fixed
+- ⚠️ [A cached "is it running" flag went stale the instant a second, unguarded control path touched the same container](pitfall:haproxy-toggle-cached-state-bypassed-by-generic-controls)
+  (concurrency) — fixed
+- ⚠️ [A docker compose up --scale call without --no-deps silently restarts whatever it depends on](pitfall:pgcat-scale-missing-no-deps-restarts-stopped-replicas)
   (infrastructure-bug) — fixed
 
 ## Relatives

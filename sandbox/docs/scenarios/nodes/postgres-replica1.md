@@ -43,12 +43,26 @@ Each replica needs its own `max_connections` passed through explicitly (`POSTGRE
 env var, same value as the primary) — Postgres refuses to start hot standby if a replica's value is
 lower than whatever the primary is currently running with.
 
+## How to use it
+
+A standing "Read replicas (Postgres)" toggle in the architecture-map UI's Topology panel
+starts/stops `postgres-replica1`/`postgres-replica2` together and keeps [PgCat](node:pgcat)'s own
+`servers` list in sync around it — OFF drops both from pgcat's config and stops both containers (in
+that order: config change, then stop); ON is the mirror image. It only ever stops the containers,
+never removes them, so their volume and permanent replication slot (see "How it's implemented
+here" above) survive — a later ON resumes WAL streaming from where it left off instead of a fresh
+`pg_basebackup`. Equivalent API: `POST /api/infra/postgres-replicas {"enabled": bool}`
+(control-api). Always both replicas as a pair — there's no way to toggle just one of them through
+this control.
+
 ## Pitfalls
 
 - 🐛 [Replica healthchecks proved the process was up, not that replication was happening](pitfall:postgres-replica-healthcheck-doesnt-verify-streaming)
   (infrastructure-bug) — fixed
 - 🐛 [No replication slot meant a disconnected replica could never catch back up](pitfall:postgres-replica-no-replication-slot)
   (infrastructure-bug) — fixed
+- ⚠️ [Rewriting a config file a process polls on a timer is not the same as that process having read it](pitfall:pgcat-toml-rewrite-not-reloaded-immediately)
+  (race-condition) — fixed
 
 ## Relatives
 

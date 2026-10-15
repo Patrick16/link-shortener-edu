@@ -49,12 +49,20 @@ primary via a separate `ConnectionStrings:PostgresPrimary` — DDL through a que
 is inherently a bit fragile (see Pitfalls), so migrations don't rely on the classifier getting it
 right at all.
 
+**A live demo control for this pattern.** A standing "Read replicas (Postgres)" toggle in the
+architecture-map UI's Topology panel stops/starts `postgres-replica1`/`postgres-replica2` together
+and keeps pgcat's own `servers` list in sync around it, so a user can watch this pattern collapse to
+primary-only and recover again without touching a terminal — see
+[Postgres Replica 1](node:postgres-replica1)'s own "How to use it" section for the mechanics.
+
 ## Pitfalls
 
 - 🐛 [PgCat routed DDL and writes to a read-only replica](pitfall:pgcat-missing-read-write-split)
   (architecture-bug) — fixed
 - ⚠️ [A read immediately after a write can land on a lagging replica](pitfall:pgcat-read-your-writes-race)
-  — known limitation
+  (race-condition) — fixed
+- ⚠️ [Rewriting a config file a process polls on a timer is not the same as that process having read it](pitfall:pgcat-toml-rewrite-not-reloaded-immediately)
+  (race-condition) — fixed
 
 ## Relatives
 
