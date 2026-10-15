@@ -156,7 +156,21 @@ services:
     deploy:
       replicas: 3
     volumes:
-      - ./infra/pgcat/pgcat.toml:/etc/pgcat/pgcat.toml:ro
+      # ${PGCAT_TOML_HOST_PATH:-...} default: normal `docker compose up` run from a host shell (the
+      # user's own terminal, via start-stack.ps1/.sh) resolves this relative path against the real
+      # host filesystem correctly, same as every other relative volume in this file. The override
+      # exists only for control-api's own `docker compose --scale pgcat=N` calls (the HAProxy
+      # toggle's pgcat-replica-count coupling, InfraToggleService.SyncPgcatReplicaCountAsync) -
+      # that `docker compose` CLI process runs INSIDE control-api's own container, so a relative
+      # path there resolves against control-api's /workspace view, which means nothing to the
+      # Docker daemon it talks to over the socket (the daemon isn't inside that container's mount
+      # namespace) - found live: it silently created an empty directory at that meaningless path and
+      # the new pgcat replica's container failed to start. control-api resolves this file's real
+      # host-absolute path itself (via Docker's own API, inspecting its own /pgcat-config mount's
+      # recorded Source - see GetOwnPgcatConfigHostPathAsync) and passes it as this env var only for
+      # that one call, so a fresh pgcat replica's bind mount works no matter the host OS or where the
+      # repo happens to be checked out.
+      - ${PGCAT_TOML_HOST_PATH:-./infra/pgcat/pgcat.toml}:/etc/pgcat/pgcat.toml:ro
     depends_on:
       postgres:
         condition: service_healthy

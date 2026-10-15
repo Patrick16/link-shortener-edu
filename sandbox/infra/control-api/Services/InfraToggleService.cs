@@ -237,17 +237,59 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
         }, ct);
     }
 
-    // Unlike every toggle above, this doesn't touch CurrentStandingEnv or recreate any consumer -
-    // DB_HOST/DB_PORT stay pointed at "haproxy" the whole time (see InfraStatus's own comment on
-    // HaproxyEnabled), so stopping it while pgcat routing is still live genuinely takes the pooler
-    // layer's single entry point down, same as degrading/stopping any other node here. Only legal to
-    // turn ON while pgcat is enabled - SetPgcatEnabledAsync(false) already forces this off as a side
-    // effect (nothing routes through haproxy once pgcat is bypassed), so allowing a standalone "turn
-    // it back on" here while pgcat stays off would just leave a load balancer in front of nothing.
-    // Turning it OFF is always allowed, including while pgcat is already off, so SetPgcatEnabledAsync
-    // and this method never fight over a legal value. Shares the same exclusive gate as the
-    // env-rewriting toggles purely for consistency - nothing else here reads or writes haproxy's
-    // container state outside that gate, so there's no actual race to prevent.
+    // 3 replicas only earns its keep behind a real load balancer - with haproxy down, nothing
+    // round-robins across them (app services still dial haproxy:6432 specifically, not pgcat's own
+    // DNS name - see SyncHaproxyContainerAsync's own comment), so they'd just sit idle. Collapsing
+    // to 1 while haproxy is off and restoring 3 the moment it's back on keeps the graph's ×N badge
+    // honest (no "3 replicas" badge implying load-balancing that isn't actually happening) and
+    // avoids running idle replicas for no reason. Always exactly 1 or 3, never a user-chosen value -
+    // unlike ScaleAsync's general mechanism, there's no pool_size recalculation risk to guard against
+    // here (pgcat is deliberately excluded from ScalableServices for that reason - see this class's
+    // header comment and sandbox/docs/pgcat-pool-sizing.md): fewer replicas at the same pool_size
+    // only ever LOWERS total Postgres connections versus the already-proven-safe 3-replica default,
+    // and restoring exactly 3 returns to that exact proven-safe state, never something new.
+    private async Task SyncPgcatReplicaCountAsync(int replicas, CancellationToken ct)
+    {
+        var env = new Dictionary<string, string> { ["PGCAT_TOML_HOST_PATH"] = await GetOwnPgcatConfigHostPathAsync(ct) };
+
+        logger.LogWarning("Scaling pgcat to {Replicas} replica(s) (haproxy enabled: {HaproxyEnabled})", replicas, replicas > 1);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--scale", $"pgcat={replicas}", "--no-recreate", "pgcat"], env, ct);
+        if (exitCode != 0)
+        {
+            logger.LogWarning("Scaling pgcat to {Replicas} failed (exit {ExitCode}): {Output}", replicas, exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+    }
+
+    // Resolves pgcat.toml's real host-absolute path live, from Docker's own bookkeeping, rather
+    // than hardcoding or requiring a manually-configured env var - works on any host OS/drive
+    // letter/checkout location without extra setup. HOSTNAME is the standard Docker convention
+    // (a container's hostname defaults to its own short container ID unless overridden, and
+    // nothing in this compose file gives control-api a custom one), so inspecting "ourselves" by
+    // that id is reliable. Reuses the already-existing /pgcat-config mount (the same one
+    // SetPgcatPoolSettingsAsync writes pgcat.toml through) rather than /workspace - Docker's own
+    // Mounts metadata records that mount's real Source path directly, with no "which subdirectory
+    // under the repo root" arithmetic needed on top.
+    private async Task<string> GetOwnPgcatConfigHostPathAsync(CancellationToken ct)
+    {
+        var selfId = Environment.GetEnvironmentVariable("HOSTNAME")
+            ?? throw new InvalidOperationException("HOSTNAME is not set - cannot resolve this container's own identity to inspect its mounts.");
+        var self = await runtime.Client.Containers.InspectContainerAsync(selfId, ct);
+        var mount = self.Mounts.FirstOrDefault(m => m.Destination == "/pgcat-config")
+            ?? throw new InvalidOperationException("This container has no /pgcat-config mount - cannot resolve pgcat.toml's real host path.");
+        return $"{mount.Source}/pgcat.toml";
+    }
+
+    // DB_HOST/DB_PORT stay pointed at "haproxy" the whole time this toggles (see InfraStatus's own
+    // comment on HaproxyEnabled), so stopping it while pgcat routing is still live genuinely takes
+    // the pooler layer's single entry point down, same as degrading/stopping any other node here.
+    // Only legal to turn ON while pgcat is enabled - SetPgcatEnabledAsync(false) already forces this
+    // off as a side effect (nothing routes through haproxy once pgcat is bypassed), so allowing a
+    // standalone "turn it back on" here while pgcat stays off would just leave a load balancer in
+    // front of nothing. Turning it OFF is always allowed, including while pgcat is already off, so
+    // SetPgcatEnabledAsync and this method never fight over a legal value. Shares the same exclusive
+    // gate as the env-rewriting toggles purely for consistency - nothing else here reads or writes
+    // haproxy's container state outside that gate, so there's no actual race to prevent.
     public Task<InfraStatus> SetHaproxyEnabledAsync(bool enabled, CancellationToken ct) =>
         runtime.RunExclusiveToggleAsync(async ct =>
         {
@@ -257,6 +299,10 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             }
 
             await SyncHaproxyContainerAsync(enabled, ct);
+            // See SyncPgcatReplicaCountAsync's own comment - symmetric with this toggle itself
+            // (unlike the one-directional pgcat->haproxy cascade above), since both directions here
+            // just restore or collapse a count that's always meant to track haproxy's own state.
+            await SyncPgcatReplicaCountAsync(enabled ? 3 : 1, ct);
             return await GetInfraStatusAsync(ct);
         }, ct);
 
