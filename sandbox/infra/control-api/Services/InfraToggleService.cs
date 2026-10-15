@@ -376,11 +376,13 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     }
 
     // OFF drops the two replicas from pgcat.toml's servers list BEFORE stopping their containers -
-    // pgcat should never be left trying to route a read to a backend that's about to disappear, even
-    // for the ~15s autoreload picks up a change (see PgcatService.SetReplicasEnabledAsync). ON is the
-    // mirror image: start the containers first, then add them back to pgcat's servers list - pgcat's
-    // own healthcheck_delay already gates real traffic until a freshly (re)started replica answers,
-    // so there's no window where pgcat routes to something not listening yet.
+    // pgcat.SetReplicasEnabledAsync issues a best-effort immediate admin-console RELOAD on every
+    // pgcat instance right after the file write (see its own comment), closing the window down to
+    // effectively zero in the normal case instead of leaving it open for pgcat's own
+    // `autoreload = 15000` timer to notice up to ~15s later. ON is the mirror image: start the
+    // containers first, then add them back to pgcat's servers list - pgcat's own healthcheck_delay
+    // already gates real traffic until a freshly (re)started replica answers, so there's no window
+    // where pgcat routes to something not listening yet.
     public Task<InfraStatus> SetPostgresReplicasEnabledAsync(bool enabled, CancellationToken ct) =>
         runtime.RunExclusiveToggleAsync(async ct =>
         {

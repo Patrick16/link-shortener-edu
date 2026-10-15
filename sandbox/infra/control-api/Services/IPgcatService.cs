@@ -11,9 +11,10 @@ public interface IPgcatService
     Task<IReadOnlyList<PgcatInstanceConnections>> GetAllPgcatConnectionsAsync(CancellationToken ct);
 
     // pgcat.toml pool_mode/read-write-splitting/pool_size - rewrites the ONE file all 3 instances
-    // mount read-only and relies on pgcat's own autoreload on each, no docker compose recreate
-    // involved. Applies identically to all 3 instances by construction (one shared file), not a
-    // per-instance setting.
+    // mount read-only, then issues each instance's admin-console `RELOAD` immediately rather than
+    // waiting on pgcat's own `autoreload = 15000` timer - no docker compose recreate involved.
+    // Applies identically to all 3 instances by construction (one shared file), not a per-instance
+    // setting.
     PgcatPoolSettings GetPgcatPoolSettings();
 
     Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct);

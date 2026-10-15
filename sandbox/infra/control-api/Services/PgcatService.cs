@@ -85,17 +85,18 @@ public sealed class PgcatService : IPgcatService
     // and reversible regardless of what the file currently looks like. Written to a *separate*
     // writable bind mount of the same host directory (control-api's own workspace mount is
     // read-only); pgcat itself still mounts the file read-only, but Docker bind mounts are live
-    // views of the same host file, so pgcat's own `autoreload = 15000` picks this up within ~15s
-    // with no docker compose call at all - no recreate, no cascade risk. Collapses the original
-    // file's differentiated per-pool sizes into one shared value - acceptable for an experimental
-    // control whose whole point is "what happens if I shrink every pool", not preserving the
-    // original tuning.
+    // views of the same host file. WritePgcatTomlAsync also issues an immediate admin-console
+    // `RELOAD` on every instance (see its own comment) rather than relying on pgcat's own
+    // `autoreload = 15000` timer to notice - no docker compose call either way, no recreate, no
+    // cascade risk. Collapses the original file's differentiated per-pool sizes into one shared
+    // value - acceptable for an experimental control whose whole point is "what happens if I shrink
+    // every pool", not preserving the original tuning.
     public async Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct)
     {
         await WritePgcatTomlAsync(settings, _replicasEnabled, ct);
 
         _logger.LogWarning(
-            "Rewrote pgcat.toml: pool_mode={PoolMode}, read_write_splitting={ReadWriteSplitting}, pool_size={PoolSize} - pgcat autoreload picks this up within ~15s",
+            "Rewrote pgcat.toml: pool_mode={PoolMode}, read_write_splitting={ReadWriteSplitting}, pool_size={PoolSize} - reloaded on every instance",
             settings.PoolMode, settings.ReadWriteSplitting, settings.PoolSize);
 
         _pgcatPoolSettings = settings;
@@ -104,15 +105,18 @@ public sealed class PgcatService : IPgcatService
 
     // Keeps _pgcatPoolSettings (pool_mode/read-write-splitting/pool_size) exactly as they are -
     // only the `servers` list each pool's [shards.0] carries changes. Shares the same
-    // rewrite-wholesale-and-let-autoreload-pick-it-up mechanism as SetPgcatPoolSettingsAsync, not a
-    // docker compose recreate - postgres-replica1/2 themselves are stopped/started separately by
-    // InfraToggleService, around this call.
+    // rewrite-wholesale-and-reload mechanism as SetPgcatPoolSettingsAsync, not a docker compose
+    // recreate - postgres-replica1/2 themselves are stopped/started separately by
+    // InfraToggleService, around this call. The immediate RELOAD (not just the file write) is what
+    // actually makes InfraToggleService's OFF-then-stop / ON-then-start ordering safe - a replica
+    // dropped here must stop being a pgcat target before (not up to 15s after) its container stops,
+    // and one added back must become a pgcat target as soon as its container is actually up.
     public async Task SetReplicasEnabledAsync(bool enabled, CancellationToken ct)
     {
         await WritePgcatTomlAsync(_pgcatPoolSettings, enabled, ct);
 
         _logger.LogWarning(
-            "Rewrote pgcat.toml: replicas {Enabled} - pgcat autoreload picks this up within ~15s",
+            "Rewrote pgcat.toml: replicas {Enabled} - reloaded on every instance",
             enabled ? "included" : "excluded");
 
         _replicasEnabled = enabled;
@@ -122,6 +126,47 @@ public sealed class PgcatService : IPgcatService
     {
         var path = Path.Combine(_pgcatConfigDir, "pgcat.toml");
         await File.WriteAllTextAsync(path, RenderPgcatToml(settings, replicasEnabled), ct);
+        await ReloadAllInstancesAsync(ct);
+    }
+
+    // `RELOAD` is pgcat's own admin-console command (same `psql`-over-the-admin-port channel
+    // GetPoolStatsAsync already uses for `SHOW POOLS`) to pick up pgcat.toml immediately - confirmed
+    // live against a running instance. Without this, the file write alone only takes effect whenever
+    // pgcat's own `autoreload = 15000` timer next fires (up to ~15s later), which is exactly the
+    // race a caller relying on "the write already happened" (see SetReplicasEnabledAsync's own
+    // comment) needs closed. Every one of the 3 instances needs its own RELOAD - each has an
+    // independent in-memory config despite sharing the one mounted file.
+    //
+    // Best-effort, not fail-the-whole-toggle: a transient exec failure against one instance (or
+    // Docker being briefly unreachable, or - in a unit test with no "pgcat" containers at all -
+    // ListAsync legitimately returning none) must not leave SetReplicasEnabledAsync's caller
+    // thinking the file write itself failed. pgcat's own `autoreload` timer is still running
+    // regardless, so a swallowed failure here only widens the window back to "at most ~15s" instead
+    // of leaving pgcat permanently out of sync.
+    private async Task ReloadAllInstancesAsync(CancellationToken ct)
+    {
+        List<Docker.DotNet.Models.ContainerListResponse> containers;
+        try
+        {
+            containers = await _runtime.ListAsync("pgcat", ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Listing pgcat instances to reload failed - pgcat.toml was still rewritten, autoreload will pick it up within ~15s");
+            return;
+        }
+
+        foreach (var container in containers)
+        {
+            try
+            {
+                await _runtime.ExecAsync(container.ID, ["sh", "-c", "PGPASSWORD=admin_pass psql -h 127.0.0.1 -p 6432 -U admin_user pgcat -c RELOAD"], ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Reloading pgcat instance {ContainerId} failed - autoreload will pick it up within ~15s", container.ID);
+            }
+        }
     }
 
     private static string RenderPgcatToml(PgcatPoolSettings settings, bool replicasEnabled)
