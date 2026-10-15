@@ -22,6 +22,11 @@ public interface IInfraToggleService
     // see InfraStatus's own comment on HaproxyEnabled for why.
     Task<InfraStatus> SetHaproxyEnabledAsync(bool enabled, CancellationToken ct);
 
+    // Stops/starts postgres-replica1/2 themselves (volumes kept, so a later ON resumes streaming
+    // from the existing replication slot instead of a fresh pg_basebackup) and keeps pgcat.toml's
+    // servers list in sync - see InfraStatus's own comment on PostgresReplicasEnabled.
+    Task<InfraStatus> SetPostgresReplicasEnabledAsync(bool enabled, CancellationToken ct);
+
     // Consumer QoS - read once at RabbitMqConsumer startup, so this recreates shortener-service and
     // traffic-service (same env-var + --force-recreate --no-deps shape as the pgcat/cache toggles).
     int GetRabbitMqPrefetch();

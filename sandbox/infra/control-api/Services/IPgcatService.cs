@@ -17,4 +17,10 @@ public interface IPgcatService
     PgcatPoolSettings GetPgcatPoolSettings();
 
     Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct);
+
+    // Drops/re-adds postgres-replica1/2 from the `servers` list each pool's [shards.0] carries,
+    // keeping the current pool settings (mode/read-write-splitting/pool_size) untouched. Called by
+    // InfraToggleService.SetPostgresReplicasEnabledAsync around the replica containers' own
+    // stop/start - never used directly by a frontend control.
+    Task SetReplicasEnabledAsync(bool enabled, CancellationToken ct);
 }

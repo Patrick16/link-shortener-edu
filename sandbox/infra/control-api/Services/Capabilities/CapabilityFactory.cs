@@ -29,6 +29,7 @@ public sealed class CapabilityFactory
         ["dlq-stats"] = sp => new DlqStatsCapability(sp.GetRequiredService<IRabbitMqService>(), sp.GetRequiredService<ILogger<DlqStatsCapability>>()),
         ["haproxy-stats"] = sp => new HaproxyStatsCapability(sp.GetRequiredService<IHaproxyService>(), sp.GetRequiredService<ILogger<HaproxyStatsCapability>>()),
         ["haproxy-toggle"] = sp => new HaproxyToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<HaproxyToggleCapability>>()),
+        ["postgres-replicas-toggle"] = sp => new PostgresReplicasToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<PostgresReplicasToggleCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

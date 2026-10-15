@@ -21,7 +21,8 @@ function sameStatus(a: InfraStatus, b: InfraStatus): boolean {
     a.pgcatEnabled === b.pgcatEnabled &&
     a.cacheEnabled === b.cacheEnabled &&
     a.messagingMode === b.messagingMode &&
-    a.haproxyEnabled === b.haproxyEnabled
+    a.haproxyEnabled === b.haproxyEnabled &&
+    a.postgresReplicasEnabled === b.postgresReplicasEnabled
   )
 }
 
@@ -138,6 +139,13 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
           disabled={!draft.pgcatEnabled}
           nested
           onToggle={(enabled) => setDraft({ ...draft, haproxyEnabled: enabled })}
+        />
+        <InfraToggleControl
+          label="Read replicas (Postgres)"
+          description="Off stops postgres-replica1/2 (volumes kept) and drops them from pgcat's server list - reads fall back to the primary. On starts them back up and re-adds them; streaming resumes from the existing replication slot, no fresh pg_basebackup."
+          enabled={draft.postgresReplicasEnabled}
+          busy={busy}
+          onToggle={(enabled) => setDraft({ ...draft, postgresReplicasEnabled: enabled })}
         />
         <InfraToggleControl
           label="Caching (Redis)"

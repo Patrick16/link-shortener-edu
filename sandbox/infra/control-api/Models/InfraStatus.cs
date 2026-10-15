@@ -29,7 +29,14 @@ namespace ControlApi.Models;
 // stale the moment anyone used the generic per-container Start/Stop controls every node gets for
 // free (ContainerEndpoints.cs) on haproxy directly - those bypass SetHaproxyEnabledAsync entirely
 // and have no reason not to, so the only way to never lie about this one is to not cache it.
-public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled);
+//
+// PostgresReplicasEnabled is the same "read live, don't cache" shape as HaproxyEnabled and for the
+// identical reason - postgres-replica1/2 also get the generic per-container Start/Stop controls for
+// free, which would silently desync a cached flag. True only when BOTH replica containers are
+// running (see InfraToggleService.ArePostgresReplicasRunningAsync); toggling this also keeps
+// pgcat.toml's servers list in sync (see PgcatService.SetReplicasEnabledAsync) so pgcat never tries
+// to route reads to a replica that's stopped, or ignores one that's back up.
+public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled, bool PostgresReplicasEnabled);
 
 public record InfraToggleRequest(bool Enabled);
 

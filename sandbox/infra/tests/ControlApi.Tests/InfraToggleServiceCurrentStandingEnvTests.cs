@@ -10,7 +10,8 @@ public class InfraToggleServiceCurrentStandingEnvTests
     {
         var configuration = new ConfigurationBuilder().Build();
         var runtime = new ContainerRuntime(configuration, NullLogger<ContainerRuntime>.Instance);
-        return new InfraToggleService(runtime, NullLogger<InfraToggleService>.Instance);
+        var pgcat = new PgcatService(configuration, runtime, NullLogger<PgcatService>.Instance);
+        return new InfraToggleService(runtime, pgcat, NullLogger<InfraToggleService>.Instance);
     }
 
     [Fact]

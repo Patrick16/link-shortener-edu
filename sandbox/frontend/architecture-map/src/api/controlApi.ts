@@ -99,6 +99,7 @@ export const controlApi = {
   setCacheEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/cache', 'POST', { enabled }),
   setMessagingMode: (mode: MessagingMode) => request<InfraStatus>('/api/infra/messaging-mode', 'POST', { mode }),
   setHaproxyEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/haproxy', 'POST', { enabled }),
+  setPostgresReplicasEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/postgres-replicas', 'POST', { enabled }),
 
   listScenarios: () => request<CustomScenario[]>('/api/scenarios'),
   saveScenario: (scenario: CustomScenario) => request<CustomScenario>('/api/scenarios', 'POST', scenario),

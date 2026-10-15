@@ -94,6 +94,7 @@ export async function applyInfraConfig(config: InfraConfigSnapshot): Promise<App
   await step('caching', () => controlApi.setCacheEnabled(config.infra.cacheEnabled))
   await step('messaging transport', () => controlApi.setMessagingMode(config.infra.messagingMode))
   await step('haproxy', () => controlApi.setHaproxyEnabled(config.infra.haproxyEnabled))
+  await step('postgres replicas', () => controlApi.setPostgresReplicasEnabled(config.infra.postgresReplicasEnabled))
 
   // Replicas lists every service that was running at capture time, most of which (redis, mongo,
   // rabbitmq, monitoring tools...) were never scalable in the first place - only replay counts
@@ -156,6 +157,7 @@ export function diffInfraConfig(current: InfraConfigSnapshot, desired: InfraConf
   addIfDiff('Caching', current.infra.cacheEnabled ? 'ON' : 'OFF', desired.infra.cacheEnabled ? 'ON' : 'OFF')
   addIfDiff('Messaging transport', current.infra.messagingMode, desired.infra.messagingMode)
   addIfDiff('HAProxy', current.infra.haproxyEnabled ? 'ON' : 'OFF', desired.infra.haproxyEnabled ? 'ON' : 'OFF')
+  addIfDiff('Postgres replicas', current.infra.postgresReplicasEnabled ? 'ON' : 'OFF', desired.infra.postgresReplicasEnabled ? 'ON' : 'OFF')
 
   const currentReplicas = replicaMap(current.replicas)
   const desiredReplicas = replicaMap(desired.replicas)

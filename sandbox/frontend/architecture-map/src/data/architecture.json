@@ -538,8 +538,12 @@
       "icon": "🐘",
       "description": "Streaming (physical) replica of the whole cluster - bootstraps via pg_basebackup, then runs as an ordinary hot standby",
       "capabilities": [
-        "replication-lag"
+        "replication-lag",
+        "postgres-replicas-toggle"
       ],
+      "activeWhen": {
+        "postgresReplicasEnabled": true
+      },
       "details": {
         "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica2, and the primary",
         "technologies": [
@@ -562,6 +566,9 @@
       "capabilities": [
         "replication-lag"
       ],
+      "activeWhen": {
+        "postgresReplicasEnabled": true
+      },
       "details": {
         "purpose": "Read-only copy of users_db/links_db/clicks_db together (Postgres replicates the whole cluster, not per-database) kept current via WAL streaming from postgres; pgcat load-balances SELECT-only queries across this, postgres-replica1, and the primary",
         "technologies": [

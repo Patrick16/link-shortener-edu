@@ -14,8 +14,11 @@ namespace ControlApi.Services;
 // into separate classes with no shared state would reintroduce exactly that bug; CurrentStandingEnv()
 // is what every handler merges before recreating, so triggering any one toggle re-applies every
 // other toggle's current value too instead of quietly undoing it.
-public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleService> logger) : IInfraToggleService
+public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, ILogger<InfraToggleService> logger) : IInfraToggleService
 {
+    // The two streaming replicas this toggle stops/starts - see SetPostgresReplicasEnabledAsync.
+    private static readonly IReadOnlyList<string> PostgresReplicaContainers = ["postgres-replica1", "postgres-replica2"];
+
     // Every DB-touching service - pgcat's toggle recreates all of them, since "the system without
     // connection pooling" means the whole system, not just the two APIs a k6 test happens to hit.
     private static readonly IReadOnlyList<string> DbTouchingServices =
@@ -131,13 +134,27 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             return poolSize;
         }, ct);
 
-    // See InfraStatus's own comment on HaproxyEnabled for why that one field is read live here
-    // instead of joining _nginxBypassed/_pgcatEnabled/_cacheEnabled/_messagingMode as cached state.
+    // See InfraStatus's own comment on HaproxyEnabled/PostgresReplicasEnabled for why those two
+    // fields are read live here instead of joining _nginxBypassed/_pgcatEnabled/_cacheEnabled/
+    // _messagingMode as cached state.
     public async Task<InfraStatus> GetInfraStatusAsync(CancellationToken ct) =>
-        new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode, await IsHaproxyRunningAsync(ct));
+        new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode, await IsHaproxyRunningAsync(ct), await ArePostgresReplicasRunningAsync(ct));
 
     private async Task<bool> IsHaproxyRunningAsync(CancellationToken ct) =>
         await runtime.FindAsync("haproxy", ct) is { State: "running" };
+
+    private async Task<bool> ArePostgresReplicasRunningAsync(CancellationToken ct)
+    {
+        foreach (var name in PostgresReplicaContainers)
+        {
+            if (await runtime.FindAsync(name, ct) is not { State: "running" })
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     public async Task<InfraStatus> SetNginxBypassAsync(bool bypassed, CancellationToken ct)
     {
@@ -328,4 +345,56 @@ public class InfraToggleService(IContainerRuntime runtime, ILogger<InfraToggleSe
             await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
         }
     }
+
+    // Stop (not remove) postgres-replica1/2 - their volumes and the permanent replication slot
+    // replica-entrypoint.sh creates via `pg_basebackup -C --slot=...` survive a stop, so a later ON
+    // resumes streaming from where it left off instead of re-running a full base backup. Ordering
+    // is deliberately asymmetric around pgcat.toml's servers list (see SetPostgresReplicasEnabledAsync):
+    // this method only ever touches the containers themselves.
+    //
+    // No --force-recreate/docker compose involved at all, unlike every other toggle in this class -
+    // these two are plain named containers with no shared env vars or connection-string flip, so a
+    // stop/start on their existing container ID is sufficient and keeps everything (hostname,
+    // volume, replication slot) exactly as it was.
+    private async Task SyncPostgresReplicaContainersAsync(bool enabled, CancellationToken ct)
+    {
+        foreach (var name in PostgresReplicaContainers)
+        {
+            var container = await runtime.FindAsync(name, ct)
+                ?? throw new InvalidOperationException($"{name} container not found");
+
+            logger.LogWarning("Switching {Name} container to {Enabled}", name, enabled);
+            if (enabled)
+            {
+                await runtime.Client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
+            }
+            else
+            {
+                await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
+            }
+        }
+    }
+
+    // OFF drops the two replicas from pgcat.toml's servers list BEFORE stopping their containers -
+    // pgcat should never be left trying to route a read to a backend that's about to disappear, even
+    // for the ~15s autoreload picks up a change (see PgcatService.SetReplicasEnabledAsync). ON is the
+    // mirror image: start the containers first, then add them back to pgcat's servers list - pgcat's
+    // own healthcheck_delay already gates real traffic until a freshly (re)started replica answers,
+    // so there's no window where pgcat routes to something not listening yet.
+    public Task<InfraStatus> SetPostgresReplicasEnabledAsync(bool enabled, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            if (enabled)
+            {
+                await SyncPostgresReplicaContainersAsync(true, ct);
+                await pgcat.SetReplicasEnabledAsync(true, ct);
+            }
+            else
+            {
+                await pgcat.SetReplicasEnabledAsync(false, ct);
+                await SyncPostgresReplicaContainersAsync(false, ct);
+            }
+
+            return await GetInfraStatusAsync(ct);
+        }, ct);
 }

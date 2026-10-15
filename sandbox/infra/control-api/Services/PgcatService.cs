@@ -21,6 +21,9 @@ public sealed class PgcatService : IPgcatService
     // sandbox/docs/pgcat-pool-sizing.md.
     private PgcatPoolSettings _pgcatPoolSettings = new("transaction", true, 20);
 
+    // Mirrors the stack's default running state (both replicas up) - see PostgresReplicasToggleCapability.
+    private bool _replicasEnabled = true;
+
     public PgcatService(IConfiguration configuration, IContainerRuntime runtime, ILogger<PgcatService> logger)
     {
         _runtime = runtime;
@@ -89,8 +92,7 @@ public sealed class PgcatService : IPgcatService
     // original tuning.
     public async Task<PgcatPoolSettings> SetPgcatPoolSettingsAsync(PgcatPoolSettings settings, CancellationToken ct)
     {
-        var path = Path.Combine(_pgcatConfigDir, "pgcat.toml");
-        await File.WriteAllTextAsync(path, RenderPgcatToml(settings), ct);
+        await WritePgcatTomlAsync(settings, _replicasEnabled, ct);
 
         _logger.LogWarning(
             "Rewrote pgcat.toml: pool_mode={PoolMode}, read_write_splitting={ReadWriteSplitting}, pool_size={PoolSize} - pgcat autoreload picks this up within ~15s",
@@ -100,11 +102,35 @@ public sealed class PgcatService : IPgcatService
         return settings;
     }
 
-    private static string RenderPgcatToml(PgcatPoolSettings settings)
+    // Keeps _pgcatPoolSettings (pool_mode/read-write-splitting/pool_size) exactly as they are -
+    // only the `servers` list each pool's [shards.0] carries changes. Shares the same
+    // rewrite-wholesale-and-let-autoreload-pick-it-up mechanism as SetPgcatPoolSettingsAsync, not a
+    // docker compose recreate - postgres-replica1/2 themselves are stopped/started separately by
+    // InfraToggleService, around this call.
+    public async Task SetReplicasEnabledAsync(bool enabled, CancellationToken ct)
+    {
+        await WritePgcatTomlAsync(_pgcatPoolSettings, enabled, ct);
+
+        _logger.LogWarning(
+            "Rewrote pgcat.toml: replicas {Enabled} - pgcat autoreload picks this up within ~15s",
+            enabled ? "included" : "excluded");
+
+        _replicasEnabled = enabled;
+    }
+
+    private async Task WritePgcatTomlAsync(PgcatPoolSettings settings, bool replicasEnabled, CancellationToken ct)
+    {
+        var path = Path.Combine(_pgcatConfigDir, "pgcat.toml");
+        await File.WriteAllTextAsync(path, RenderPgcatToml(settings, replicasEnabled), ct);
+    }
+
+    private static string RenderPgcatToml(PgcatPoolSettings settings, bool replicasEnabled)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# Rewritten live by control-api's pgcat pool-settings control (see PgcatService.SetPgcatPoolSettingsAsync).");
-        sb.AppendLine("# One primary + 2 streaming replicas (postgres-replica1/2), same trio for all three databases.");
+        sb.AppendLine(replicasEnabled
+            ? "# Primary + 2 streaming replicas (postgres-replica1/2), same trio for all three databases."
+            : "# Primary only - replicas excluded (see PgcatService.SetReplicasEnabledAsync).");
         sb.AppendLine("# This ONE file is mounted read-only into all 3 pgcat instances (pgcat-1/2/3) behind haproxy.");
         sb.AppendLine();
         sb.AppendLine("[general]");
@@ -148,7 +174,9 @@ public sealed class PgcatService : IPgcatService
             sb.AppendLine("statement_timeout = 0");
             sb.AppendLine();
             sb.AppendLine($"[pools.{database}.shards.0]");
-            sb.AppendLine("servers = [[\"postgres\", 5432, \"primary\"], [\"postgres-replica1\", 5432, \"replica\"], [\"postgres-replica2\", 5432, \"replica\"]]");
+            sb.AppendLine(replicasEnabled
+                ? "servers = [[\"postgres\", 5432, \"primary\"], [\"postgres-replica1\", 5432, \"replica\"], [\"postgres-replica2\", 5432, \"replica\"]]"
+                : "servers = [[\"postgres\", 5432, \"primary\"]]");
             sb.AppendLine($"database = \"{database}\"");
         }
 
