@@ -39,10 +39,30 @@ public sealed class TrafficService : ITrafficService
             new Dictionary<string, string> { ["hash"] = "shortenLink" }, [],
             "Create a short link"),
         new(
+            "link-api.create-with-ttl", "link-api", "POST", "/Links",
+            """{"originalLink":"{{originalLink}}","ttlSeconds":3600}""",
+            new Dictionary<string, string> { ["hash"] = "shortenLink" }, [],
+            "Create a short link with 1-hour TTL - exercises the TTL expiry feature"),
+        new(
+            "link-api.delete", "link-api", "DELETE", "/Links/{{hash}}",
+            null,
+            new Dictionary<string, string>(), ["hash", "token"],
+            "Delete a short link - owner-only, needs a Register+Login earlier in the sequence (flow.js attaches {{token}} as a Bearer header automatically once a Login step has produced it - see flow.js's own comment)"),
+        new(
+            "link-api.list-deleted", "link-api", "GET", "/Links?deleted=true",
+            null,
+            new Dictionary<string, string>(), ["token"],
+            "List deleted/expired links - the separate 'what's gone' view; needs a Register+Login earlier in the sequence, same as link-api.delete"),
+        new(
             "redirect-api.resolve", "redirect-api", "GET", "/{{hash}}",
             null,
             new Dictionary<string, string>(), ["hash"],
             "Resolve a short link and redirect - uses the hash a Create step earlier in the sequence produced, a preloaded data pool if one was requested (see DataSourceRegistry), or a fixture link if neither ran. Right after Create in the same step, this often 404s: LinkApi returns the hash before ShortenerService has actually persisted it via RabbitMQ - a real eventual-consistency window, not a bug"),
+        new(
+            "reporting-api.stats", "reporting-api", "GET", "/reports/{{hash}}/summary",
+            null,
+            new Dictionary<string, string>(), ["hash", "token"],
+            "Get click statistics for a short link (CQRS read model from ClickHouse) - owner-only, needs a Register+Login earlier in the sequence, same as link-api.delete"),
     ];
 
     // What a run's optional DataPoolRequest can preload - see DataSourceDefinition for why this is
@@ -204,12 +224,16 @@ public sealed class TrafficService : ITrafficService
         // one VU sticks to whichever replica it first resolved - a fair demonstration of "no real
         // load balancing", not a trick. AuthApi was never behind nginx (see nginx.conf), so its URL
         // doesn't depend on the toggle at all. Reuses the nginxBypassed captured once at the top of
-        // this method, not a fresh read - see that capture's own comment.
+        // this method, not a fresh read - see that capture's own comment. ReportingApi is likewise
+        // never behind nginx (see nginx.conf and docker-compose.yml's own comment on reporting-api's
+        // port mapping - read-only, low-traffic, direct port like control-api/auth-api), so its URL
+        // doesn't depend on the toggle either.
         var env = new List<string>
         {
             $"LINK_API_URL=http://{(nginxBypassed ? "link-api:8080" : "nginx:8082")}",
             $"REDIRECT_API_URL=http://{(nginxBypassed ? "redirect-api:8080" : "nginx:8083")}",
             "AUTH_API_URL=http://auth-api:8080",
+            "REPORTING_API_URL=http://reporting-api:8080",
             $"STEPS_JSON={JsonSerializer.Serialize(resolvedSteps, StepJsonOptions)}",
         };
 
@@ -559,8 +583,10 @@ public sealed class TrafficService : ITrafficService
     private static readonly IReadOnlyList<(string Code, string Label)> TrackedStatusCodes =
     [
         ("200", "200 OK"),
+        ("204", "204 No Content"),
         ("302", "302 Found"),
         ("401", "401 Unauthorized"),
+        ("403", "403 Forbidden"),
         ("404", "404 Not Found"),
         ("409", "409 Conflict"),
         ("500", "500 Internal Server Error"),

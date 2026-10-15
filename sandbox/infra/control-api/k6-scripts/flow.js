@@ -5,7 +5,7 @@ import { SharedArray } from 'k6/data';
 // Every traffic run goes through this one script now. Which real endpoints get called, in what
 // order, how data flows from one call into the next, and how long to pause afterward is entirely
 // driven by STEPS_JSON - a JSON array control-api built server-side from
-// DockerService.EndpointRegistry, resolved from the ordered step list the UI's sequence builder
+// TrafficService.EndpointRegistry, resolved from the ordered step list the UI's sequence builder
 // sent. This script has no built-in knowledge of the app's actual routes; it's a generic
 // interpreter over {id, serviceId, method, pathTemplate, bodyTemplate, produces, pauseAfterSeconds}
 // objects. There's no fixed pause between iterations either - if every step's pauseAfterSeconds is
@@ -13,7 +13,7 @@ import { SharedArray } from 'k6/data';
 // preset), not an oversight.
 //
 // POOL_JSON is a second, optional input: real values control-api preloaded from the app itself
-// (see DockerService.FetchDataPoolAsync) before this container ever started, e.g. a few thousand
+// (see TrafficService.FetchDataPoolAsync) before this container ever started, e.g. a few thousand
 // real link hashes. Without it, a sequence that only resolves a link (no Create step of its own)
 // hits the exact same fixture link every iteration - fine for checking the route works at all, but
 // useless for exercising cache/DB behavior across many different rows. SharedArray is k6's own
@@ -23,6 +23,7 @@ const BASE_URLS = {
   'auth-api': __ENV.AUTH_API_URL || 'http://auth-api:8080',
   'link-api': __ENV.LINK_API_URL || 'http://nginx:8082',
   'redirect-api': __ENV.REDIRECT_API_URL || 'http://nginx:8083',
+  'reporting-api': __ENV.REPORTING_API_URL || 'http://reporting-api:8080',
 };
 
 const STEPS = JSON.parse(__ENV.STEPS_JSON || '[]');
@@ -31,13 +32,13 @@ const POOL_MODE = __ENV.POOL_MODE || 'sequential';
 const POOL_VUS_HINT = Math.max(1, Number(__ENV.POOL_VUS_HINT || 1));
 const POOL = new SharedArray('dataPool', () => JSON.parse(__ENV.POOL_JSON || '[]'));
 
-// Must match DockerService.TrackedStatusCodes exactly (the codes, not the labels). Every request is
+// Must match TrafficService.TrackedStatusCodes exactly (the codes, not the labels). Every request is
 // tagged with which step it came from (below), so status codes can be broken down per endpoint in
 // the report instead of one pooled total - but k6 only retains/exports a tag combination that a
 // threshold explicitly references, and the set of step ids is only known at runtime (whatever
 // sequence the UI sent), so the thresholds themselves have to be built dynamically here rather than
 // listed as a static object literal the way a fixed status-only breakdown could be.
-const TRACKED_STATUS_CODES = ['200', '302', '401', '404', '409', '500', '502', '503', '504', '0'];
+const TRACKED_STATUS_CODES = ['200', '204', '302', '401', '403', '404', '409', '500', '502', '503', '504', '0'];
 
 function buildThresholds() {
   const thresholds = {};
@@ -106,9 +107,18 @@ export default function (data) {
     const url = `${base}${path}`;
     const body = substitute(step.bodyTemplate, vars);
 
+    // Attached whenever a Login step earlier in this same iteration has produced one (vars.token),
+    // regardless of whether the current step's own endpoint requires it - same as a real signed-in
+    // session, every request after login carries the token. link-api.create/redirect-api.resolve
+    // don't require it and simply ignore it; link-api.delete/list-deleted and reporting-api.stats
+    // do require it (see EndpointRegistry's own "token" Consumes entries on those three) and 401
+    // without a preceding Register+Login in the sequence.
+    const headers = { 'Content-Type': 'application/json' };
+    if (vars.token) headers['Authorization'] = `Bearer ${vars.token}`;
+
     const res = step.method === 'GET'
-      ? http.get(url, { redirects: 0, tags: { step: step.id } })
-      : http.request(step.method, url, body, { headers: { 'Content-Type': 'application/json' }, tags: { step: step.id } });
+      ? http.get(url, { headers, redirects: 0, tags: { step: step.id } })
+      : http.request(step.method, url, body, { headers, tags: { step: step.id } });
 
     check(res, { [`${step.serviceId} ${step.method} ${step.pathTemplate}`]: (r) => r.status >= 200 && r.status < 400 });
 
