@@ -8,5 +8,9 @@ namespace Infrastructure;
 // ReportingApi can never accidentally write.
 public interface IClickFactQueryService : IPingable
 {
-    Task<ClickSummary> GetSummaryAsync(string hash, CancellationToken cancellationToken = default);
+    // null means "this hash has clicks recorded, but none owned by this caller" - ReportsController
+    // turns that into a 404, same as an unknown hash, so a caller can't distinguish "not yours" from
+    // "doesn't exist" (see ClickHouseClickFactQueryService's own comment on why that's not the same
+    // thing as a hash with zero clicks at all, which returns an ordinary all-zero summary instead).
+    Task<ClickSummary?> GetSummaryAsync(string hash, Guid callerUserId, CancellationToken cancellationToken = default);
 }

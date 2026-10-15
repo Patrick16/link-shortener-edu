@@ -11,7 +11,7 @@ public sealed class ClickHouseClickFactStore(
     string connectionString, IHttpClientFactory httpClientFactory, string httpClientName) : IClickFactStore
 {
     private static readonly string[] Columns =
-        ["id", "hash", "clicked_at", "country", "device_type", "browser", "os", "referrer_domain"];
+        ["id", "hash", "clicked_at", "country", "device_type", "browser", "os", "referrer_domain", "user_id"];
 
     private readonly string _connectionString = connectionString;
     private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
@@ -24,7 +24,7 @@ public sealed class ClickHouseClickFactStore(
         using var client = NewClient();
         var rows = facts.Select(f => new object?[]
         {
-            f.Id, f.Hash, f.ClickedAt, f.Country ?? "", f.DeviceType ?? "", f.Browser ?? "", f.Os ?? "", f.ReferrerDomain ?? "",
+            f.Id, f.Hash, f.ClickedAt, f.Country ?? "", f.DeviceType ?? "", f.Browser ?? "", f.Os ?? "", f.ReferrerDomain ?? "", f.UserId,
         });
 
         await client.InsertBinaryAsync("clicks", Columns, rows, options: default, cancellationToken);

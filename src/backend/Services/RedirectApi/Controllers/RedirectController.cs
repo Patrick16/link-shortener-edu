@@ -73,6 +73,9 @@ public class RedirectController(
             UserAgent = Request.Headers.UserAgent.ToString(),
             Referrer = Request.Headers.Referer.ToString(),
             IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString(),
+            // Feeds ReportingService's owner-scoped reporting (ClickFact.UserId) - the same value
+            // already passed to _clickCounter.RecordClickAsync below for Live Top Links.
+            UserId = link.UserId,
         };
 
         // In the default (async/bus) messaging mode, this enqueues and returns in microseconds -

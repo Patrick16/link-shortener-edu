@@ -27,6 +27,13 @@ CREATE DATABASE IF NOT EXISTS reports_db;
 -- is consistent across every store this project writes click data to - this table already
 -- partitions by day for dedup, but partitioning alone never deleted anything on its own; nothing in
 -- this project actually expired old data anywhere until this and the Mongo TTL index were added.
+-- user_id (2026-10-15): the link's owner at click time, carried through from ClickTrackedEvent -
+-- NULL for an anonymously-created link. Powers owner-scoped reporting (GET /reports/{hash}/summary
+-- filters on it) - a row with a NULL owner stays invisible to every caller, there's no "unowned"
+-- reporting view. Added here rather than via ALTER TABLE: this table has no production data to
+-- migrate, so recreating the dev stack's volume (stop-stack.ps1 -Wipe) is simpler than a real
+-- migration step would be - see this file's own top-of-file comment on why there's no migration
+-- tooling for ClickHouse at all.
 CREATE TABLE IF NOT EXISTS reports_db.clicks
 (
     hash String,
@@ -36,7 +43,8 @@ CREATE TABLE IF NOT EXISTS reports_db.clicks
     device_type String,
     browser String,
     os String,
-    referrer_domain String
+    referrer_domain String,
+    user_id Nullable(UUID)
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY toYYYYMMDD(clicked_at)

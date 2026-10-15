@@ -67,7 +67,8 @@ public sealed class ClickTrackedConsumer(
                 parsedUserAgent.DeviceType,
                 parsedUserAgent.Browser,
                 parsedUserAgent.Os,
-                ExtractReferrerDomain(e.Referrer)));
+                ExtractReferrerDomain(e.Referrer),
+                e.UserId));
         }
 
         await _clickFactStore.InsertManyAsync(facts, cancellationToken);

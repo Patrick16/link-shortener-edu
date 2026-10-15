@@ -10,7 +10,7 @@ namespace ReportingService.Tests;
 
 public class ClickTrackedConsumerTests
 {
-    private static ClickTrackedEvent NewEvent(Guid? id = null, string? ipAddress = null, string referrer = "") => new()
+    private static ClickTrackedEvent NewEvent(Guid? id = null, string? ipAddress = null, string referrer = "", Guid? userId = null) => new()
     {
         Id = id ?? Guid.NewGuid(),
         Hash = "abc12345",
@@ -20,6 +20,7 @@ public class ClickTrackedConsumerTests
         UserAgent = "",
         Referrer = referrer,
         IpAddress = ipAddress,
+        UserId = userId,
     };
 
     private static List<BatchItem<ClickTrackedEvent>> NewBatch(params ClickTrackedEvent[] events) =>
@@ -111,5 +112,41 @@ public class ClickTrackedConsumerTests
         await sut.HandleBatchAsync(NewBatch(NewEvent(referrer: referrer)), CancellationToken.None);
 
         Assert.Equal(expectedDomain, inserted!.Single().ReferrerDomain);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_EventWithUserId_CarriesItThroughToTheFact()
+    {
+        // Owner-scoped reporting (GET /reports/{hash}/summary) depends on this reaching ClickHouse -
+        // RedirectController already has link.UserId in hand when it publishes, this just has to not
+        // drop it on the way to the read model.
+        var ownerId = Guid.NewGuid();
+        IReadOnlyCollection<ClickFact>? inserted = null;
+        var store = new Mock<IClickFactStore>();
+        store.Setup(x => x.InsertManyAsync(It.IsAny<IReadOnlyCollection<ClickFact>>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyCollection<ClickFact>, CancellationToken>((facts, _) => inserted = facts)
+            .Returns(Task.CompletedTask);
+        var sut = NewSut(store);
+
+        await sut.HandleBatchAsync(NewBatch(NewEvent(userId: ownerId)), CancellationToken.None);
+
+        Assert.Equal(ownerId, inserted!.Single().UserId);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_EventWithNoUserId_StoresNullOwner()
+    {
+        // An anonymously-created link's clicks must stay unowned in ClickHouse too, not accidentally
+        // default to some sentinel value that could later match a real caller's id.
+        IReadOnlyCollection<ClickFact>? inserted = null;
+        var store = new Mock<IClickFactStore>();
+        store.Setup(x => x.InsertManyAsync(It.IsAny<IReadOnlyCollection<ClickFact>>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyCollection<ClickFact>, CancellationToken>((facts, _) => inserted = facts)
+            .Returns(Task.CompletedTask);
+        var sut = NewSut(store);
+
+        await sut.HandleBatchAsync(NewBatch(NewEvent()), CancellationToken.None);
+
+        Assert.Null(inserted!.Single().UserId);
     }
 }

@@ -108,6 +108,29 @@ public class RedirectControllerTests
     }
 
     [Fact]
+    public async Task RedirectToOrigin_OwnedLink_PublishesClickTrackedEventWithTheOwnersUserId()
+    {
+        // Feeds owner-scoped reporting (ReportingService writes this straight through to
+        // ClickFact.UserId) - the same link.UserId value RecordsClickForTheOwner above already
+        // verifies reaches the click counter.
+        var ownerId = Guid.NewGuid();
+        await using var context = NewContext();
+        var link = new Link("abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, ownerId);
+        var sut = NewController(context, out var cache, out var dispatcher, out _);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(link);
+
+        await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        dispatcher.Verify(
+            x => x.DispatchAsync(
+                It.Is<ClickTrackedEvent>(e => e.UserId == ownerId),
+                Topics.ClickTracked,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task RedirectToOrigin_AnonymousLink_RecordsClickWithoutAnOwner()
     {
         await using var context = NewContext();

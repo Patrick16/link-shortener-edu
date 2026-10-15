@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Infrastructure;
 using Microsoft.AspNetCore.Authorization;
@@ -28,7 +30,14 @@ public partial class ReportsController(IClickFactQueryService queryService) : Co
             return Problem(detail: "Hash is not a valid short-link hash.", statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var summary = await _queryService.GetSummaryAsync(hash, cancellationToken);
-        return Ok(summary);
+        // [Authorize] already guarantees a valid Bearer token, so Sub is always present and
+        // parseable - same guarantee LinksController relies on for its own owner checks.
+        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+
+        var summary = await _queryService.GetSummaryAsync(hash, userId, cancellationToken);
+        // 404, not 403 - a hash this caller doesn't own gets the same answer as one that doesn't
+        // exist at all, so a caller can't use this endpoint to probe which hashes belong to other
+        // users (see .notes/PLAN.md's Owner-scoped reporting entry for the full reasoning).
+        return summary is null ? NotFound() : Ok(summary);
     }
 }

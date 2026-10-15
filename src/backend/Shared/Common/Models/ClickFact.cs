@@ -13,4 +13,9 @@ public record ClickFact(
     string? DeviceType,
     string? Browser,
     string? Os,
-    string? ReferrerDomain);
+    string? ReferrerDomain,
+    // The link's owner at click time, null for an anonymously-created link - carried straight
+    // through from ClickTrackedEvent.UserId. Rows with a null owner stay invisible to every caller
+    // of GET /reports/{hash}/summary (see ClickHouseClickFactQueryService) - there's no "unowned"
+    // reporting view, only per-owner ones.
+    Guid? UserId);
