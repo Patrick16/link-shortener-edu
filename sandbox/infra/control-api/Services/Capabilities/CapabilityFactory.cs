@@ -32,6 +32,7 @@ public sealed class CapabilityFactory
         ["postgres-replicas-toggle"] = sp => new PostgresReplicasToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<PostgresReplicasToggleCapability>>()),
         ["redis-toggle"] = sp => new RedisEnabledToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<RedisEnabledToggleCapability>>()),
         ["redis-sentinel-toggle"] = sp => new RedisSentinelToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<RedisSentinelToggleCapability>>()),
+        ["mongo-replicas-toggle"] = sp => new MongoReplicasToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<MongoReplicasToggleCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

@@ -433,8 +433,12 @@
       "icon": "🍃",
       "description": "One member of a 3-node MongoDB replica set (rs0) - holds clicks_meta_db, the click metadata TrafficService enriches with parsed browser/OS/device + geo",
       "capabilities": [
-        "mongo-read-preference"
+        "mongo-read-preference",
+        "mongo-replicas-toggle"
       ],
+      "activeWhen": {
+        "mongoReplicasEnabled": true
+      },
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [
@@ -457,6 +461,9 @@
       "capabilities": [
         "mongo-read-preference"
       ],
+      "activeWhen": {
+        "mongoReplicasEnabled": true
+      },
       "details": {
         "purpose": "No fixed primary by container identity, unlike Postgres - the replica set itself elects a primary among mongo1/2/3, and the driver (seeded with all three) auto-discovers whichever one it currently is",
         "technologies": [

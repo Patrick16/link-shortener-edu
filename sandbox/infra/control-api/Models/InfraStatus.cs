@@ -86,7 +86,22 @@ namespace ControlApi.Models;
 // choice is cached state (InfraToggleService._redisConnectionViaSentinel), the same
 // recreate-with-a-different-env-var shape as PgcatEnabled/CacheEnabled/MessagingMode above, not a
 // live read, and carries the identical generic-bypass caveat those three already document.
-public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled, bool PostgresReplicasEnabled, bool RedisEnabled, bool RedisSentinelEnabled);
+//
+// MongoReplicasEnabled is the Mongo-side equivalent of PostgresReplicasEnabled - read live
+// (true iff BOTH mongo2/mongo3 are running), single toggle, no nested sub-toggle the way Redis has
+// (Mongo has no separate "cacheable but not HA" state to merge into it - mongo1 is always the single
+// required node, same as redis-master, but there's no app-level flag analogous to CacheEnabled to
+// move with it). Unlike Postgres's pgcat.toml, though, rs0's own replica-set CONFIGURATION (voting
+// membership) is a genuinely different thing from "is the container running" - stopping mongo2/
+// mongo3 without first removing them from rs0's config would leave mongo1 able to see only 1 of 3
+// votes and step down to SECONDARY, refusing writes entirely, not just serve a stale list the way a
+// forgotten pgcat.toml entry would. SetMongoReplicasEnabledAsync always reconfigures rs0
+// (MongoTopologyService.SetReplicasEnabledAsync) before/after the container stop/start, never just
+// one or the other - see its own comment. The connection-string host list (MONGO_HOSTS) that
+// traffic-service gets recreated with is cached state
+// (InfraToggleService._mongoConnectionIncludesReplicas), the same shape as REDIS_CONN above, with the
+// identical generic-bypass caveat.
+public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled, bool PostgresReplicasEnabled, bool RedisEnabled, bool RedisSentinelEnabled, bool MongoReplicasEnabled);
 
 public record InfraToggleRequest(bool Enabled);
 

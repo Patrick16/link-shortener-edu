@@ -14,10 +14,18 @@ namespace ControlApi.Services;
 // into separate classes with no shared state would reintroduce exactly that bug; CurrentStandingEnv()
 // is what every handler merges before recreating, so triggering any one toggle re-applies every
 // other toggle's current value too instead of quietly undoing it.
-public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, IRedisInfraService redis, ILogger<InfraToggleService> logger) : IInfraToggleService
+public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, IRedisInfraService redis, IMongoTopologyService mongo, ILogger<InfraToggleService> logger) : IInfraToggleService
 {
     // The two streaming replicas this toggle stops/starts - see SetPostgresReplicasEnabledAsync.
     private static readonly IReadOnlyList<string> PostgresReplicaContainers = ["postgres-replica1", "postgres-replica2"];
+
+    // The two rs0 members this toggle stops/starts (mongo1 is never touched - see
+    // SetMongoReplicasEnabledAsync) and the two ConnectionStrings__Mongo host-list forms
+    // SetMongoReplicasEnabledAsync switches traffic-service between - mirrors docker-compose.yml's
+    // own shipped default (all 3) exactly.
+    private static readonly IReadOnlyList<string> MongoReplicaContainers = ["mongo2", "mongo3"];
+    private const string MongoAllHosts = "mongo1:27017,mongo2:27017,mongo3:27017";
+    private const string MongoPrimaryOnlyHost = "mongo1:27017";
 
     // The 5 containers that make up Redis's HA layer on top of the single redis-master - this
     // toggle's own stops/starts, see SetRedisSentinelEnabledAsync.
@@ -76,6 +84,11 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // RedisSentinelEnabled for the full reasoning.
     private bool _redisConnectionViaSentinel = true;
 
+    // Drives MONGO_HOSTS below - same cached, recreate-with-a-different-env-var shape as
+    // _redisConnectionViaSentinel above, not the live-read shape MongoReplicasEnabled itself uses.
+    // See InfraStatus's own comment on MongoReplicasEnabled for the full reasoning.
+    private bool _mongoConnectionIncludesReplicas = true;
+
     // Every axis below recreates a service `docker compose up --force-recreate` can also touch via
     // a DIFFERENT toggle - see this class's own header comment. Every handler merges this full
     // current state and overrides only its own key before recreating, so triggering any one toggle
@@ -92,6 +105,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString(),
         ["MONGO_READ_PREFERENCE"] = _mongoReadPreference,
         ["REDIS_CONN"] = _redisConnectionViaSentinel ? RedisSentinelConnectionString : RedisDirectConnectionString,
+        ["MONGO_HOSTS"] = _mongoConnectionIncludesReplicas ? MongoAllHosts : MongoPrimaryOnlyHost,
     };
 
     public int GetRabbitMqPrefetch() => _rabbitMqPrefetch;
@@ -158,8 +172,8 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         }, ct);
 
     // See InfraStatus's own comment on HaproxyEnabled/PostgresReplicasEnabled/RedisEnabled/
-    // RedisSentinelEnabled for why those four fields are read live here instead of joining
-    // _nginxBypassed/_pgcatEnabled/_cacheEnabled/_messagingMode as cached state.
+    // RedisSentinelEnabled/MongoReplicasEnabled for why those five fields are read live here instead
+    // of joining _nginxBypassed/_pgcatEnabled/_cacheEnabled/_messagingMode as cached state.
     public async Task<InfraStatus> GetInfraStatusAsync(CancellationToken ct) =>
         new(
             _nginxBypassed,
@@ -169,7 +183,8 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             await IsHaproxyRunningAsync(ct),
             await AreAllRunningAsync(PostgresReplicaContainers, ct),
             await IsRedisMasterRunningAsync(ct),
-            await AreAllRunningAsync(RedisHaContainers, ct));
+            await AreAllRunningAsync(RedisHaContainers, ct),
+            await AreAllRunningAsync(MongoReplicaContainers, ct));
 
     private async Task<bool> IsHaproxyRunningAsync(CancellationToken ct) =>
         await runtime.FindAsync("haproxy", ct) is { State: "running" };
@@ -637,6 +652,75 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     private async Task SyncRedisHaContainersAsync(bool enabled, CancellationToken ct)
     {
         foreach (var name in RedisHaContainers)
+        {
+            var container = await runtime.FindAsync(name, ct)
+                ?? throw new InvalidOperationException($"{name} container not found");
+
+            logger.LogWarning("Switching {Name} container to {Enabled}", name, enabled);
+            if (enabled)
+            {
+                await runtime.Client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
+            }
+            else
+            {
+                await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
+            }
+        }
+    }
+
+    // OFF drops mongo2/mongo3 from rs0's own voting configuration BEFORE stopping their containers -
+    // a plain stop while they're still configured members would leave mongo1 able to see only 1 of 3
+    // votes (not a majority) and step down to SECONDARY, refusing writes entirely (see
+    // MongoTopologyService.SetReplicasEnabledAsync's own comment) - unlike Postgres/Redis, a container
+    // stop alone is actively dangerous here, not just incomplete. ON is the mirror image: start the
+    // containers first (mongo2/mongo3's own `--replSet rs0` flag just makes them come up idle,
+    // waiting to be told they belong to a set - no self-election risk the way Redis's Sentinel-aware
+    // entrypoint has to guard against), then rs.add() each - MongoDB gates a freshly-added member's
+    // own eligibility to vote/serve reads until its initial sync completes, so there's no window
+    // where traffic routes to a member that isn't ready yet.
+    public Task<InfraStatus> SetMongoReplicasEnabledAsync(bool enabled, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            if (enabled)
+            {
+                await SyncMongoReplicaContainersAsync(true, ct);
+                await mongo.SetReplicasEnabledAsync(true, ct);
+                _mongoConnectionIncludesReplicas = true;
+                await RecreateTrafficServiceMongoAsync(ct);
+            }
+            else
+            {
+                await mongo.SetReplicasEnabledAsync(false, ct);
+                _mongoConnectionIncludesReplicas = false;
+                await RecreateTrafficServiceMongoAsync(ct);
+                await SyncMongoReplicaContainersAsync(false, ct);
+            }
+
+            return await GetInfraStatusAsync(ct);
+        }, ct);
+
+    // Mirrors SetMongoReadPreferenceAsync's own shape exactly (single-service recreate, no
+    // BuildPreserveScaleArgsAsync) - traffic-service is this toggle's only consumer, same as that one.
+    private async Task RecreateTrafficServiceMongoAsync(CancellationToken ct)
+    {
+        var env = CurrentStandingEnv();
+
+        logger.LogWarning("Switching ConnectionStrings__Mongo host list for traffic-service to {Hosts}", env["MONGO_HOSTS"]);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "traffic-service"], env, ct);
+        if (exitCode != 0)
+        {
+            logger.LogWarning("Recreating traffic-service for Mongo host list failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+    }
+
+    // Stop (not remove) mongo2/mongo3 - same reasoning as the Postgres/Redis equivalents: whatever
+    // local data survives on the kept volume is a head start, not a guarantee (MongoDB's own initial
+    // sync protocol decides how much of it it can actually reuse), but removing the volume on every
+    // OFF would guarantee throwing it away for no reason.
+    private async Task SyncMongoReplicaContainersAsync(bool enabled, CancellationToken ct)
+    {
+        foreach (var name in MongoReplicaContainers)
         {
             var container = await runtime.FindAsync(name, ct)
                 ?? throw new InvalidOperationException($"{name} container not found");

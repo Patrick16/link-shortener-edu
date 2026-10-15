@@ -13,6 +13,7 @@ function status(overrides: Partial<InfraStatus> = {}): InfraStatus {
     postgresReplicasEnabled: true,
     redisEnabled: true,
     redisSentinelEnabled: true,
+    mongoReplicasEnabled: true,
     ...overrides,
   }
 }

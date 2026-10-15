@@ -24,7 +24,8 @@ function sameStatus(a: InfraStatus, b: InfraStatus): boolean {
     a.haproxyEnabled === b.haproxyEnabled &&
     a.postgresReplicasEnabled === b.postgresReplicasEnabled &&
     a.redisEnabled === b.redisEnabled &&
-    a.redisSentinelEnabled === b.redisSentinelEnabled
+    a.redisSentinelEnabled === b.redisSentinelEnabled &&
+    a.mongoReplicasEnabled === b.mongoReplicasEnabled
   )
 }
 
@@ -180,6 +181,13 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
           disabled={!draft.redisEnabled}
           nested
           onToggle={(enabled) => setDraft({ ...draft, redisSentinelEnabled: enabled })}
+        />
+        <InfraToggleControl
+          label="Replicas (MongoDB)"
+          description="Off reconfigures rs0 down to mongo1 alone (mongo2/mongo3 dropped from the voting set first, then stopped - volumes kept) and points TrafficService at mongo1 only. On starts mongo2/mongo3 back up and rs.add()s them back into rs0 - a freshly rejoined member does a real initial sync, not an instant rejoin, so expect a delay proportional to clicks_meta_db's size before it's fully caught up."
+          enabled={draft.mongoReplicasEnabled}
+          busy={busy}
+          onToggle={(enabled) => setDraft({ ...draft, mongoReplicasEnabled: enabled })}
         />
         <div className="pgcat-pool-control">
           <EnumToggleControl

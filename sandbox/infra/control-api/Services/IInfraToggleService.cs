@@ -39,6 +39,13 @@ public interface IInfraToggleService
     // redis-master:6379). Only legal to turn on while Redis itself is on.
     Task<InfraStatus> SetRedisSentinelEnabledAsync(bool enabled, CancellationToken ct);
 
+    // Drops/re-adds mongo2/mongo3 from rs0's own voting configuration (via
+    // IMongoTopologyService.SetReplicasEnabledAsync, not just a container stop/start - see its own
+    // comment for why a stop alone would be dangerous here) and recreates traffic-service with the
+    // matching ConnectionStrings__Mongo host list - see InfraStatus's own comment on
+    // MongoReplicasEnabled.
+    Task<InfraStatus> SetMongoReplicasEnabledAsync(bool enabled, CancellationToken ct);
+
     // Consumer QoS - read once at RabbitMqConsumer startup, so this recreates shortener-service and
     // traffic-service (same env-var + --force-recreate --no-deps shape as the pgcat/cache toggles).
     int GetRabbitMqPrefetch();

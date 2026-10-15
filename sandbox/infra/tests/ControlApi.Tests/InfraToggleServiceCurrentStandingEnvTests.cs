@@ -12,7 +12,8 @@ public class InfraToggleServiceCurrentStandingEnvTests
         var runtime = new ContainerRuntime(configuration, NullLogger<ContainerRuntime>.Instance);
         var pgcat = new PgcatService(configuration, runtime, NullLogger<PgcatService>.Instance);
         var redis = new RedisInfraService(runtime, NullLogger<RedisInfraService>.Instance);
-        return new InfraToggleService(runtime, pgcat, redis, NullLogger<InfraToggleService>.Instance);
+        var mongo = new MongoTopologyService(runtime, NullLogger<MongoTopologyService>.Instance);
+        return new InfraToggleService(runtime, pgcat, redis, mongo, NullLogger<InfraToggleService>.Instance);
     }
 
     [Fact]
@@ -37,5 +38,6 @@ public class InfraToggleServiceCurrentStandingEnvTests
         Assert.Equal("10", env["RABBITMQ_PREFETCH"]);
         Assert.Equal("primary", env["MONGO_READ_PREFERENCE"]);
         Assert.Equal("redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster", env["REDIS_CONN"]);
+        Assert.Equal("mongo1:27017,mongo2:27017,mongo3:27017", env["MONGO_HOSTS"]);
     }
 }
