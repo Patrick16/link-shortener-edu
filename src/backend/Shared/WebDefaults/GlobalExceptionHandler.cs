@@ -30,16 +30,20 @@ internal sealed class GlobalExceptionHandler(
             return true;
         }
 
-        logger.LogError(exception, "Unhandled exception processing {Method} {Path}",
-            httpContext.Request.Method, httpContext.Request.Path);
-
         // AlreadyExists is a real, expected business outcome (today: a custom alias losing a
         // uniqueness race in ShortenerService's synchronous create path - see
-        // CustomAliasCreator/LinkCreatedConsumer), not a transport failure - 409 says that
-        // honestly, with the same reason text that was also dead-lettered server-side, instead of
-        // falling into the generic "downstream unavailable" 502/503 below.
+        // CustomAliasCreator/LinkCreatedConsumer), not a transport failure or a bug - 409 says that
+        // honestly, with the same reason text that was also dead-lettered server-side. Handled
+        // (and, like the Cancelled case above, deliberately NOT routed through the LogError below)
+        // before that unconditional call, not after - losing a routine alias race is ordinary user
+        // behavior, not an unhandled-exception-worthy event; logging it as Error would mean every
+        // "that name's taken" response shows up as an error-rate spike in Grafana/Loki (found during
+        // review - the original version logged this at Error alongside genuine outages/bugs).
         if (exception is RpcException { StatusCode: StatusCode.AlreadyExists } conflictException)
         {
+            logger.LogInformation("Alias/hash conflict on {Method} {Path}: {Reason}",
+                httpContext.Request.Method, httpContext.Request.Path, conflictException.Status.Detail);
+
             httpContext.Response.StatusCode = StatusCodes.Status409Conflict;
 
             return await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
@@ -55,6 +59,9 @@ internal sealed class GlobalExceptionHandler(
                 },
             });
         }
+
+        logger.LogError(exception, "Unhandled exception processing {Method} {Path}",
+            httpContext.Request.Method, httpContext.Request.Path);
 
         // A SyncGrpcDispatcher call (messaging-mode=grpc) failing is the one exception type this
         // handler treats specially - it's not "this service is broken", it's "the downstream

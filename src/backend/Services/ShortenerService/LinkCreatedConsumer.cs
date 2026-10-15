@@ -35,15 +35,34 @@ public sealed class LinkCreatedConsumer(
     {
         await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 
-        // Same hash can appear twice in one batch if a redelivery lands alongside a fresher copy of
-        // itself - keep the last occurrence.
-        var distinctByHash = batch
-            .GroupBy(x => x.Payload.Hash)
-            .Select(g => g.Last())
-            .ToList();
+        var poisonMessages = new List<PoisonMessage>();
+
+        // Same hash can appear more than once in one batch - either genuine redeliveries of the
+        // identical message (same OriginalLink - keep the last, drop the rest silently, same as
+        // before this fix), or, now that a hash can be a human-chosen alias, two genuinely
+        // different links that both landed in the same batch window claiming the same hash. The
+        // latter case used to vanish untraced (g.Last() silently dropping every earlier item in
+        // the group, poison or not) - now every dropped item is compared against the survivor
+        // that actually proceeds, and a content mismatch is reported as poison instead of lost.
+        var distinctByHash = new List<BatchItem<LinkCreatedEvent>>();
+        foreach (var group in batch.GroupBy(x => x.Payload.Hash))
+        {
+            var groupItems = group.ToList();
+            var survivor = groupItems[^1];
+            distinctByHash.Add(survivor);
+
+            foreach (var loser in groupItems.SkipLast(1))
+            {
+                if (loser.Payload.OriginalLink == survivor.Payload.OriginalLink)
+                {
+                    continue; // identical content - an intra-batch redelivery, not a conflict
+                }
+
+                poisonMessages.Add(new PoisonMessage(loser.MessageId, ConflictReason(loser.Payload.Hash, survivor.Payload.HasCustomAlias)));
+            }
+        }
 
         var hashes = distinctByHash.Select(x => x.Payload.Hash).ToList();
-        var poisonMessages = new List<PoisonMessage>();
 
         // For the synchronous gRPC path (batch-of-one, see MessagingGrpcService), this pre-check
         // almost always reports "not yet stored" even for a genuine race - two concurrent callers
@@ -146,17 +165,17 @@ public sealed class LinkCreatedConsumer(
                 continue; // same link, already persisted - redelivery or a losing racing replica, not an error
             }
 
-            poisonMessages.Add(new PoisonMessage(item.MessageId, ConflictReason(item.Payload.Hash, existing)));
+            poisonMessages.Add(new PoisonMessage(item.MessageId, ConflictReason(item.Payload.Hash, existing.HasCustomAlias)));
         }
 
         return stillNew;
     }
 
-    // The existing (winning) row is the one source of truth available at conflict time for what
-    // kind of conflict this is - HasCustomAlias lives on it specifically so this message can be
-    // accurate instead of generic.
-    private static string ConflictReason(string hash, Link existing) =>
-        existing.HasCustomAlias
+    // Takes the winning side's HasCustomAlias directly (not a Link) so this can serve both callers:
+    // ClassifyAgainstExisting has a persisted winning row to read it from, but the intra-batch dedup
+    // loop above only has the surviving BatchItem - neither side is a Link yet at that point.
+    private static string ConflictReason(string hash, bool hasCustomAlias) =>
+        hasCustomAlias
             ? $"Alias '{hash}' is already in use by a different link."
             : $"Hash '{hash}' collided with an existing link - unexpected for a generated hash, investigate.";
 

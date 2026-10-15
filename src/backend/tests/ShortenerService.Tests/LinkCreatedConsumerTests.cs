@@ -63,6 +63,27 @@ public class LinkCreatedConsumerTests
     }
 
     [Fact]
+    public async Task HandleBatchAsync_ConflictingHashWithinOneBatch_PersistsSurvivorAndPoisonsTheLoser()
+    {
+        // Regression for a gap the review found: the old intra-batch dedup (GroupBy...Last()) kept
+        // only the final item per hash and silently discarded every earlier one, poison or not -
+        // correct when every discard is a true redelivery, wrong once two genuinely different
+        // links (e.g. two alias requests) can land in the same batch claiming the same hash.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var sut = NewSut(factory);
+        var survivor = NewEvent("contested") with { HasCustomAlias = true, OriginalLink = "https://example.com/survivor" };
+        var loser = survivor with { OriginalLink = "https://example.com/loser" };
+
+        var outcome = await sut.HandleBatchAsync(NewBatch(loser, survivor), CancellationToken.None);
+
+        var poison = Assert.Single(outcome.PoisonMessages);
+        Assert.Contains("already in use by a different link", poison.Reason);
+        await using var verify = await factory.CreateDbContextAsync();
+        var stored = await verify.Links.SingleAsync();
+        Assert.Equal(survivor.OriginalLink, stored.OriginalLink);
+    }
+
+    [Fact]
     public async Task HandleBatchAsync_RedeliveredInALaterBatch_IsSkippedWithoutError()
     {
         var factory = NewFactory(Guid.NewGuid().ToString());
