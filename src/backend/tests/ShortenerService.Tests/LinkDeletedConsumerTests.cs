@@ -40,10 +40,36 @@ public sealed class LinkDeletedConsumerTests : IDisposable
     private static List<BatchItem<LinkDeletedEvent>> NewBatch(params string[] hashes) =>
         hashes.Select(h => new BatchItem<LinkDeletedEvent>(Guid.NewGuid().ToString(), new LinkDeletedEvent { Hash = h })).ToList();
 
-    private static LinkDeletedConsumer NewSut(IDbContextFactory<DatabaseContext> factory, out Mock<ILinkDeletionMarkerStore> deletionMarkers)
+    private static LinkDeletedConsumer NewSut(IDbContextFactory<DatabaseContext> factory, out Mock<ILinkDeletionMarkerStore> deletionMarkers) =>
+        NewSut(factory, out deletionMarkers, out _);
+
+    private static LinkDeletedConsumer NewSut(
+        IDbContextFactory<DatabaseContext> factory,
+        out Mock<ILinkDeletionMarkerStore> deletionMarkers,
+        out Mock<IEntityCacheService<Link>> cache)
     {
         deletionMarkers = new Mock<ILinkDeletionMarkerStore>();
-        return new LinkDeletedConsumer(Mock.Of<IMessageConsumer>(), factory, deletionMarkers.Object, NullLogger<LinkDeletedConsumer>.Instance);
+        cache = new Mock<IEntityCacheService<Link>>();
+        return new LinkDeletedConsumer(Mock.Of<IMessageConsumer>(), factory, deletionMarkers.Object, cache.Object, NullLogger<LinkDeletedConsumer>.Instance);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_ExistingLink_InvalidatesTheMainCacheEntry()
+    {
+        // Found in review: without this, a Link cached before deletion kept showing DeletedAt ==
+        // null forever, with correctness resting entirely on the separate tombstone write never
+        // failing. This invalidation is independent of that tombstone confirm (below) succeeding.
+        var factory = NewFactory();
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.Links.Add(NewLink());
+            await seed.SaveChangesAsync();
+        }
+        var sut = NewSut(factory, out _, out var cache);
+
+        await sut.HandleBatchAsync(NewBatch("abc12345"), CancellationToken.None);
+
+        cache.Verify(x => x.InvalidateCacheAsync("abc12345"), Times.Once);
     }
 
     [Fact]

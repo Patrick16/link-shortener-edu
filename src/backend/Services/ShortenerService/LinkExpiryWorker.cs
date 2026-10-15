@@ -1,4 +1,5 @@
 using Common;
+using Common.Models;
 using Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -16,6 +17,7 @@ namespace ShortenerService;
 public class LinkExpiryWorker(
     IConfiguration configuration,
     ILinkDeletionMarkerStore deletionMarkers,
+    IEntityCacheService<Link> cache,
     ILogger<LinkExpiryWorker> logger) : BackgroundService
 {
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
@@ -28,6 +30,7 @@ public class LinkExpiryWorker(
 
     private readonly IConfiguration _configuration = configuration;
     private readonly ILinkDeletionMarkerStore _deletionMarkers = deletionMarkers;
+    private readonly IEntityCacheService<Link> _cache = cache;
     private readonly ILogger<LinkExpiryWorker> _logger = logger;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -95,10 +98,15 @@ public class LinkExpiryWorker(
                     RETURNING "Hash" AS "Value"
                     """).ToListAsync(cancellationToken);
 
+                // Also invalidates the main link:{hash} cache-aside entry, not just the tombstone -
+                // see LinkDeletedConsumer's identical comment (found in review) for why relying on
+                // the tombstone alone left a cached-before-expiry Link resolving successfully for up
+                // to its full cache TTL if the tombstone write specifically failed.
                 var now = DateTime.UtcNow;
                 foreach (var hash in expiredHashes)
                 {
                     await _deletionMarkers.ConfirmAsync(hash, DeletedReason.Expired, now, cancellationToken);
+                    await _cache.InvalidateCacheAsync(hash);
                 }
 
                 if (expiredHashes.Count > 0)

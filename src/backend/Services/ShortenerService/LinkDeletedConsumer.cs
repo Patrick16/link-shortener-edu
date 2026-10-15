@@ -1,3 +1,5 @@
+using Common;
+using Common.Models;
 using Contracts.Events;
 using Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +14,7 @@ public sealed class LinkDeletedConsumer(
     IMessageConsumer consumer,
     IDbContextFactory<DatabaseContext> dbContextFactory,
     ILinkDeletionMarkerStore deletionMarkers,
+    IEntityCacheService<Link> cache,
     ILogger<LinkDeletedConsumer> logger) : BackgroundService
 {
     private const string QueueName = "shortener-service.link-deleted";
@@ -19,6 +22,7 @@ public sealed class LinkDeletedConsumer(
     private readonly IMessageConsumer _consumer = consumer;
     private readonly IDbContextFactory<DatabaseContext> _dbContextFactory = dbContextFactory;
     private readonly ILinkDeletionMarkerStore _deletionMarkers = deletionMarkers;
+    private readonly IEntityCacheService<Link> _cache = cache;
     private readonly ILogger<LinkDeletedConsumer> _logger = logger;
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
@@ -55,9 +59,17 @@ public sealed class LinkDeletedConsumer(
         // DeletedAt even for an already-deleted row is an approximation, not the row's true original
         // timestamp - acceptable here since the tombstone's timestamp is informational (shown on the
         // "gone" page), not load-bearing for any correctness decision.
+        //
+        // Also invalidates the main link:{hash} cache-aside entry (IEntityCacheService<Link>, a
+        // separate Redis key/path from the tombstone above) - found in review: without this, a Link
+        // cached before deletion kept showing DeletedAt == null forever, with correctness resting
+        // entirely on the tombstone write never failing. Belt and suspenders: if the tombstone
+        // confirm below fails but this invalidation succeeds (or vice versa), RedirectApi's live
+        // DeletedAt check on the next Postgres-backed cache miss still catches it.
         foreach (var hash in existingHashes)
         {
             await _deletionMarkers.ConfirmAsync(hash, DeletedReason.Manual, now, cancellationToken);
+            await _cache.InvalidateCacheAsync(hash);
         }
 
         // Unlike ClickTrackedConsumer's identical-shaped "no row found" case (which just logs and

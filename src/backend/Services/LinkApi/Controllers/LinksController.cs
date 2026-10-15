@@ -319,11 +319,17 @@ public partial class LinksController(
             return NoContent(); // already deleted - idempotent success, not an error
         }
 
-        // Always publishes, regardless of whether this wins or loses the SETNX race below (a
+        // Dispatch first, mark the optimistic tombstone only after it succeeds - mirrors CreateLink's
+        // own ordering above and for the same reason, mirrored in the opposite direction: a failed
+        // dispatch (e.g. SyncGrpcDispatcher in gRPC mode, which has no fallback queue and throws
+        // straight through to a 502/503 here) must not leave the tombstone behind regardless. Found
+        // in review - the original order let a failed delete write a real 60s-TTL "Gone" tombstone
+        // for a link that was never actually deleted, 410-ing every visitor for up to that long.
+        await _dispatcher.DispatchAsync(new LinkDeletedEvent { Hash = hash }, Topics.LinkDeleted, cancellationToken);
+        // Always published, regardless of whether this wins or loses the SETNX race below (a
         // concurrent duplicate DELETE for the same hash) - simpler than branching on the result,
         // and redundant delivery is exactly what LinkDeletedConsumer is built to tolerate.
         await _deletionMarkers.TryMarkOptimisticallyAsync(hash, DeletedReason.Manual, cancellationToken);
-        await _dispatcher.DispatchAsync(new LinkDeletedEvent { Hash = hash }, Topics.LinkDeleted, cancellationToken);
 
         _logger.LogDebug("Link {Hash} marked for deletion, queued for publish to {Topic}", hash, Topics.LinkDeleted);
 

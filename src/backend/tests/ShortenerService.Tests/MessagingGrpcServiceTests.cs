@@ -33,7 +33,7 @@ public class MessagingGrpcServiceTests
 
     private static MessagingGrpcService NewSut(IDbContextFactory<DatabaseContext> factory) => new(
         new LinkCreatedConsumer(Mock.Of<IMessageConsumer>(), factory, Mock.Of<IEntityCacheService<Link>>(), NullLogger<LinkCreatedConsumer>.Instance),
-        new LinkDeletedConsumer(Mock.Of<IMessageConsumer>(), factory, Mock.Of<ILinkDeletionMarkerStore>(), NullLogger<LinkDeletedConsumer>.Instance));
+        new LinkDeletedConsumer(Mock.Of<IMessageConsumer>(), factory, Mock.Of<ILinkDeletionMarkerStore>(), Mock.Of<IEntityCacheService<Link>>(), NullLogger<LinkDeletedConsumer>.Instance));
 
     [Fact]
     public async Task Publish_ValidLinkCreatedEvent_PersistsToDatabase()
