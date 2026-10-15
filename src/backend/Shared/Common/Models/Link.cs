@@ -6,4 +6,5 @@ public record Link(
     string ShortenLink,
     DateTime CreatedAt,
     Guid? UserId,
-    int ClickCount = 0);
+    int ClickCount = 0,
+    bool HasCustomAlias = false);

@@ -9,6 +9,6 @@ namespace TrafficService;
 // Calls the same batch-consumer handler with a batch of one.
 public sealed class MessagingGrpcService(ClickTrackedConsumer consumer) : MessagingGrpcServiceBase<ClickTrackedEvent>(Topics.ClickTracked)
 {
-    protected override Task HandleAsync(BatchItem<ClickTrackedEvent> item, CancellationToken cancellationToken) =>
+    protected override Task<BatchOutcome> HandleAsync(BatchItem<ClickTrackedEvent> item, CancellationToken cancellationToken) =>
         consumer.HandleBatchAsync([item], cancellationToken);
 }

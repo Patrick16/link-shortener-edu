@@ -21,10 +21,20 @@ public abstract class MessagingGrpcServiceBase<TEvent>(string expectedTopic) : M
         var message = JsonSerializer.Deserialize<TEvent>(request.Payload)
             ?? throw new RpcException(new Status(StatusCode.InvalidArgument, $"Payload did not deserialize to a {typeof(TEvent).Name}."));
 
-        await HandleAsync(new BatchItem<TEvent>(request.MessageId, message), context.CancellationToken);
+        var outcome = await HandleAsync(new BatchItem<TEvent>(request.MessageId, message), context.CancellationToken);
+
+        // Unlike the RabbitMQ transport (which dead-letters a poison message and acks the rest of
+        // its batch), a sync caller is waiting for exactly this one message's outcome - a poison
+        // result here means the business rule it violated (e.g. a unique-key conflict) is
+        // permanent, so it's surfaced as AlreadyExists rather than a false PublishAck{Success=true}.
+        var poison = outcome.PoisonMessages.FirstOrDefault(p => p.MessageId == request.MessageId);
+        if (poison is not null)
+        {
+            throw new RpcException(new Status(StatusCode.AlreadyExists, poison.Reason));
+        }
 
         return new PublishAck { Success = true };
     }
 
-    protected abstract Task HandleAsync(BatchItem<TEvent> item, CancellationToken cancellationToken);
+    protected abstract Task<BatchOutcome> HandleAsync(BatchItem<TEvent> item, CancellationToken cancellationToken);
 }

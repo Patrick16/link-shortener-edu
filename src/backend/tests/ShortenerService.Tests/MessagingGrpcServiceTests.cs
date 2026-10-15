@@ -75,4 +75,35 @@ public class MessagingGrpcServiceTests
 
         Assert.Equal(StatusCode.InvalidArgument, ex.StatusCode);
     }
+
+    [Fact]
+    public async Task Publish_AliasAlreadyTakenByADifferentLink_ThrowsAlreadyExists()
+    {
+        // The synchronous caller (LinksController.CreateWithAliasAsync) needs a real signal here -
+        // a plain PublishAck{Success=true} would tell the loser of an alias race that their link
+        // was created when it wasn't.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var sut = NewSut(factory);
+        var winner = new LinkCreatedEvent
+        {
+            Hash = "taken-alias",
+            OriginalLink = "https://example.com/a",
+            ShortenLink = "taken-alias",
+            CreatedAt = DateTime.UtcNow,
+            HasCustomAlias = true,
+        };
+        await sut.Publish(
+            new PublishRequest { MessageId = Guid.NewGuid().ToString(), Topic = Topics.LinkCreated, Payload = JsonSerializer.Serialize(winner) },
+            NewContext());
+
+        var loser = winner with { OriginalLink = "https://example.com/b" };
+        var request = new PublishRequest { MessageId = Guid.NewGuid().ToString(), Topic = Topics.LinkCreated, Payload = JsonSerializer.Serialize(loser) };
+
+        var ex = await Assert.ThrowsAsync<RpcException>(() => sut.Publish(request, NewContext()));
+
+        Assert.Equal(StatusCode.AlreadyExists, ex.StatusCode);
+        Assert.Contains("taken-alias", ex.Status.Detail);
+        await using var verify = await factory.CreateDbContextAsync();
+        Assert.Equal(1, await verify.Links.CountAsync());
+    }
 }

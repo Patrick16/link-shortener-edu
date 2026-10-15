@@ -3,6 +3,7 @@ using Grpc.Net.Client;
 using Infrastructure.Grpc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 
 namespace Infrastructure;
@@ -74,6 +75,27 @@ public static class GrpcMessagingExtensions
     public static IHostApplicationBuilder AddMessagingGrpcServer(this IHostApplicationBuilder builder)
     {
         builder.Services.AddGrpc();
+        return builder;
+    }
+
+    // LinkApi-only: custom-alias creation always goes through ShortenerService's gRPC endpoint
+    // synchronously, independent of Messaging:Mode (which only picks the transport for plain,
+    // non-aliased link creation - see CustomAliasCreator/LinksController). Not folded into
+    // AddEventDispatcher above because RedirectApi calls that too and has no use for this client.
+    // TryAddSingleton, not AddSingleton: if Messaging:Mode=grpc, AddEventDispatcher already
+    // registered the same GrpcChannel/MessagingServiceClient types above - this reuses them rather
+    // than registering a second, redundant instance.
+    public static IHostApplicationBuilder AddAliasGrpcClient(this IHostApplicationBuilder builder)
+    {
+        AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+
+        var targetUrl = builder.Configuration[Constants.MessagingGrpcTargetUrlSection]
+            ?? throw new InvalidOperationException(
+                $"{Constants.MessagingGrpcTargetUrlSection} must be set for custom-alias creation.");
+
+        builder.Services.TryAddSingleton(_ => GrpcChannel.ForAddress(targetUrl));
+        builder.Services.TryAddSingleton(sp => new MessagingService.MessagingServiceClient(sp.GetRequiredService<GrpcChannel>()));
+
         return builder;
     }
 }

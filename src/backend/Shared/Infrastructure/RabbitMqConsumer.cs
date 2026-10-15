@@ -295,18 +295,18 @@ public sealed class RabbitMqConsumer(
             return;
         }
 
-        var poisonIds = new HashSet<string>(outcome.PoisonMessageIds);
+        var poisonReasons = outcome.PoisonMessages.ToDictionary(p => p.MessageId, p => p.Reason);
         foreach (var delivery in batch)
         {
             _deliveryAttempts.TryRemove(delivery.MessageId, out _);
-            if (poisonIds.Contains(delivery.MessageId))
+            if (poisonReasons.TryGetValue(delivery.MessageId, out var reason))
             {
                 await PublishDeadLetterAsync(
                         channel,
                         deadQueueName,
                         JsonSerializer.SerializeToUtf8Bytes(delivery.Message),
                         delivery.MessageId,
-                        "business-rejected",
+                        reason,
                         cancellationToken)
                     .ConfigureAwait(false);
             }

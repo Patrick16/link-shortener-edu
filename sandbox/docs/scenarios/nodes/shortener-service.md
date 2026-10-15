@@ -49,6 +49,13 @@ prefetch only bounds unacked messages per channel, it doesn't create in-process 
 this node's Pitfalls for a race that scaling surfaced in code that had (at the time, correctly)
 assumed it would only ever run as one instance.
 
+`HandleBatchAsync` is also what [LinkApi](node:link-api)'s custom-alias path calls synchronously,
+batch-of-one, over the same gRPC endpoint `Messaging:Mode=grpc` uses — this node has no separate
+code path for it. Its redelivery-safety check now compares each conflicting row's `OriginalLink`,
+not just whether the hash already exists, so a custom alias losing a uniqueness race is reported as
+a conflict (`BatchOutcome.WithPoison`) instead of being silently absorbed the way a genuine
+redelivery still is — see [Custom aliases](pattern:custom-aliases) for the full reasoning.
+
 ## Pitfalls
 
 - 🐛 [AddDbContextPool registered as a scoped service inside a Worker Service](pitfall:shortener-dbcontext-pool-scoped-in-worker)
@@ -72,3 +79,4 @@ assumed it would only ever run as one instance.
 ### Patterns
 
 - [Async messaging](pattern:async-messaging)
+- [Custom aliases](pattern:custom-aliases)

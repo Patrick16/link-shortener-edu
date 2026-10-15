@@ -6,9 +6,14 @@ using Microsoft.EntityFrameworkCore;
 
 namespace ShortenerService;
 
-// Consumes batches of LinkCreatedEvent (LinkApi already generated the hash) and persists them to
-// Postgres Links. Redelivery-safe: a hash already stored is treated as already processed and
-// skipped, rather than failing the whole batch on a unique-key violation.
+// Consumes batches of LinkCreatedEvent (LinkApi already generated the hash, or it's a user-chosen
+// alias - see LinkCreatedEvent.HasCustomAlias) and persists them to Postgres Links.
+// Redelivery-safe: a hash already stored with the SAME OriginalLink is treated as already
+// processed and skipped, rather than failing the whole batch on a unique-key violation. A hash
+// already stored with a DIFFERENT OriginalLink is a genuine conflict (most commonly: a custom
+// alias that lost a uniqueness race), not a redelivery - that message is reported as poison
+// instead of being silently dropped, since silently dropping it would mean the caller who was
+// already told this hash/alias is theirs never finds out it isn't.
 public sealed class LinkCreatedConsumer(
     IMessageConsumer consumer,
     IDbContextFactory<DatabaseContext> dbContextFactory,
@@ -33,19 +38,25 @@ public sealed class LinkCreatedConsumer(
         // Same hash can appear twice in one batch if a redelivery lands alongside a fresher copy of
         // itself - keep the last occurrence.
         var distinctByHash = batch
-            .Select(x => x.Payload)
-            .GroupBy(x => x.Hash)
+            .GroupBy(x => x.Payload.Hash)
             .Select(g => g.Last())
             .ToList();
 
-        var hashes = distinctByHash.Select(x => x.Hash).ToList();
-        var alreadyStored = await context.Links
-            .Where(x => hashes.Contains(x.Hash))
-            .Select(x => x.Hash)
-            .ToHashSetAsync(cancellationToken);
+        var hashes = distinctByHash.Select(x => x.Payload.Hash).ToList();
+        var poisonMessages = new List<PoisonMessage>();
 
-        var newLinks = distinctByHash.Where(x => !alreadyStored.Contains(x.Hash)).ToList();
-        var newLinkEntities = newLinks.Select(e => new Link(e.Hash, e.OriginalLink, e.ShortenLink, e.CreatedAt, e.UserId)).ToList();
+        // For the synchronous gRPC path (batch-of-one, see MessagingGrpcService), this pre-check
+        // almost always reports "not yet stored" even for a genuine race - two concurrent callers
+        // both land here before either has committed. The real conflict resolution for that case
+        // happens in the DbUpdateException recovery below; this pass still matters for the
+        // RabbitMQ path, where a redelivery landing in a later batch than its original IS already
+        // stored by the time this runs.
+        var existingLinks = await context.Links
+            .Where(x => hashes.Contains(x.Hash))
+            .ToDictionaryAsync(x => x.Hash, cancellationToken);
+
+        var newItems = ClassifyAgainstExisting(distinctByHash, existingLinks, poisonMessages);
+        var newLinkEntities = newItems.Select(BuildEntity).ToList();
         context.Links.AddRange(newLinkEntities);
 
         try
@@ -54,24 +65,29 @@ public sealed class LinkCreatedConsumer(
         }
         catch (DbUpdateException)
         {
-            // A second replica of this same consumer (competing consumers on one queue - shortener-
-            // service can be scaled to N instances) can race this exact check: both see a hash as
-            // "not yet stored" above and both try to insert it, one wins, the other hits this unique
-            // violation. Without this catch, the whole batch would propagate up to
-            // RabbitMqConsumer.HandleBatchFailureAsync and nack-with-requeue every other, unrelated
-            // message in it too, just to retry one real conflict. Detaching and re-checking against
-            // Postgres keeps the race local to the one hash it actually affects.
+            // This is where a sync-gRPC batch-of-one race actually resolves (see the pre-check's
+            // own comment). A second replica of this same consumer (competing consumers on one
+            // queue - shortener-service can be scaled to N instances) can hit the identical race:
+            // both see a hash as "not yet stored" above and both try to insert it, one wins, the
+            // other hits this unique violation. By the time we're here, Postgres has already
+            // committed the winner's row (that's the only way our insert could have failed with a
+            // conflict instead of blocking) - so the re-query below deterministically sees it, no
+            // further race on the read itself. Without this catch, the whole batch would propagate
+            // up to RabbitMqConsumer.HandleBatchFailureAsync and nack-with-requeue every other,
+            // unrelated message in it too, just to retry one real conflict. Detaching and
+            // re-checking against Postgres keeps the race local to the one hash it actually
+            // affects.
             foreach (var entry in context.ChangeTracker.Entries<Link>().ToList())
             {
                 entry.State = EntityState.Detached;
             }
 
-            var nowStored = await context.Links
+            var nowExisting = await context.Links
                 .Where(x => hashes.Contains(x.Hash))
-                .Select(x => x.Hash)
-                .ToHashSetAsync(cancellationToken);
-            newLinkEntities = newLinkEntities.Where(x => !nowStored.Contains(x.Hash)).ToList();
-            newLinks = newLinks.Where(x => !nowStored.Contains(x.Hash)).ToList();
+                .ToDictionaryAsync(x => x.Hash, cancellationToken);
+
+            newItems = ClassifyAgainstExisting(newItems, nowExisting, poisonMessages);
+            newLinkEntities = newItems.Select(BuildEntity).ToList();
 
             context.Links.AddRange(newLinkEntities);
             await context.SaveChangesAsync(cancellationToken);
@@ -87,14 +103,68 @@ public sealed class LinkCreatedConsumer(
             await _cache.CacheAsync(link, link.Hash, cancellationToken);
         }
 
-        var skippedCount = distinctByHash.Count - newLinks.Count;
+        var skippedCount = distinctByHash.Count - newItems.Count - poisonMessages.Count;
         if (skippedCount > 0)
         {
             _logger.LogInformation(
                 "{Count} link(s) in this batch were already persisted, skipping their inserts", skippedCount);
         }
 
-        _logger.LogInformation("Persisted {Count} new link(s) from this batch", newLinks.Count);
-        return BatchOutcome.Success;
+        if (poisonMessages.Count > 0)
+        {
+            _logger.LogWarning(
+                "{Count} link(s) in this batch conflicted with an existing, different link: {Reasons}",
+                poisonMessages.Count,
+                string.Join("; ", poisonMessages.Select(p => p.Reason)));
+        }
+
+        _logger.LogInformation("Persisted {Count} new link(s) from this batch", newItems.Count);
+        return poisonMessages.Count > 0 ? BatchOutcome.WithPoison(poisonMessages) : BatchOutcome.Success;
     }
+
+    // Splits a batch against what's currently in Postgres for the same hashes: a hash with no
+    // existing row is new (returned); a hash whose existing row has the SAME OriginalLink is a
+    // true duplicate/redelivery (silently dropped, as before this fix); a hash whose existing row
+    // has a DIFFERENT OriginalLink is a genuine conflict (appended to `poisonMessages`, mutated in
+    // place since this runs twice per call - once pre-insert, once after a unique-key conflict).
+    private static List<BatchItem<LinkCreatedEvent>> ClassifyAgainstExisting(
+        IReadOnlyList<BatchItem<LinkCreatedEvent>> items,
+        IReadOnlyDictionary<string, Link> existingByHash,
+        List<PoisonMessage> poisonMessages)
+    {
+        var stillNew = new List<BatchItem<LinkCreatedEvent>>();
+        foreach (var item in items)
+        {
+            if (!existingByHash.TryGetValue(item.Payload.Hash, out var existing))
+            {
+                stillNew.Add(item);
+                continue;
+            }
+
+            if (existing.OriginalLink == item.Payload.OriginalLink)
+            {
+                continue; // same link, already persisted - redelivery or a losing racing replica, not an error
+            }
+
+            poisonMessages.Add(new PoisonMessage(item.MessageId, ConflictReason(item.Payload.Hash, existing)));
+        }
+
+        return stillNew;
+    }
+
+    // The existing (winning) row is the one source of truth available at conflict time for what
+    // kind of conflict this is - HasCustomAlias lives on it specifically so this message can be
+    // accurate instead of generic.
+    private static string ConflictReason(string hash, Link existing) =>
+        existing.HasCustomAlias
+            ? $"Alias '{hash}' is already in use by a different link."
+            : $"Hash '{hash}' collided with an existing link - unexpected for a generated hash, investigate.";
+
+    private static Link BuildEntity(BatchItem<LinkCreatedEvent> item) => new(
+        item.Payload.Hash,
+        item.Payload.OriginalLink,
+        item.Payload.ShortenLink,
+        item.Payload.CreatedAt,
+        item.Payload.UserId,
+        HasCustomAlias: item.Payload.HasCustomAlias);
 }

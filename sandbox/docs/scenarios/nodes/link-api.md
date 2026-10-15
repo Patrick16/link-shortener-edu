@@ -51,6 +51,13 @@ identically to authenticated ones; the only difference is whether `Link.UserId` 
 from the token's `sub` claim. `GetLinks` (the "my links" listing) is the opposite: it requires
 either a valid Bearer token or control-api's internal API key scheme, and always filters by caller.
 
+**Custom aliases are the one exception to "always synchronous-return, async-persist."** When
+`LinkCreateRequest.Alias` is set (authenticated callers only — `401` otherwise), `CreateLink`
+branches to a different path that calls ShortenerService synchronously over gRPC and only returns
+once the row is confirmed persisted or the alias is confirmed taken — see
+[Custom aliases](pattern:custom-aliases) for why a real uniqueness guarantee needs that trade-off
+even though the plain-hash path deliberately never makes it.
+
 ## Pitfalls
 
 - ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)
@@ -73,3 +80,4 @@ either a valid Bearer token or control-api's internal API key scheme, and always
 
 - [Async messaging](pattern:async-messaging)
 - [Caching](pattern:caching)
+- [Custom aliases](pattern:custom-aliases)

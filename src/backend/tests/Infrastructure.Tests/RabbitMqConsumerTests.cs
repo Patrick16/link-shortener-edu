@@ -188,11 +188,13 @@ public class RabbitMqConsumerTests
 
         await sut.FlushBatchAsync(
             channel.Object, "queue-name", "queue-name.dead", batch,
-            (_, _) => Task.FromResult(BatchOutcome.WithPoison(["poison-msg"])), CancellationToken.None);
+            (_, _) => Task.FromResult(BatchOutcome.WithPoison([new PoisonMessage("poison-msg", "alias already in use")])), CancellationToken.None);
 
         channel.Verify(
             c => c.BasicPublishAsync(
-                "", "queue-name.dead", false, It.IsAny<BasicProperties>(), It.IsAny<ReadOnlyMemory<byte>>(), It.IsAny<CancellationToken>()),
+                "", "queue-name.dead", false,
+                It.Is<BasicProperties>(p => (string?)p.Headers!["x-dead-reason"] == "alias already in use"),
+                It.IsAny<ReadOnlyMemory<byte>>(), It.IsAny<CancellationToken>()),
             Times.Once);
         channel.Verify(c => c.BasicAckAsync(2, true, It.IsAny<CancellationToken>()), Times.Once);
         channel.Verify(c => c.BasicNackAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);

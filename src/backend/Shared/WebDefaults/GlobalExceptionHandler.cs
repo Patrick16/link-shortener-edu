@@ -33,17 +33,41 @@ internal sealed class GlobalExceptionHandler(
         logger.LogError(exception, "Unhandled exception processing {Method} {Path}",
             httpContext.Request.Method, httpContext.Request.Path);
 
+        // AlreadyExists is a real, expected business outcome (today: a custom alias losing a
+        // uniqueness race in ShortenerService's synchronous create path - see
+        // CustomAliasCreator/LinkCreatedConsumer), not a transport failure - 409 says that
+        // honestly, with the same reason text that was also dead-lettered server-side, instead of
+        // falling into the generic "downstream unavailable" 502/503 below.
+        if (exception is RpcException { StatusCode: StatusCode.AlreadyExists } conflictException)
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status409Conflict;
+
+            return await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
+            {
+                HttpContext = httpContext,
+                Exception = exception,
+                ProblemDetails = new ProblemDetails
+                {
+                    Status = StatusCodes.Status409Conflict,
+                    Title = "Conflict.",
+                    Detail = conflictException.Status.Detail,
+                    Type = "https://tools.ietf.org/html/rfc7231#section-6.5.8",
+                },
+            });
+        }
+
         // A SyncGrpcDispatcher call (messaging-mode=grpc) failing is the one exception type this
         // handler treats specially - it's not "this service is broken", it's "the downstream
         // service this request synchronously depends on is unreachable", which 502/503 says more
         // honestly than a generic 500. Deliberately NOT retried or queued here - see
         // SyncGrpcDispatcher's own comment for why swallowing this would hide the exact coupling
-        // cost this messaging mode exists to demonstrate. InvalidArgument is excluded here (falls
-        // through to the generic 500 below) - that status means the gRPC client/server have
-        // drifted on the topic/payload contract (see each worker's MessagingGrpcService), a real
-        // bug, not "downstream unavailable" (found during review - it was previously
-        // indistinguishable from an actual outage).
-        if (exception is RpcException { StatusCode: not StatusCode.InvalidArgument } rpcException)
+        // cost this messaging mode exists to demonstrate. InvalidArgument and AlreadyExists are
+        // excluded here (InvalidArgument falls through to the generic 500 below, AlreadyExists is
+        // handled above) - neither means "downstream unavailable": InvalidArgument means the gRPC
+        // client/server have drifted on the topic/payload contract (see each worker's
+        // MessagingGrpcService), a real bug (found during review - it was previously
+        // indistinguishable from an actual outage); AlreadyExists is a real business conflict.
+        if (exception is RpcException { StatusCode: not (StatusCode.InvalidArgument or StatusCode.AlreadyExists) } rpcException)
         {
             var grpcStatusCode = rpcException.StatusCode is StatusCode.Unavailable or StatusCode.DeadlineExceeded
                 ? StatusCodes.Status503ServiceUnavailable

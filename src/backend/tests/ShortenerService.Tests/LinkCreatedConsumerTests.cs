@@ -191,4 +191,97 @@ public class LinkCreatedConsumerTests
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(2, await verify.Links.CountAsync());
     }
+
+    [Fact]
+    public async Task HandleBatchAsync_SameAliasDifferentOriginalLink_ReportsPoisonWithAliasReason()
+    {
+        // Not a redelivery of the same message - a genuine conflict: two different links tried to
+        // claim the same custom alias (the tail-risk case this whole content-comparison fix exists
+        // for). Must not be silently dropped the way a true duplicate is.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var sut = NewSut(factory);
+        var winner = NewEvent("my-alias") with { HasCustomAlias = true };
+        await sut.HandleBatchAsync(NewBatch(winner), CancellationToken.None);
+
+        var loser = winner with { OriginalLink = "https://example.com/different-target" };
+        var outcome = await sut.HandleBatchAsync(NewBatch(loser), CancellationToken.None);
+
+        var poison = Assert.Single(outcome.PoisonMessages);
+        Assert.Contains("Alias 'my-alias' is already in use by a different link", poison.Reason);
+        await using var verify = await factory.CreateDbContextAsync();
+        Assert.Equal(1, await verify.Links.CountAsync());
+        Assert.Equal(winner.OriginalLink, (await verify.Links.SingleAsync()).OriginalLink);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_SameGeneratedHashDifferentOriginalLink_ReportsPoisonWithHashCollisionReason()
+    {
+        // Same conflict shape as the alias case above, but the existing (winning) row was never a
+        // custom alias - the reason text must say so, since this would mean an actual random-hash
+        // collision (near-impossible, not expected) rather than a routine alias race.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var sut = NewSut(factory);
+        var winner = NewEvent("abc12345");
+        await sut.HandleBatchAsync(NewBatch(winner), CancellationToken.None);
+
+        var loser = winner with { OriginalLink = "https://example.com/different-target" };
+        var outcome = await sut.HandleBatchAsync(NewBatch(loser), CancellationToken.None);
+
+        var poison = Assert.Single(outcome.PoisonMessages);
+        Assert.Contains("unexpected for a generated hash", poison.Reason);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_ConcurrentWorkersRaceSameHashDifferentOriginalLink_OneSucceedsOnePoisoned()
+    {
+        // Same real-race scaffold as HandleBatchAsync_ConcurrentWorkersRaceSameHash_
+        // BothSucceedAndPersistOnce (real on-disk SQLite, two independent DbContexts genuinely
+        // overlapping) - but this time the two racers are different links claiming the same alias,
+        // not two copies of the same message. The loser must come back as poison, not a silent
+        // second "success" that actually persisted nothing.
+        var dbPath = Path.Combine(Path.GetTempPath(), $"link-created-conflict-race-{Guid.NewGuid()}.db");
+        try
+        {
+            DbContextOptions<DatabaseContext> NewOptions() =>
+                new DbContextOptionsBuilder<DatabaseContext>()
+                    .UseSqlite($"Data Source={dbPath};Pooling=False;Default Timeout=5")
+                    .Options;
+
+            await using (var bootstrap = new DatabaseContext(NewOptions()))
+            {
+                await bootstrap.Database.EnsureCreatedAsync();
+            }
+
+            IDbContextFactory<DatabaseContext> NewFileFactory()
+            {
+                var factory = new Mock<IDbContextFactory<DatabaseContext>>();
+                factory.Setup(x => x.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+                    .ReturnsAsync(() => new DatabaseContext(NewOptions()));
+                return factory.Object;
+            }
+
+            var sutA = NewSut(NewFileFactory());
+            var sutB = NewSut(NewFileFactory());
+            var eventA = NewEvent("contested-alias") with { HasCustomAlias = true, OriginalLink = "https://example.com/a" };
+            var eventB = eventA with { OriginalLink = "https://example.com/b" };
+
+            var taskA = sutA.HandleBatchAsync(NewBatch(eventA), CancellationToken.None);
+            var taskB = sutB.HandleBatchAsync(NewBatch(eventB), CancellationToken.None);
+            var outcomes = await Task.WhenAll(taskA, taskB);
+
+            Assert.Single(outcomes, o => o == BatchOutcome.Success);
+            var poisoned = Assert.Single(outcomes, o => o.PoisonMessages.Count > 0);
+            Assert.Contains("already in use by a different link", Assert.Single(poisoned.PoisonMessages).Reason);
+
+            await using var verify = new DatabaseContext(NewOptions());
+            Assert.Equal(1, await verify.Links.CountAsync());
+        }
+        finally
+        {
+            if (File.Exists(dbPath))
+            {
+                File.Delete(dbPath);
+            }
+        }
+    }
 }

@@ -12,6 +12,6 @@ namespace ShortenerService;
 // LinkCreatedConsumer.HandleBatchAsync's own comment for why that's redelivery-safe either way.
 public sealed class MessagingGrpcService(LinkCreatedConsumer consumer) : MessagingGrpcServiceBase<LinkCreatedEvent>(Topics.LinkCreated)
 {
-    protected override Task HandleAsync(BatchItem<LinkCreatedEvent> item, CancellationToken cancellationToken) =>
+    protected override Task<BatchOutcome> HandleAsync(BatchItem<LinkCreatedEvent> item, CancellationToken cancellationToken) =>
         consumer.HandleBatchAsync([item], cancellationToken);
 }

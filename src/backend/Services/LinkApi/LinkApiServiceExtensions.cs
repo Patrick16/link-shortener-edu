@@ -1,4 +1,5 @@
 using Common;
+using Infrastructure;
 using Microsoft.AspNetCore.Authentication;
 using WebDefaults;
 
@@ -11,6 +12,8 @@ public static class LinkApiServiceExtensions
     {
         builder.Services.AddSingleton<IEntityCacheService<Common.Models.Link>, LinkCacheService>();
         builder.Services.AddSingleton<IHashGenerator, Sha256Base62HashGenerator>();
+        builder.AddAliasGrpcClient();
+        builder.Services.AddSingleton<ICustomAliasCreator, GrpcAliasCreator>();
         return builder;
     }
 

@@ -9,4 +9,5 @@ public sealed record LinkCreatedEvent
     public required string ShortenLink { get; init; }
     public required DateTime CreatedAt { get; init; }
     public Guid? UserId { get; init; }
+    public bool HasCustomAlias { get; init; }
 }

@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using Common;
 using Common.Models;
 using Contracts.Events;
@@ -15,11 +16,12 @@ namespace LinkApi.Controllers;
 
 [ApiController]
 [Route("[controller]")]
-public class LinksController(
+public partial class LinksController(
     DatabaseContext context,
     IEntityCacheService<Link> service,
     IEventDispatcher dispatcher,
     IHashGenerator hashGenerator,
+    ICustomAliasCreator aliasCreator,
     ILogger<LinksController> logger) : Controller
 {
     private const int PageSize = 50;
@@ -35,10 +37,25 @@ public class LinksController(
     // (LinkCreatedConsumer.cs) - last-write-wins, no coordination needed.
     private const int OptimisticCacheTtlSeconds = 60;
 
+    // Lowercased before this ever runs (see CreateLink) - charset deliberately excludes the mixed
+    // case Sha256Base62HashGenerator's alphabet uses, so a custom alias can never collide in format
+    // with a generated hash. 3-32 chars, must start alphanumeric (no leading '-'/'_').
+    [GeneratedRegex("^[a-z0-9][a-z0-9_-]{2,31}$")]
+    private static partial Regex AliasPattern();
+
+    // Grounded in this stack's real single-segment routes, not guessed: RedirectApi resolves every
+    // hash/alias at the root ([Route("/")], GET /{hash}), and Scalar API docs are mounted at
+    // /scalar (CLAUDE.md: "AuthApi/LinkApi/RedirectApi expose Scalar API docs at /scalar/v1") -
+    // health/openapi/api/admin/links are defensive (two-segment today, e.g. /health/live, but cheap
+    // to reserve the prefix word against a future single-segment route landing on the same name).
+    private static readonly HashSet<string> ReservedAliases =
+        new(StringComparer.Ordinal) { "scalar", "health", "openapi", "api", "admin", "links" };
+
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _service = service;
     private readonly IEventDispatcher _dispatcher = dispatcher;
     private readonly IHashGenerator _hashGenerator = hashGenerator;
+    private readonly ICustomAliasCreator _aliasCreator = aliasCreator;
     private readonly ILogger<LinksController> _logger = logger;
 
     [HttpPost]
@@ -62,7 +79,6 @@ public class LinksController(
                 title: "Invalid link.");
         }
 
-        var hash = _hashGenerator.Generate(request.OriginalLink);
         var createdAt = DateTime.UtcNow;
 
         // Anonymous callers are fine — nothing here requires [Authorize]. If a valid Bearer token
@@ -70,6 +86,13 @@ public class LinksController(
         // if not (missing, expired, wrong signature), User just isn't authenticated and this is null.
         var userIdClaim = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
         var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : (Guid?)null;
+
+        if (request.Alias is not null)
+        {
+            return await CreateWithAliasAsync(request.Alias, request.OriginalLink, userId, createdAt, cancellationToken);
+        }
+
+        var hash = _hashGenerator.Generate(request.OriginalLink);
 
         var linkCreatedEvent = new LinkCreatedEvent
         {
@@ -101,6 +124,72 @@ public class LinksController(
         _logger.LogDebug("Link {Hash} created for {OriginalLink}, queued for publish to {Topic}", hash, request.OriginalLink, Topics.LinkCreated);
 
         return new LinkResponse(hash, createdAt);
+    }
+
+    // Custom aliases take the synchronous gRPC path instead of the standing async/gRPC toggle
+    // above, regardless of Messaging:Mode - see CustomAliasCreator and
+    // sandbox/docs/scenarios/patterns/custom-aliases.md for why a real uniqueness guarantee needs a
+    // synchronous round trip through ShortenerService (the record's owner) no matter what. Random
+    // hashes stay async because a collision there is astronomically unlikely and unchecked (see the
+    // same doc); a human-chosen alias colliding with another human's choice is not.
+    private async Task<ActionResult<LinkResponse>> CreateWithAliasAsync(
+        string rawAlias, string originalLink, Guid? userId, DateTime createdAt, CancellationToken cancellationToken)
+    {
+        if (userId is null)
+        {
+            return Problem(
+                detail: "Custom aliases require an authenticated user.",
+                statusCode: StatusCodes.Status401Unauthorized,
+                title: "Authentication required.");
+        }
+
+        var alias = rawAlias.Trim().ToLowerInvariant();
+        if (!AliasPattern().IsMatch(alias))
+        {
+            return Problem(
+                detail: "Alias must be 3-32 characters, start with a letter or digit, and contain only lowercase letters, digits, '-' and '_'.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid alias.");
+        }
+
+        if (ReservedAliases.Contains(alias))
+        {
+            return Problem(
+                detail: $"Alias '{alias}' is reserved.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid alias.");
+        }
+
+        var aliasEvent = new LinkCreatedEvent
+        {
+            Hash = alias,
+            OriginalLink = originalLink,
+            ShortenLink = alias,
+            CreatedAt = createdAt,
+            UserId = userId,
+            HasCustomAlias = true,
+        };
+
+        var result = await _aliasCreator.CreateAsync(aliasEvent, cancellationToken);
+        if (result == AliasCreationResult.AliasTaken)
+        {
+            return Problem(
+                detail: $"Alias '{alias}' is already taken.",
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Alias taken.");
+        }
+
+        // Unlike the optimistic, short-TTL cache entry in the plain-hash path above, this is a real
+        // cache write with no explicit TTL override - by the time CreateAsync returns Created, the
+        // row is already durably committed in Postgres (that's the whole point of the synchronous
+        // path), so there's no "might never actually persist" risk to hedge against. Matches exactly
+        // how LinkCreatedConsumer.cs itself populates the cache right after a real persist.
+        var link = new Link(alias, originalLink, alias, createdAt, userId, HasCustomAlias: true);
+        await _service.CacheAsync(link, alias, cancellationToken);
+
+        _logger.LogDebug("Link {Hash} created via custom alias for {OriginalLink}", alias, originalLink);
+
+        return new LinkResponse(alias, createdAt);
     }
 
     // Unlike CreateLink, this is a listing of links - anonymous callers have no "own links" to
@@ -152,7 +241,7 @@ public class LinksController(
                 .ThenBy(x => x.Hash)
                 .Skip((int)skip)
                 .Take(PageSize)
-                .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount))
+                .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount, x.HasCustomAlias))
                 .ToListAsync(cancellationToken);
 
         return new LinksPageResponse(items, page, PageSize, totalCount, totalPages);

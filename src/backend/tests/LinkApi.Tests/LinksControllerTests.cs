@@ -30,13 +30,15 @@ public class LinksControllerTests
         out Mock<IEntityCacheService<Link>> cache,
         out Mock<IEventDispatcher> dispatcher,
         out Mock<IHashGenerator> hashGenerator,
+        out Mock<ICustomAliasCreator> aliasCreator,
         ClaimsPrincipal? user = null)
     {
         cache = new Mock<IEntityCacheService<Link>>();
         dispatcher = new Mock<IEventDispatcher>();
         hashGenerator = new Mock<IHashGenerator>();
+        aliasCreator = new Mock<ICustomAliasCreator>();
 
-        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, NullLogger<LinksController>.Instance)
+        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, aliasCreator.Object, NullLogger<LinksController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -50,7 +52,7 @@ public class LinksControllerTests
     public async Task CreateLink_AnonymousCaller_PublishesEventWithNullUserId()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator);
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, out _);
         hashGenerator.Setup(x => x.Generate("https://example.com")).Returns("abc12345");
 
         var result = await sut.CreateLink(
@@ -73,7 +75,7 @@ public class LinksControllerTests
         var userId = Guid.NewGuid();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, out _, new ClaimsPrincipal(identity));
         hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
 
         await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
@@ -90,7 +92,7 @@ public class LinksControllerTests
         // pgcat-read-your-writes-race.md): RedirectApi is cache-first, so this is what lets an
         // immediate redirect right after create resolve without ever touching Postgres.
         await using var context = NewContext();
-        var sut = NewController(context, out var cache, out _, out var hashGenerator);
+        var sut = NewController(context, out var cache, out _, out var hashGenerator, out _);
         hashGenerator.Setup(x => x.Generate("https://example.com")).Returns("abc12345");
 
         await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
@@ -111,7 +113,7 @@ public class LinksControllerTests
         // all, and the request fails outright - caching first would leave a ghost entry for a hash
         // that will never resolve anywhere.
         await using var context = NewContext();
-        var sut = NewController(context, out var cache, out var dispatcher, out var hashGenerator);
+        var sut = NewController(context, out var cache, out var dispatcher, out var hashGenerator, out _);
         hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
         dispatcher
             .Setup(x => x.DispatchAsync(It.IsAny<LinkCreatedEvent>(), Topics.LinkCreated, It.IsAny<CancellationToken>()))
@@ -127,7 +129,7 @@ public class LinksControllerTests
     public async Task CreateLink_EmptyOriginalLink_ReturnsBadRequestWithoutPublishing()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator);
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, out _);
 
         var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "" }, CancellationToken.None);
 
@@ -149,7 +151,7 @@ public class LinksControllerTests
         // later calls Redirect(link.OriginalLink) on it verbatim - an open redirect out of a trusted
         // short-link domain to an arbitrary scheme.
         await using var context = NewContext();
-        var sut = NewController(context, out _, out var dispatcher, out _);
+        var sut = NewController(context, out _, out var dispatcher, out _, out _);
 
         var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = originalLink }, CancellationToken.None);
 
@@ -165,7 +167,7 @@ public class LinksControllerTests
     {
         await using var context = NewContext();
         var cachedLink = new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null);
-        var sut = NewController(context, out var cache, out _, out _);
+        var sut = NewController(context, out var cache, out _, out _, out _);
         cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(cachedLink);
 
@@ -182,7 +184,7 @@ public class LinksControllerTests
         var stored = new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null);
         context.Links.Add(stored);
         await context.SaveChangesAsync();
-        var sut = NewController(context, out var cache, out _, out _);
+        var sut = NewController(context, out var cache, out _, out _, out _);
         cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .Returns<string, Func<Task<Link?>>, CancellationToken>((_, fetch, _) => fetch());
 
@@ -196,7 +198,7 @@ public class LinksControllerTests
     public async Task GetLink_NotFoundAnywhere_ReturnsNotFound()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out var cache, out _, out _);
+        var sut = NewController(context, out var cache, out _, out _, out _);
         cache.Setup(x => x.GetOrFetch("missing", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Link?)null);
 
@@ -215,7 +217,7 @@ public class LinksControllerTests
         context.Links.Add(new Link("ccc33333", "https://c.example", "ccc33333", DateTime.UtcNow, null));
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 1, CancellationToken.None);
 
@@ -241,7 +243,7 @@ public class LinksControllerTests
         context.Links.Add(new Link("ccc33333", "https://c.example", "ccc33333", DateTime.UtcNow, null));
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(Constants.InternalClaim, "true")], "InternalApiKey");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 1, CancellationToken.None);
 
@@ -261,7 +263,7 @@ public class LinksControllerTests
         }
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 2, CancellationToken.None);
 
@@ -282,7 +284,7 @@ public class LinksControllerTests
         context.Links.Add(new Link("aaa11111", "https://a.example", "aaa11111", DateTime.UtcNow, userId));
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var result = await sut.GetLinks(page: 99_999_999, CancellationToken.None);
 
@@ -308,7 +310,7 @@ public class LinksControllerTests
         }
         await context.SaveChangesAsync();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        var sut = NewController(context, out _, out _, out _, new ClaimsPrincipal(identity));
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
 
         var page1 = Assert.IsType<LinksPageResponse>((await sut.GetLinks(page: 1, CancellationToken.None)).Value);
         var page2 = Assert.IsType<LinksPageResponse>((await sut.GetLinks(page: 2, CancellationToken.None)).Value);
@@ -325,11 +327,125 @@ public class LinksControllerTests
     public async Task GetLinks_InvalidPage_ReturnsProblem()
     {
         await using var context = NewContext();
-        var sut = NewController(context, out _, out _, out _);
+        var sut = NewController(context, out _, out _, out _, out _);
 
         var result = await sut.GetLinks(page: 0, CancellationToken.None);
 
         var objectResult = Assert.IsType<ObjectResult>(result.Result);
         Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateLink_AliasAnonymousCaller_ReturnsUnauthorizedWithoutCallingAliasCreator()
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out _, out _, out var aliasCreator);
+
+        var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com", Alias = "my-link" }, CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status401Unauthorized, objectResult.StatusCode);
+        aliasCreator.Verify(
+            x => x.CreateAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateLink_AliasAuthenticatedAndFree_ReturnsCreatedAndCachesWithoutExplicitTtl()
+    {
+        var userId = Guid.NewGuid();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out _, out _, out var aliasCreator, new ClaimsPrincipal(identity));
+        aliasCreator.Setup(x => x.CreateAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AliasCreationResult.Created);
+
+        var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com", Alias = "My-Link" }, CancellationToken.None);
+
+        var response = Assert.IsType<LinkResponse>(result.Value);
+        // Normalized to lowercase - "My-Link" and "my-link" must be the same slot.
+        Assert.Equal("my-link", response.ShortenLink);
+        aliasCreator.Verify(
+            x => x.CreateAsync(
+                It.Is<LinkCreatedEvent>(e => e.Hash == "my-link" && e.HasCustomAlias && e.UserId == userId),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        // No explicit TTL arg - the 4-arg overload with ttlSeconds is the optimistic/short-lived one
+        // the plain-hash path uses; this must be the no-explicit-TTL (full-duration default) call,
+        // since the row is already durably persisted by the time CreateAsync returns Created.
+        cache.Verify(
+            x => x.CacheAsync(It.Is<Link>(l => l.Hash == "my-link" && l.HasCustomAlias), "my-link", It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateLink_AliasAlreadyTaken_ReturnsConflictWithoutCaching()
+    {
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, Guid.NewGuid().ToString())], "TestAuth");
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out _, out _, out var aliasCreator, new ClaimsPrincipal(identity));
+        aliasCreator.Setup(x => x.CreateAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AliasCreationResult.AliasTaken);
+
+        var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com", Alias = "taken" }, CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status409Conflict, objectResult.StatusCode);
+        cache.Verify(x => x.CacheAsync(It.IsAny<Link>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("ab")] // below minimum length
+    [InlineData("-leading-dash")]
+    [InlineData("has space")]
+    [InlineData("has/slash")]
+    public async Task CreateLink_AliasInvalidFormat_ReturnsBadRequestWithoutCallingAliasCreator(string alias)
+    {
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, Guid.NewGuid().ToString())], "TestAuth");
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out _, out _, out var aliasCreator, new ClaimsPrincipal(identity));
+
+        var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com", Alias = alias }, CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+        aliasCreator.Verify(
+            x => x.CreateAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateLink_AliasIsReservedWord_ReturnsBadRequestWithoutCallingAliasCreator()
+    {
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, Guid.NewGuid().ToString())], "TestAuth");
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out _, out _, out var aliasCreator, new ClaimsPrincipal(identity));
+
+        var result = await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com", Alias = "scalar" }, CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+        aliasCreator.Verify(
+            x => x.CreateAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateLink_NoAlias_PublishesEventWithHasCustomAliasFalse()
+    {
+        // Regression: the plain (non-aliased) path must keep going through the standing
+        // IEventDispatcher/Messaging:Mode toggle, unaffected by the alias feature.
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out var dispatcher, out var hashGenerator, out var aliasCreator);
+        hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
+
+        await sut.CreateLink(new LinkCreateRequest { OriginalLink = "https://example.com" }, CancellationToken.None);
+
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.Is<LinkCreatedEvent>(e => !e.HasCustomAlias), Topics.LinkCreated, It.IsAny<CancellationToken>()),
+            Times.Once);
+        aliasCreator.Verify(
+            x => x.CreateAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }
