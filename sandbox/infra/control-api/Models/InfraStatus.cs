@@ -33,7 +33,7 @@ namespace ControlApi.Models;
 // PostgresReplicasEnabled is the same "read live, don't cache" shape as HaproxyEnabled and for the
 // identical reason - postgres-replica1/2 also get the generic per-container Start/Stop controls for
 // free, which would silently desync a cached flag. True only when BOTH replica containers are
-// running (see InfraToggleService.ArePostgresReplicasRunningAsync).
+// running (see InfraToggleService.AreAllRunningAsync).
 //
 // This field itself can never lie (same live-read guarantee as HaproxyEnabled above), but
 // pgcat.toml's servers list is a SEPARATE piece of derived state (PgcatService._replicasEnabled)
@@ -43,7 +43,50 @@ namespace ControlApi.Models;
 // PgcatService entirely, exactly like the PgcatEnabled/CacheEnabled generic-bypass caveat above -
 // pgcat.toml would then keep listing a replica that's actually down (or omit one that's actually up)
 // until something exercises this toggle for real.
-public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled, bool PostgresReplicasEnabled);
+//
+// RedisEnabled/RedisSentinelEnabled are the Redis-side equivalent of HaproxyEnabled/
+// PostgresReplicasEnabled above - both read live from Docker (same generic-per-container-controls
+// desync risk), never cached. RedisEnabled is true iff redis-master is running.
+// RedisSentinelEnabled is true iff all 5 HA containers (redis-sentinel-1/2/3, redis-replica1/2) are
+// running. Sentinel can only be turned on while Redis is on (SetRedisSentinelEnabledAsync enforces
+// this, same shape as HaproxyEnabled requiring PgcatEnabled); turning Redis off forces Sentinel off
+// too, one-directionally, same shape as PgcatEnabled forcing HaproxyEnabled off.
+//
+// RedisEnabled also moves CacheEnabled with it, in BOTH directions, unlike every other cascade in
+// this record - a redis-master nobody's allowed to read from would be a node on the graph with no
+// reason to exist, so there's no "Redis on, Caching off" standing state reachable through this
+// toggle at all (stopping the container without losing it is what the generic per-node Stop control
+// is for, same as any other node). CacheEnabled keeps its own standalone endpoint
+// (SetCacheEnabledAsync/"cache-toggle") for Presets/diffing to capture and reapply independently,
+// but RedisEnabled is the only thing driving it through the Topology panel - see
+// InfraToggleService.SetRedisEnabledAsync/SetRedisSentinelEnabledAsync.
+//
+// Neither field says anything about redis-master's own min-replicas-to-write - a third piece of
+// state this toggle keeps in lockstep (0 while Sentinel is off, 1 while it's on) that's neither
+// cached here nor read live, found by exercising this toggle live: without it, a standalone
+// redis-master still refuses every write once its last connected replica disappears (the
+// resilience pass's own split-brain mitigation, see redis-node-entrypoint.sh's MIN_REPLICAS_FLAGS),
+// which would make "Redis on, Sentinel off" silently non-functional rather than a working plain
+// cache - see InfraToggleService.SetRedisMinReplicasToWriteAsync.
+//
+// Nor does either field say anything about which physical container Sentinel currently believes is
+// "mymaster", or which one redis-replica1/2 are actually replicating off - also found by exercising
+// this toggle live: redis-sentinel-1/2/3's sentinel.conf survives a restart unchanged once it's ever
+// learned a master address, so restarting them (this toggle's own ON path - the first thing in this
+// stack's normal lifecycle to ever do that) can resurrect a stale pointer from long before this
+// toggle existed and fail over onto a now-dead address, demoting the real redis-master to its
+// replica. SetRedisSentinelEnabledAsync corrects both (ReclaimRedisMasterRoleAsync, then
+// RedisInfraService.SelfHealSentinelAsync) every time it turns Sentinel on, rather than leaving this
+// to the existing 30s self-heal poller - that poller can't recover a fully-stuck topology on its own
+// in the first place, since it needs at least one data node already reachable and confirmed master to
+// anchor on.
+//
+// Unlike Postgres's pgcat.toml, the Redis Sentinel toggle also flips which connection-string FORM
+// (Sentinel-form vs a direct redis-master:6379) the 6 Redis-using services are recreated with - that
+// choice is cached state (InfraToggleService._redisConnectionViaSentinel), the same
+// recreate-with-a-different-env-var shape as PgcatEnabled/CacheEnabled/MessagingMode above, not a
+// live read, and carries the identical generic-bypass caveat those three already document.
+public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled, bool PostgresReplicasEnabled, bool RedisEnabled, bool RedisSentinelEnabled);
 
 public record InfraToggleRequest(bool Enabled);
 

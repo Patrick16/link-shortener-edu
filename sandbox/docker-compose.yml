@@ -890,7 +890,10 @@ services:
       # Sentinel-aware form (StackExchange.Redis native support): endpoints are the 3 Sentinels, not
       # the master directly - the client asks them who's master, connects there, and gets told about
       # any failover automatically. No code change needed for this vs. a plain host:port string.
-      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      # REDIS_CONN is the Redis-sentinel-toggle's own env var (InfraToggleService.CurrentStandingEnv)
+      # - "redis-master:6379" direct-form while Sentinel is toggled off, this Sentinel-aware default
+      # otherwise.
+      ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       # Explicit, not just relying on appsettings.json's own default - LinkApi/RedirectApi/
       # ShortenerService must share this exact (empty) InstanceName or the link cache silently
       # splits into separate keyspaces per service (see LinkCacheService's own comment and
@@ -943,14 +946,14 @@ services:
     depends_on:
       haproxy:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_healthy
-      redis-sentinel-2:
-        condition: service_healthy
-      redis-sentinel-3:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # No redis-sentinel-* depends_on on purpose, unlike before the Redis Sentinel toggle - the
+      # app already tolerates Sentinel being briefly unreachable at startup (AbortOnConnectFail=false
+      # on the raw multiplexer, RedisWarmupService catches and logs on the IDistributedCache path -
+      # see those files' own comments), and the Sentinel toggle needs to recreate this service while
+      # Sentinel is intentionally down, which a service_healthy gate on a nonexistent container would
+      # block entirely (see InfraToggleService.SetRedisSentinelEnabledAsync's own comment).
       # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
@@ -967,7 +970,7 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=${DB_HOST:-haproxy};Port=${DB_PORT:-6432};Database=links_db;Username=postgres;Password=postgres;Maximum Pool Size=${NPGSQL_MAX_POOL_SIZE:-100}"
-      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       # See link-api's identical override - same (empty, shared) InstanceName, same reasoning.
       Redis__InstanceName: ""
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
@@ -1002,14 +1005,14 @@ services:
     depends_on:
       haproxy:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_healthy
-      redis-sentinel-2:
-        condition: service_healthy
-      redis-sentinel-3:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # No redis-sentinel-* depends_on on purpose, unlike before the Redis Sentinel toggle - the
+      # app already tolerates Sentinel being briefly unreachable at startup (AbortOnConnectFail=false
+      # on the raw multiplexer, RedisWarmupService catches and logs on the IDistributedCache path -
+      # see those files' own comments), and the Sentinel toggle needs to recreate this service while
+      # Sentinel is intentionally down, which a service_healthy gate on a nonexistent container would
+      # block entirely (see InfraToggleService.SetRedisSentinelEnabledAsync's own comment).
       # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
@@ -1050,7 +1053,7 @@ services:
       # Pre-warms LinkCacheService right after a link is actually persisted (see
       # LinkCreatedConsumer) so RedirectApi's own cache miss doesn't also race a Postgres read that
       # hasn't caught up yet - same Sentinel-aware connection string as redirect-api's.
-      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       # See link-api's identical override - same (empty, shared) InstanceName, same reasoning.
       Redis__InstanceName: ""
       ConnectionStrings__RabbitMq: "amqp://guest:guest@rabbitmq:5672"
@@ -1073,14 +1076,14 @@ services:
     depends_on:
       haproxy:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_healthy
-      redis-sentinel-2:
-        condition: service_healthy
-      redis-sentinel-3:
-        condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      # No redis-sentinel-* depends_on on purpose, unlike before the Redis Sentinel toggle - the
+      # app already tolerates Sentinel being briefly unreachable at startup (AbortOnConnectFail=false
+      # on the raw multiplexer, RedisWarmupService catches and logs on the IDistributedCache path -
+      # see those files' own comments), and the Sentinel toggle needs to recreate this service while
+      # Sentinel is intentionally down, which a service_healthy gate on a nonexistent container would
+      # block entirely (see InfraToggleService.SetRedisSentinelEnabledAsync's own comment).
       # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
@@ -1111,7 +1114,7 @@ services:
       # click.tracked consumers that each resolve geo-IP for the same click, so they share one cache
       # keyspace instead of each hitting ip-api.com's rate-limited endpoint separately (found during
       # review - see .notes/review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md).
-      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       Redis__InstanceName: "GeoIpCache"
       RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
       RabbitMq__BatchSize: "${RABBITMQ_BATCH_SIZE:-100}"
@@ -1132,12 +1135,8 @@ services:
         condition: service_healthy
       mongo-init:
         condition: service_completed_successfully
-      redis-sentinel-1:
-        condition: service_healthy
-      redis-sentinel-2:
-        condition: service_healthy
-      redis-sentinel-3:
-        condition: service_healthy
+      # No redis-sentinel-* depends_on on purpose - see link-api's identical comment on its own
+      # depends_on block.
       # See auth-api's identical comment - no otel-collector dependency on purpose.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
@@ -1193,7 +1192,7 @@ services:
       # resolve geo-IP for the same click, so they share one cache keyspace instead of each hitting
       # ip-api.com's rate-limited endpoint separately (found during review - see
       # .notes/review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md).
-      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       Redis__InstanceName: "GeoIpCache"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_BSP_SCHEDULE_DELAY: "1000"
@@ -1205,12 +1204,8 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
-      redis-sentinel-1:
-        condition: service_healthy
-      redis-sentinel-2:
-        condition: service_healthy
-      redis-sentinel-3:
-        condition: service_healthy
+      # No redis-sentinel-* depends_on on purpose - see link-api's identical comment on its own
+      # depends_on block.
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
@@ -1229,7 +1224,7 @@ services:
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Database=reports_db"
       # Reads the per-user day buckets RedirectApi writes, and subscribes to its change channel for
       # the live top-links push - same Sentinel-resolved address every other Redis client uses.
-      ConnectionStrings__Redis: "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster"
+      ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       Cors__AllowedOrigins__0: "http://localhost:5173"
       # Every endpoint here requires a Bearer token now (see Program.cs) - same shared signing key
       # as auth-api/link-api, so a token either of them issues validates here too.

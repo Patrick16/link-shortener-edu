@@ -27,6 +27,18 @@ public interface IInfraToggleService
     // servers list in sync - see InfraStatus's own comment on PostgresReplicasEnabled.
     Task<InfraStatus> SetPostgresReplicasEnabledAsync(bool enabled, CancellationToken ct);
 
+    // Starts/stops redis-master itself AND moves CacheEnabled with it, both directions - a running
+    // redis-master nobody's allowed to read from has no reason to exist on its own. Also cascades
+    // Sentinel off on OFF (nothing left to monitor/fail over) - see InfraStatus's own comment on
+    // RedisEnabled/RedisSentinelEnabled.
+    Task<InfraStatus> SetRedisEnabledAsync(bool enabled, CancellationToken ct);
+
+    // Starts/stops redis-sentinel-1/2/3 and redis-replica1/2 (volumes kept, same reasoning as
+    // postgres-replica1/2 - their entrypoints already self-heal role/config on restart) and recreates
+    // the 6 Redis-using services with the matching connection-string form (Sentinel-aware vs direct
+    // redis-master:6379). Only legal to turn on while Redis itself is on.
+    Task<InfraStatus> SetRedisSentinelEnabledAsync(bool enabled, CancellationToken ct);
+
     // Consumer QoS - read once at RabbitMqConsumer startup, so this recreates shortener-service and
     // traffic-service (same env-var + --force-recreate --no-deps shape as the pgcat/cache toggles).
     int GetRabbitMqPrefetch();

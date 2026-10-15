@@ -30,6 +30,8 @@ public sealed class CapabilityFactory
         ["haproxy-stats"] = sp => new HaproxyStatsCapability(sp.GetRequiredService<IHaproxyService>(), sp.GetRequiredService<ILogger<HaproxyStatsCapability>>()),
         ["haproxy-toggle"] = sp => new HaproxyToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<HaproxyToggleCapability>>()),
         ["postgres-replicas-toggle"] = sp => new PostgresReplicasToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<PostgresReplicasToggleCapability>>()),
+        ["redis-toggle"] = sp => new RedisEnabledToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<RedisEnabledToggleCapability>>()),
+        ["redis-sentinel-toggle"] = sp => new RedisSentinelToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<RedisSentinelToggleCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

@@ -4,7 +4,17 @@ import type { ArchitectureData } from '../types/architecture'
 import type { InfraStatus } from '../types/controlApi'
 
 function status(overrides: Partial<InfraStatus> = {}): InfraStatus {
-  return { nginxBypassed: false, pgcatEnabled: true, cacheEnabled: true, messagingMode: 'rabbitmq', haproxyEnabled: true, postgresReplicasEnabled: true, ...overrides }
+  return {
+    nginxBypassed: false,
+    pgcatEnabled: true,
+    cacheEnabled: true,
+    messagingMode: 'rabbitmq',
+    haproxyEnabled: true,
+    postgresReplicasEnabled: true,
+    redisEnabled: true,
+    redisSentinelEnabled: true,
+    ...overrides,
+  }
 }
 
 describe('isActive', () => {

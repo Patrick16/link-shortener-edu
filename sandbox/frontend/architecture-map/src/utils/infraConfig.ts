@@ -91,6 +91,11 @@ export async function applyInfraConfig(config: InfraConfigSnapshot): Promise<App
 
   await step('load balancing', () => controlApi.setNginxEnabled(!config.infra.nginxBypassed))
   await step('connection pooling', () => controlApi.setPgcatEnabled(config.infra.pgcatEnabled))
+  // Redis/Sentinel before caching - caching has nothing to cache against until redis-master (and,
+  // if desired, Sentinel) is already in its target state, same reasoning as haproxy running after
+  // connection pooling above.
+  await step('redis', () => controlApi.setRedisEnabled(config.infra.redisEnabled))
+  await step('redis sentinel', () => controlApi.setRedisSentinelEnabled(config.infra.redisSentinelEnabled))
   await step('caching', () => controlApi.setCacheEnabled(config.infra.cacheEnabled))
   await step('messaging transport', () => controlApi.setMessagingMode(config.infra.messagingMode))
   await step('haproxy', () => controlApi.setHaproxyEnabled(config.infra.haproxyEnabled))
@@ -158,6 +163,8 @@ export function diffInfraConfig(current: InfraConfigSnapshot, desired: InfraConf
   addIfDiff('Messaging transport', current.infra.messagingMode, desired.infra.messagingMode)
   addIfDiff('HAProxy', current.infra.haproxyEnabled ? 'ON' : 'OFF', desired.infra.haproxyEnabled ? 'ON' : 'OFF')
   addIfDiff('Postgres replicas', current.infra.postgresReplicasEnabled ? 'ON' : 'OFF', desired.infra.postgresReplicasEnabled ? 'ON' : 'OFF')
+  addIfDiff('Redis', current.infra.redisEnabled ? 'ON' : 'OFF', desired.infra.redisEnabled ? 'ON' : 'OFF')
+  addIfDiff('Redis Sentinel', current.infra.redisSentinelEnabled ? 'ON' : 'OFF', desired.infra.redisSentinelEnabled ? 'ON' : 'OFF')
 
   const currentReplicas = replicaMap(current.replicas)
   const desiredReplicas = replicaMap(desired.replicas)

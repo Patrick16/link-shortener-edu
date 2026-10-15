@@ -22,7 +22,9 @@ function sameStatus(a: InfraStatus, b: InfraStatus): boolean {
     a.cacheEnabled === b.cacheEnabled &&
     a.messagingMode === b.messagingMode &&
     a.haproxyEnabled === b.haproxyEnabled &&
-    a.postgresReplicasEnabled === b.postgresReplicasEnabled
+    a.postgresReplicasEnabled === b.postgresReplicasEnabled &&
+    a.redisEnabled === b.redisEnabled &&
+    a.redisSentinelEnabled === b.redisSentinelEnabled
   )
 }
 
@@ -148,11 +150,36 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
           onToggle={(enabled) => setDraft({ ...draft, postgresReplicasEnabled: enabled })}
         />
         <InfraToggleControl
-          label="Caching (Redis)"
-          description="Off makes LinkApi/RedirectApi skip Redis (and its replicas/Sentinels) entirely and always read Postgres."
-          enabled={draft.cacheEnabled}
+          label="Redis"
+          description="On starts redis-master and lets LinkApi/RedirectApi cache against it - a single node, no failover. Off stops redis-master and goes back to always reading Postgres - also forces Sentinel off below (nothing left to fail over to). There's no 'node up but unusable' state here: a redis-master nobody's allowed to read from would have no reason to exist - stop it without losing it via the node's own generic Stop control instead."
+          enabled={draft.redisEnabled}
           busy={busy}
-          onToggle={(enabled) => setDraft({ ...draft, cacheEnabled: enabled })}
+          // Unlike every other cascade in this panel (pgcat->haproxy, replicas->pgcat.toml),
+          // cacheEnabled moves WITH redisEnabled in both directions, not just forced off on OFF -
+          // see InfraStatus's own comment on RedisEnabled for why. Sentinel is the one real
+          // one-directional cascade here: forced off on OFF, never restored on ON (bringing the HA
+          // layer up is still its own explicit action).
+          onToggle={(enabled) =>
+            setDraft({
+              ...draft,
+              redisEnabled: enabled,
+              redisSentinelEnabled: enabled ? draft.redisSentinelEnabled : false,
+              cacheEnabled: enabled,
+            })
+          }
+        />
+        <InfraToggleControl
+          label="Redis Sentinel (HA)"
+          description={
+            draft.redisEnabled
+              ? 'Off stops redis-sentinel-1/2/3 and redis-replica1/2 (volumes kept) and recreates LinkApi/RedirectApi/ShortenerService/TrafficService/ReportingService/ReportingApi onto a direct redis-master:6379 connection string - no failover once a sentinel/replica stop.'
+              : 'Only meaningful while Redis is on - nothing to monitor or fail over to while Redis is off.'
+          }
+          enabled={draft.redisSentinelEnabled}
+          busy={busy}
+          disabled={!draft.redisEnabled}
+          nested
+          onToggle={(enabled) => setDraft({ ...draft, redisSentinelEnabled: enabled })}
         />
         <div className="pgcat-pool-control">
           <EnumToggleControl

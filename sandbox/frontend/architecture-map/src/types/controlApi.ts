@@ -126,6 +126,8 @@ export interface InfraStatus {
   messagingMode: MessagingMode
   haproxyEnabled: boolean
   postgresReplicasEnabled: boolean
+  redisEnabled: boolean
+  redisSentinelEnabled: boolean
 }
 
 export type MessagingMode = 'rabbitmq' | 'grpc'

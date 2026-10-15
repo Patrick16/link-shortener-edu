@@ -14,10 +14,26 @@ namespace ControlApi.Services;
 // into separate classes with no shared state would reintroduce exactly that bug; CurrentStandingEnv()
 // is what every handler merges before recreating, so triggering any one toggle re-applies every
 // other toggle's current value too instead of quietly undoing it.
-public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, ILogger<InfraToggleService> logger) : IInfraToggleService
+public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, IRedisInfraService redis, ILogger<InfraToggleService> logger) : IInfraToggleService
 {
     // The two streaming replicas this toggle stops/starts - see SetPostgresReplicasEnabledAsync.
     private static readonly IReadOnlyList<string> PostgresReplicaContainers = ["postgres-replica1", "postgres-replica2"];
+
+    // The 5 containers that make up Redis's HA layer on top of the single redis-master - this
+    // toggle's own stops/starts, see SetRedisSentinelEnabledAsync.
+    private static readonly IReadOnlyList<string> RedisHaContainers = ["redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3", "redis-replica1", "redis-replica2"];
+
+    // Every service that reads ConnectionStrings__Redis (see docker-compose.yml's REDIS_CONN
+    // indirection) - the Sentinel toggle recreates all 6 together so none of them is left pointed at
+    // a connection-string form the other 5 have already moved on from.
+    private static readonly IReadOnlyList<string> RedisUsingServices =
+        ["link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service", "reporting-api"];
+
+    // The two REDIS_CONN forms SetRedisSentinelEnabledAsync switches the 6 services above between -
+    // mirrors docker-compose.yml's own default (Sentinel-form) exactly, so this toggle's ON state
+    // reproduces the shipped stack rather than some other equivalent string.
+    private const string RedisSentinelConnectionString = "redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster";
+    private const string RedisDirectConnectionString = "redis-master:6379";
 
     // Every DB-touching service - pgcat's toggle recreates all of them, since "the system without
     // connection pooling" means the whole system, not just the two APIs a k6 test happens to hit.
@@ -54,6 +70,12 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // Mirrors Npgsql's own default (and the shipped ${NPGSQL_MAX_POOL_SIZE:-100} fallback).
     private int _npgsqlPoolSize = 100;
 
+    // Drives REDIS_CONN below - same cached, recreate-with-a-different-env-var shape as
+    // _pgcatEnabled/_cacheEnabled/_messagingMode, not the live-read shape RedisEnabled/
+    // RedisSentinelEnabled themselves use. See InfraStatus's own comment on RedisEnabled/
+    // RedisSentinelEnabled for the full reasoning.
+    private bool _redisConnectionViaSentinel = true;
+
     // Every axis below recreates a service `docker compose up --force-recreate` can also touch via
     // a DIFFERENT toggle - see this class's own header comment. Every handler merges this full
     // current state and overrides only its own key before recreating, so triggering any one toggle
@@ -69,6 +91,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         ["NPGSQL_MAX_POOL_SIZE"] = _npgsqlPoolSize.ToString(),
         ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString(),
         ["MONGO_READ_PREFERENCE"] = _mongoReadPreference,
+        ["REDIS_CONN"] = _redisConnectionViaSentinel ? RedisSentinelConnectionString : RedisDirectConnectionString,
     };
 
     public int GetRabbitMqPrefetch() => _rabbitMqPrefetch;
@@ -134,18 +157,29 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             return poolSize;
         }, ct);
 
-    // See InfraStatus's own comment on HaproxyEnabled/PostgresReplicasEnabled for why those two
-    // fields are read live here instead of joining _nginxBypassed/_pgcatEnabled/_cacheEnabled/
-    // _messagingMode as cached state.
+    // See InfraStatus's own comment on HaproxyEnabled/PostgresReplicasEnabled/RedisEnabled/
+    // RedisSentinelEnabled for why those four fields are read live here instead of joining
+    // _nginxBypassed/_pgcatEnabled/_cacheEnabled/_messagingMode as cached state.
     public async Task<InfraStatus> GetInfraStatusAsync(CancellationToken ct) =>
-        new(_nginxBypassed, _pgcatEnabled, _cacheEnabled, _messagingMode, await IsHaproxyRunningAsync(ct), await ArePostgresReplicasRunningAsync(ct));
+        new(
+            _nginxBypassed,
+            _pgcatEnabled,
+            _cacheEnabled,
+            _messagingMode,
+            await IsHaproxyRunningAsync(ct),
+            await AreAllRunningAsync(PostgresReplicaContainers, ct),
+            await IsRedisMasterRunningAsync(ct),
+            await AreAllRunningAsync(RedisHaContainers, ct));
 
     private async Task<bool> IsHaproxyRunningAsync(CancellationToken ct) =>
         await runtime.FindAsync("haproxy", ct) is { State: "running" };
 
-    private async Task<bool> ArePostgresReplicasRunningAsync(CancellationToken ct)
+    private async Task<bool> IsRedisMasterRunningAsync(CancellationToken ct) =>
+        await runtime.FindAsync("redis-master", ct) is { State: "running" };
+
+    private async Task<bool> AreAllRunningAsync(IReadOnlyList<string> serviceIds, CancellationToken ct)
     {
-        foreach (var name in PostgresReplicaContainers)
+        foreach (var name in serviceIds)
         {
             if (await runtime.FindAsync(name, ct) is not { State: "running" })
             {
@@ -209,21 +243,28 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     public Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct) =>
         runtime.RunExclusiveToggleAsync(async ct =>
         {
-            var env = CurrentStandingEnv();
-            env["CACHE_ENABLED"] = enabled ? "true" : "false";
-            var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(CacheUsingServices, ct);
-
-            logger.LogWarning("Switching Cache__Enabled for {Services} to {Enabled}", string.Join(", ", CacheUsingServices), enabled);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CacheUsingServices], env, ct);
-            if (exitCode != 0)
-            {
-                logger.LogWarning("Toggling cache failed (exit {ExitCode}): {Output}", exitCode, output);
-                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
-            }
-
             _cacheEnabled = enabled;
+            await RecreateCacheUsingServicesAsync(ct);
             return await GetInfraStatusAsync(ct);
         }, ct);
+
+    // Shared by the public SetCacheEnabledAsync and by SetRedisEnabledAsync's ON path (which sets
+    // _cacheEnabled directly and calls this instead of the public, gated method, same reasoning as
+    // every other un-gated private helper in this class). Always reads _cacheEnabled rather than
+    // taking a parameter - the caller sets the field first, this just recreates to match.
+    private async Task RecreateCacheUsingServicesAsync(CancellationToken ct)
+    {
+        var env = CurrentStandingEnv();
+        var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(CacheUsingServices, ct);
+
+        logger.LogWarning("Switching Cache__Enabled for {Services} to {Enabled}", string.Join(", ", CacheUsingServices), _cacheEnabled);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CacheUsingServices], env, ct);
+        if (exitCode != 0)
+        {
+            logger.LogWarning("Toggling cache failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+    }
 
     public Task<InfraStatus> SetMessagingModeAsync(string mode, CancellationToken ct)
     {
@@ -399,4 +440,216 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
 
             return await GetInfraStatusAsync(ct);
         }, ct);
+
+    // Starts/stops redis-master AND, in lockstep, Cache__Enabled on link-api/redirect-api - unlike
+    // every other cascade in this class, these two aren't "parent forces a dependent off/leaves it
+    // for the user to re-enable" (pgcat->haproxy, replicas->pgcat.toml): a redis-master nobody's
+    // allowed to read from would be a node on the graph with no reason to exist, so ON and OFF both
+    // move CacheEnabled in lockstep with RedisEnabled, not just OFF. Sentinel is the one real
+    // cascade here - OFF forces it off too (nothing left to fail over to), ON does NOT restore it
+    // (bringing up the HA layer is still its own explicit action, same rule as every other toggle in
+    // this class) - see SetRedisSentinelEnabledAsync and InfraStatus's own comment on RedisEnabled.
+    public Task<InfraStatus> SetRedisEnabledAsync(bool enabled, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            if (enabled)
+            {
+                await SyncRedisMasterContainerAsync(true, ct);
+                _cacheEnabled = true;
+                await RecreateCacheUsingServicesAsync(ct);
+            }
+            else
+            {
+                // Set _cacheEnabled before the recreate below so its own CurrentStandingEnv() read
+                // already carries CACHE_ENABLED=false - folds both axes into the ONE recreate pass
+                // SetRedisSentinelEnabledInternalAsync(false, ...) already needs for REDIS_CONN,
+                // instead of a second, redundant force-recreate of the same services right after.
+                _cacheEnabled = false;
+                await SetRedisSentinelEnabledInternalAsync(false, ct);
+                await SyncRedisMasterContainerAsync(false, ct);
+            }
+
+            return await GetInfraStatusAsync(ct);
+        }, ct);
+
+    // Only legal to turn on while Redis itself is on (checked live, not against a cached field -
+    // RedisEnabled has no cached counterpart, unlike PgcatEnabled/HaproxyEnabled's pair) - same
+    // "can't monitor/fail over to nothing" reasoning as HaproxyEnabled requiring PgcatEnabled.
+    public Task<InfraStatus> SetRedisSentinelEnabledAsync(bool enabled, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            if (enabled && !await IsRedisMasterRunningAsync(ct))
+            {
+                throw new InvalidOperationException("Cannot enable Redis Sentinel while Redis itself is disabled - nothing to monitor or fail over to.");
+            }
+
+            await SetRedisSentinelEnabledInternalAsync(enabled, ct);
+            return await GetInfraStatusAsync(ct);
+        }, ct);
+
+    // Shared by the public SetRedisSentinelEnabledAsync and by SetRedisEnabledAsync's OFF cascade
+    // (which cannot call the public, gated method from inside its own already-gated delegate - same
+    // reasoning as SyncHaproxyContainerAsync being a private helper). OFF recreates the 6 services
+    // onto the direct connection string BEFORE stopping the HA containers - same "safe state first"
+    // ordering as SetPostgresReplicasEnabledAsync, so no service is ever left holding a Sentinel-form
+    // connection string pointed at Sentinels that are about to disappear. ON is the mirror image:
+    // start the HA containers first, then recreate the 6 services onto the Sentinel-form string.
+    //
+    // redis-master's own min-replicas-to-write (redis-node-entrypoint.sh's MIN_REPLICAS_FLAGS, the
+    // split-brain mitigation from the 2026-09-22 resilience pass) is a second piece of state this
+    // toggle has to carry, found by actually exercising this toggle live: with the 2 replicas
+    // stopped, redis-master still demanded >=1 connected replica before any write, so even a
+    // perfectly-correct direct connection string just got NOREPLICAS errors on every cache write -
+    // relaxing it to 0 going OFF and restoring it to 1 going ON (both live via CONFIG SET, no
+    // restart) is what actually makes "Redis on, Sentinel off" a working standalone cache instead of
+    // a write-fenced one. OFF relaxes it FIRST, before anything else, so the services the very next
+    // step recreates never race a master that's still fencing; ON restores it LAST, after the
+    // replicas have had the whole recreate-the-6-services step's worth of time to reconnect - not a
+    // guarantee, but the same "good enough in practice, not worth a polling wait" tolerance pgcat's
+    // ban_time/healthcheck_delay already apply elsewhere in this class.
+    //
+    // A third piece of state, also found by exercising this live: redis-sentinel-1/2/3's own
+    // entrypoint (docker-compose.yml's inline command, not redis-node-entrypoint.sh) keeps
+    // sentinel.conf exactly as-is on every restart once it's ever carried a "# Generated by CONFIG
+    // REWRITE" marker - unlike the data nodes' own entrypoint, it never re-derives "mymaster" via DNS
+    // again. This toggle is the first thing in this stack's normal lifecycle that actually restarts
+    // the Sentinel containers (previously only a full `docker compose` stack restart or genuine
+    // chaos-testing did), which surfaces exactly the staleness RedisInfraService.SelfHealSentinelAsync
+    // already exists to correct (see its own comment for the original incident) - but only once that
+    // routine's next 30s poll tick runs, and only if at least one data node is currently reachable
+    // and reporting ROLE=master for it to anchor on. Confirmed live: without an explicit correction
+    // right here, a Sentinel restart with stale config can fail over onto a now-dead address and tell
+    // the real redis-master to become its replica, and - since this toggle's own ON path is the only
+    // thing that ever starts these 5 containers back up - nothing else in the system would un-stick
+    // that until someone intervenes by hand. ReclaimRedisMasterRoleAsync runs FIRST, before the HA
+    // containers even start, so there is an unambiguous, confirmable master for both the freshly
+    // (re)started replicas' own entrypoints and SelfHealSentinelAsync's ground-truth ROLE check to
+    // anchor on - SelfHealSentinelAsync itself then forces every Sentinel's belief to match it
+    // immediately, rather than leaving that to chance or a 30s-away poll tick.
+    private async Task SetRedisSentinelEnabledInternalAsync(bool enabled, CancellationToken ct)
+    {
+        if (enabled)
+        {
+            await ReclaimRedisMasterRoleAsync(ct);
+            await SyncRedisHaContainersAsync(true, ct);
+            await redis.SelfHealSentinelAsync(ct);
+            _redisConnectionViaSentinel = true;
+            await RecreateRedisUsingServicesAsync(ct);
+            await SetRedisMinReplicasToWriteAsync(1, ct);
+        }
+        else
+        {
+            await SetRedisMinReplicasToWriteAsync(0, ct);
+            _redisConnectionViaSentinel = false;
+            await RecreateRedisUsingServicesAsync(ct);
+            await SyncRedisHaContainersAsync(false, ct);
+        }
+    }
+
+    // Best-effort, same reasoning as PgcatService.ReloadAllInstancesAsync: redis-master being
+    // transiently unreachable for this one CONFIG SET must not abort a toggle that already
+    // stopped/started real containers - the entrypoint's own MIN_REPLICAS_FLAGS is still the
+    // authoritative value on redis-master's next restart regardless, so a swallowed failure here
+    // only means this one toggle cycle ran with whichever value was already in effect.
+    private async Task SetRedisMinReplicasToWriteAsync(int value, CancellationToken ct)
+    {
+        var container = await runtime.FindAsync("redis-master", ct);
+        if (container is null)
+        {
+            logger.LogWarning("redis-master container not found - skipping min-replicas-to-write={Value}", value);
+            return;
+        }
+
+        try
+        {
+            await runtime.ExecAsync(container.ID, ["redis-cli", "CONFIG", "SET", "min-replicas-to-write", value.ToString()], ct);
+            logger.LogWarning("Set redis-master min-replicas-to-write={Value}", value);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Setting redis-master min-replicas-to-write={Value} failed", value);
+        }
+    }
+
+    // Best-effort, same reasoning as SetRedisMinReplicasToWriteAsync: `REPLICAOF NO ONE` on a node
+    // that's already master is a documented no-op, not an error, so this is safe to call
+    // unconditionally every time Sentinel turns on, not just after a confirmed bad state. A failure
+    // here (redis-master unreachable) is caught by SyncRedisHaContainersAsync's own
+    // container-not-found check right after anyway, so swallowing it here just avoids double-logging
+    // the same underlying problem.
+    private async Task ReclaimRedisMasterRoleAsync(CancellationToken ct)
+    {
+        var container = await runtime.FindAsync("redis-master", ct);
+        if (container is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "REPLICAOF", "NO", "ONE"], ct);
+            logger.LogWarning("Reclaimed redis-master's own master role (REPLICAOF NO ONE) before bringing Sentinel back up");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Reclaiming redis-master's master role failed");
+        }
+    }
+
+    private async Task RecreateRedisUsingServicesAsync(CancellationToken ct)
+    {
+        var env = CurrentStandingEnv();
+        var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(RedisUsingServices, ct);
+
+        logger.LogWarning(
+            "Switching ConnectionStrings__Redis for {Services} to {Conn} (cache enabled: {CacheEnabled})",
+            string.Join(", ", RedisUsingServices), env["REDIS_CONN"], _cacheEnabled);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. RedisUsingServices], env, ct);
+        if (exitCode != 0)
+        {
+            logger.LogWarning("Recreating Redis-using services failed (exit {ExitCode}): {Output}", exitCode, output);
+            throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+        }
+    }
+
+    private async Task SyncRedisMasterContainerAsync(bool enabled, CancellationToken ct)
+    {
+        var container = await runtime.FindAsync("redis-master", ct)
+            ?? throw new InvalidOperationException("redis-master container not found");
+
+        logger.LogWarning("Switching redis-master container to {Enabled}", enabled);
+        if (enabled)
+        {
+            await runtime.Client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
+        }
+        else
+        {
+            await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
+        }
+    }
+
+    // Stop (not remove) redis-sentinel-1/2/3 and redis-replica1/2 - same reasoning as
+    // SyncPostgresReplicaContainersAsync: their own entrypoints already self-heal role/config on a
+    // plain restart (Sentinel only regenerates sentinel.conf if it doesn't already carry
+    // CONFIG REWRITE-learned state, replicas re-derive their role via Sentinel rather than blindly
+    // rejoining as a replica - see docker-compose.yml's own comments on both), so there's nothing a
+    // remove-and-recreate would buy here that stop/start doesn't already give for free.
+    private async Task SyncRedisHaContainersAsync(bool enabled, CancellationToken ct)
+    {
+        foreach (var name in RedisHaContainers)
+        {
+            var container = await runtime.FindAsync(name, ct)
+                ?? throw new InvalidOperationException($"{name} container not found");
+
+            logger.LogWarning("Switching {Name} container to {Enabled}", name, enabled);
+            if (enabled)
+            {
+                await runtime.Client.Containers.StartContainerAsync(container.ID, new ContainerStartParameters(), ct);
+            }
+            else
+            {
+                await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
+            }
+        }
+    }
 }

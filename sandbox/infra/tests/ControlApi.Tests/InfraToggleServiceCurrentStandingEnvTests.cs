@@ -11,7 +11,8 @@ public class InfraToggleServiceCurrentStandingEnvTests
         var configuration = new ConfigurationBuilder().Build();
         var runtime = new ContainerRuntime(configuration, NullLogger<ContainerRuntime>.Instance);
         var pgcat = new PgcatService(configuration, runtime, NullLogger<PgcatService>.Instance);
-        return new InfraToggleService(runtime, pgcat, NullLogger<InfraToggleService>.Instance);
+        var redis = new RedisInfraService(runtime, NullLogger<RedisInfraService>.Instance);
+        return new InfraToggleService(runtime, pgcat, redis, NullLogger<InfraToggleService>.Instance);
     }
 
     [Fact]
@@ -35,5 +36,6 @@ public class InfraToggleServiceCurrentStandingEnvTests
         Assert.Equal("100", env["NPGSQL_MAX_POOL_SIZE"]);
         Assert.Equal("10", env["RABBITMQ_PREFETCH"]);
         Assert.Equal("primary", env["MONGO_READ_PREFERENCE"]);
+        Assert.Equal("redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster", env["REDIS_CONN"]);
     }
 }

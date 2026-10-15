@@ -100,6 +100,8 @@ export const controlApi = {
   setMessagingMode: (mode: MessagingMode) => request<InfraStatus>('/api/infra/messaging-mode', 'POST', { mode }),
   setHaproxyEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/haproxy', 'POST', { enabled }),
   setPostgresReplicasEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/postgres-replicas', 'POST', { enabled }),
+  setRedisEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/redis', 'POST', { enabled }),
+  setRedisSentinelEnabled: (enabled: boolean) => request<InfraStatus>('/api/infra/redis-sentinel', 'POST', { enabled }),
 
   listScenarios: () => request<CustomScenario[]>('/api/scenarios'),
   saveScenario: (scenario: CustomScenario) => request<CustomScenario>('/api/scenarios', 'POST', scenario),
