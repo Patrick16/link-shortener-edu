@@ -65,6 +65,8 @@ different reasons — see [ShortenerService](node:shortener-service)).
   (memory-leak) — fixed
 - ⚠️ [Click counter incremented before the dispatch it should depend on](pitfall:click-counter-incremented-before-dispatch)
   (resilience-gap) — fixed
+- ⚠️ [A deletion tombstone written before the delete event's dispatch is confirmed can outlive a delete that never happened](pitfall:delete-tombstone-written-before-dispatch-confirmed)
+  (resilience-gap) — fixed
 - ⚠️ [Point-to-point RPC dispatch silently breaks pub/sub fan-out to the other consumers](pitfall:sync-dispatch-breaks-pubsub-fanout)
   (architecture-bug) — known limitation
 - ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)

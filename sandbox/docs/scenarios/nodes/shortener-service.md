@@ -94,6 +94,7 @@ await context.Links
 foreach (var hash in existingHashes)
 {
     await _deletionMarkers.ConfirmAsync(hash, DeletedReason.Manual, now, ct);
+    await _cache.InvalidateCacheAsync(hash);
 }
 
 var missingHashes = hashes.Where(h => !existingHashes.Contains(h)).ToList();
@@ -120,6 +121,16 @@ just touched, so it can confirm a `DeletedReason.Expired` tombstone for each - t
 NULL` guard in its `WHERE` clause means a hash a manual delete reached first simply isn't among the
 rows returned, so the two triggers can never double-process the same row.
 
+**Both triggers also invalidate the main `link:{hash}` cache-aside entry** (`IEntityCacheService<Link>
+.InvalidateCacheAsync`), alongside - not instead of - confirming the tombstone above. Found in
+review: the tombstone alone wasn't enough, because `RedirectApi`'s live `DeletedAt`/`ExpiresAt`
+check on a cache-aside `Link` only actually runs on a cache *miss* - a `Link` already warm in the
+cache before being deleted or expired has `DeletedAt == null` baked in forever and keeps resolving
+successfully for up to the cache entry's full remaining TTL (up to an hour by default) if the
+tombstone confirm specifically fails. The two writes stay independent, not transactional with each
+other - either one succeeding alone is now enough to close the gap it closes. See this node's
+Pitfalls.
+
 ## Pitfalls
 
 - 🐛 [AddDbContextPool registered as a scoped service inside a Worker Service](pitfall:shortener-dbcontext-pool-scoped-in-worker)
@@ -133,12 +144,16 @@ rows returned, so the two triggers can never double-process the same row.
   snippet above) never actually reached RedirectApi's cache before this fix
 - ⚠️ [Intra-batch same-hash dedup silently dropped a genuine conflict, not just a redelivery](pitfall:shortener-batch-dedup-drops-conflicting-duplicate)
   (resilience-gap) — fixed
+- ⚠️ [A fail-open tombstone write is not enough on its own to invalidate an already-cached entity](pitfall:deletion-tombstone-alone-leaves-stale-cache-entry)
+  (resilience-gap) — fixed
 
 ## Relatives
 
 ### Nodes
 
 - [LinkApi](node:link-api) — publishes what this node consumes
+- [RedirectApi](node:redirect-api) — reads the `link:{hash}` cache entry this node's deletion
+  consumer/sweep worker invalidate
 - [RabbitMQ](node:rabbitmq)
 - [links_db](node:links-db)
 
@@ -146,3 +161,4 @@ rows returned, so the two triggers can never double-process the same row.
 
 - [Async messaging](pattern:async-messaging)
 - [Custom aliases](pattern:custom-aliases)
+- [Caching](pattern:caching) — invalidates the main cache-aside entry on delete/expiry

@@ -88,6 +88,8 @@ with a different purpose: it's disposable, the day buckets are a rolling aggrega
   (coupling) — fixed; this node's own cache reads were invisible to LinkApi/ShortenerService's writes
 - ⚠️ [Fail-open that only caught RedisException let timeouts fail the redirect](pitfall:fail-open-catch-too-narrow)
   (resilience-gap) — fixed
+- ⚠️ [A fail-open tombstone write is not enough on its own to invalidate an already-cached entity](pitfall:deletion-tombstone-alone-leaves-stale-cache-entry)
+  (resilience-gap) — fixed; this node's cache-hit read path is the one that stays fooled if the fix fails
 
 ## Relatives
 

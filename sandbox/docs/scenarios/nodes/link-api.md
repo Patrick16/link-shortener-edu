@@ -64,11 +64,15 @@ even though the plain-hash path deliberately never makes it.
 whichever messaging mode is active. Anonymous links (`UserId == null`) can never be deleted by
 anyone, and a caller who isn't the link's own owner gets `403`, not `404` - the hash is already in
 their hands (they're asking to delete it), so there's nothing extra to protect by pretending it
-doesn't exist. An already-deleted hash returns `204` idempotently instead of erroring. Before
-publishing, the handler writes an optimistic "deleted" marker to a *separate* Redis key
-(`link:deleted:{hash}`, not the main `link:{hash}` cache entry) via `ILinkDeletionMarkerStore` -
-see [RedirectApi](node:redirect-api) for why that key is checked first on every resolve, and
-[ShortenerService](node:shortener-service) for how the marker gets confirmed. `CreateLink` also
+doesn't exist. An already-deleted hash returns `204` idempotently instead of erroring. The handler
+dispatches `LinkDeletedEvent` first and only then writes an optimistic "deleted" marker to a
+*separate* Redis key (`link:deleted:{hash}`, not the main `link:{hash}` cache entry) via
+`ILinkDeletionMarkerStore` - mirroring `CreateLink`'s own dispatch-before-optimistic-write ordering
+above, in the opposite direction; see this node's Pitfalls for the review-caught bug this ordering
+fixes (writing the tombstone first left a false 60s "Gone" page behind for a link whose delete had
+actually failed, under `Messaging:Mode=grpc`). See [RedirectApi](node:redirect-api) for why that
+key is checked first on every resolve, and [ShortenerService](node:shortener-service) for how the
+marker gets confirmed. `CreateLink` also
 accepts an optional `TtlSeconds`, converted once to an absolute `ExpiresAt` and carried on
 `LinkCreatedEvent` for both the plain-hash and custom-alias paths - see ShortenerService's
 `LinkExpiryWorker` for what actually acts on it. `GetLinks` filters out deleted and expired links
@@ -76,6 +80,8 @@ by default; there's no "show them anyway" toggle, since nothing in this feature 
 
 ## Pitfalls
 
+- ⚠️ [A deletion tombstone written before the delete event's dispatch is confirmed can outlive a delete that never happened](pitfall:delete-tombstone-written-before-dispatch-confirmed)
+  (resilience-gap) — fixed
 - ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)
   (performance) — fixed
 - 🐛 [A read immediately after a write can land on a lagging replica](pitfall:pgcat-read-your-writes-race)

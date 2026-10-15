@@ -56,6 +56,8 @@ two real bugs found in this exact code path.
   (resilience-gap) — fixed
 - ⚠️ [Fail-open that only caught RedisException let timeouts fail the redirect](pitfall:fail-open-catch-too-narrow)
   (resilience-gap) — fixed
+- ⚠️ [A fail-open tombstone write is not enough on its own to invalidate an already-cached entity](pitfall:deletion-tombstone-alone-leaves-stale-cache-entry)
+  (resilience-gap) — fixed
 
 ## Relatives
 
@@ -66,6 +68,9 @@ two real bugs found in this exact code path.
 - [RedirectApi](node:redirect-api)
 - [TrafficService](node:traffic-service) — a second, independent cache (geo-IP lookups via
   `CachingGeoIpResolver`) using the same cache-aside idea, not `EntityCacheService`
+- [ShortenerService](node:shortener-service) — invalidates the main `link:{hash}` cache-aside
+  entry on delete/expiry (step 4's invalidate-on-write, from a different process than the one that
+  originally wrote the entry)
 
 ### Patterns
 
