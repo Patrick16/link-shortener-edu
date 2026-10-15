@@ -13,6 +13,7 @@ vi.mock('../api/linkApi', async () => {
   return {
     ...actual,
     getLinks: vi.fn(),
+    deleteLink: vi.fn(),
   }
 })
 
@@ -82,8 +83,8 @@ describe('DashboardPage', () => {
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
         items: [
-          { shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false },
-          { shortenLink: 'def67890', originalLink: 'https://example.com/b', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false },
+          { shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false, expiresAt: null, deletedAt: null },
+          { shortenLink: 'def67890', originalLink: 'https://example.com/b', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false, expiresAt: null, deletedAt: null },
         ],
         totalCount: 2,
       }),
@@ -102,8 +103,8 @@ describe('DashboardPage', () => {
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
         items: [
-          { shortenLink: 'my-link', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: true },
-          { shortenLink: 'abc12345', originalLink: 'https://example.com/b', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false },
+          { shortenLink: 'my-link', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: true, expiresAt: null, deletedAt: null },
+          { shortenLink: 'abc12345', originalLink: 'https://example.com/b', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false, expiresAt: null, deletedAt: null },
         ],
         totalCount: 2,
       }),
@@ -136,7 +137,7 @@ describe('DashboardPage', () => {
               originalLink: 'https://example.com',
               createdAt: '2099-01-01T00:00:00Z',
               clickCount: 0,
-              hasCustomAlias: false,
+              hasCustomAlias: false, expiresAt: null, deletedAt: null,
             },
           ],
           page: requestedPage,
@@ -152,7 +153,7 @@ describe('DashboardPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Next' }))
 
-    await waitFor(() => expect(linkApi.getLinks).toHaveBeenCalledWith(2))
+    await waitFor(() => expect(linkApi.getLinks).toHaveBeenCalledWith(2, false))
     await screen.findByText('Page 2 of 2')
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
   })
@@ -162,7 +163,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
         totalCount: 1,
       }),
     )
@@ -193,7 +194,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
         totalCount: 1,
       }),
     )
@@ -210,7 +211,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
         totalCount: 1,
       }),
     )
@@ -249,7 +250,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
         totalCount: 1,
       }),
     )
@@ -278,7 +279,7 @@ describe('DashboardPage', () => {
     mockUser({ email: 'alice@example.com', name: 'Alice' })
     vi.mocked(linkApi.getLinks).mockResolvedValue(
       page({
-        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false }],
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
         totalCount: 1,
       }),
     )
@@ -300,5 +301,149 @@ describe('DashboardPage', () => {
     // No "state update on an unmounted component" warning - mountedRef guards the .then callback.
     expect(consoleError).not.toHaveBeenCalled()
     consoleError.mockRestore()
+  })
+
+  it('shows an Expires badge for an active link with a TTL', async () => {
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [
+          {
+            shortenLink: 'abc12345',
+            originalLink: 'https://example.com/a',
+            createdAt: '2099-01-01T00:00:00Z',
+            clickCount: 0,
+            hasCustomAlias: false,
+            expiresAt: '2099-02-01T00:00:00Z',
+            deletedAt: null,
+          },
+        ],
+        totalCount: 1,
+      }),
+    )
+
+    render(<DashboardPage />)
+
+    expect(await screen.findByText(/Expires/)).toBeInTheDocument()
+  })
+
+  it('switches to the Deleted tab, refetches with deleted=true, and shows the Deleted badge instead of a Delete button', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockImplementation((_page = 1, deleted = false) =>
+      Promise.resolve(
+        deleted
+          ? page({
+              items: [
+                {
+                  shortenLink: 'gone0001',
+                  originalLink: 'https://example.com/gone',
+                  createdAt: '2099-01-01T00:00:00Z',
+                  clickCount: 0,
+                  hasCustomAlias: false,
+                  expiresAt: null,
+                  deletedAt: '2099-01-02T00:00:00Z',
+                },
+              ],
+              totalCount: 1,
+            })
+          : page({
+              items: [
+                {
+                  shortenLink: 'live0001',
+                  originalLink: 'https://example.com/live',
+                  createdAt: '2099-01-01T00:00:00Z',
+                  clickCount: 0,
+                  hasCustomAlias: false,
+                  expiresAt: null,
+                  deletedAt: null,
+                },
+              ],
+              totalCount: 1,
+            }),
+      ),
+    )
+
+    render(<DashboardPage />)
+    await screen.findByRole('link', { name: linkApi.buildShortUrl('live0001') })
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Deleted' }))
+
+    await waitFor(() => expect(linkApi.getLinks).toHaveBeenCalledWith(1, true))
+    expect(await screen.findByRole('link', { name: linkApi.buildShortUrl('gone0001') })).toBeInTheDocument()
+    // Distinct from the "Deleted" tab button itself (same word) - the badge is the only element
+    // with this class, so querying by it rather than by text avoids matching both.
+    expect(document.querySelector('.deleted-badge')).toHaveTextContent('Deleted')
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument()
+  })
+
+  it('deletes a link after confirmation and removes it from the list optimistically', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [
+          { shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false, expiresAt: null, deletedAt: null },
+        ],
+        totalCount: 1,
+      }),
+    )
+    vi.mocked(linkApi.deleteLink).mockResolvedValue(undefined)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    render(<DashboardPage />)
+    await screen.findByRole('link', { name: linkApi.buildShortUrl('abc12345') })
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(linkApi.deleteLink).toHaveBeenCalledWith('abc12345')
+    await waitFor(() => expect(screen.queryByRole('link', { name: linkApi.buildShortUrl('abc12345') })).not.toBeInTheDocument())
+    expect(await screen.findByText("You haven't created any links yet.")).toBeInTheDocument()
+  })
+
+  it('does not call deleteLink when the confirmation is declined', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [
+          { shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false, expiresAt: null, deletedAt: null },
+        ],
+        totalCount: 1,
+      }),
+    )
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
+
+    render(<DashboardPage />)
+    await screen.findByRole('link', { name: linkApi.buildShortUrl('abc12345') })
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(linkApi.deleteLink).not.toHaveBeenCalled()
+    expect(screen.getByRole('link', { name: linkApi.buildShortUrl('abc12345') })).toBeInTheDocument()
+  })
+
+  it('shows an error message when deletion fails, without removing the link', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [
+          { shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false, expiresAt: null, deletedAt: null },
+        ],
+        totalCount: 1,
+      }),
+    )
+    vi.mocked(linkApi.deleteLink).mockRejectedValue(new ApiError(403, 'Forbidden'))
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    render(<DashboardPage />)
+    await screen.findByRole('link', { name: linkApi.buildShortUrl('abc12345') })
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+
+    expect(await screen.findByText('Forbidden')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: linkApi.buildShortUrl('abc12345') })).toBeInTheDocument()
   })
 })

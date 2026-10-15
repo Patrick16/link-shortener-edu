@@ -181,6 +181,66 @@ main {
   color: var(--accent);
 }
 
+.ttl-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--text);
+}
+
+.deleted-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: #e5484d;
+}
+
+.tab-bar {
+  display: flex;
+  gap: 8px;
+}
+
+.tab-button {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.tab-button-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.link-delete-button {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  margin-top: 2px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: #e5484d;
+  cursor: pointer;
+}
+
+.link-delete-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .link-list-clicks {
   color: var(--text-h);
   font-size: 13px;

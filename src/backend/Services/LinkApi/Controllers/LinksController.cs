@@ -216,7 +216,14 @@ public partial class LinksController(
     [HttpGet]
     public async Task<ActionResult<LinksPageResponse>> GetLinks(
         [FromQuery] int page = 1,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        // Two disjoint views, not a three-way "all/active/deleted" toggle - a deleted/expired link
+        // is terminal (its hash is never reissued), so there's nothing a caller needs from seeing
+        // both at once. Defaults to the active view - every existing caller (control-api's
+        // data-pool preload included) keeps today's behavior unless it explicitly opts in. Kept
+        // after `cancellationToken`, not before, so existing positional callers (every test in
+        // LinksControllerTests.cs) keep compiling unchanged.
+        [FromQuery] bool deleted = false)
     {
         if (page < 1)
         {
@@ -226,13 +233,11 @@ public partial class LinksController(
                 title: "Invalid query parameter.");
         }
 
-        // Deleted/expired links are hidden by default - nothing in this feature calls for a
-        // "show them anyway" toggle, so there isn't one; control-api's data-pool preload (the
-        // InternalApiKey caller) gets the same filtering, since a deleted/expired row is no more
-        // useful as sample data for it than it is in a user's own dashboard.
         var now = DateTime.UtcNow;
-        var query = _context.Links.AsNoTracking()
-            .Where(x => x.DeletedAt == null && (x.ExpiresAt == null || x.ExpiresAt > now));
+        var query = _context.Links.AsNoTracking().Where(x =>
+            deleted
+                ? x.DeletedAt != null || (x.ExpiresAt != null && x.ExpiresAt <= now)
+                : x.DeletedAt == null && (x.ExpiresAt == null || x.ExpiresAt > now));
         if (!User.HasClaim(Constants.InternalClaim, "true"))
         {
             // [Authorize] already guarantees one of the two schemes succeeded; for the JWT scheme
@@ -250,20 +255,25 @@ public partial class LinksController(
         // Computing in long side-steps the overflow, and skipping the query entirely once the offset
         // is already past every row means Skip never sees a value large enough to overflow when cast
         // back to int, and avoids a wasted round trip for a page that can only come back empty.
+        // CreatedAt/DeletedAt alone aren't unique - rows can share either, and SQL gives no ordering
+        // guarantee among rows with an equal sort key, so a row could be duplicated across two pages
+        // or skipped when paging through results. Hash (the primary key) as a tie-breaker makes the
+        // order - and therefore which rows land on which page - fully deterministic. The deleted view
+        // sorts by DeletedAt (when it actually left the active list) rather than CreatedAt (when it
+        // was made) - the more relevant "recency" for a list whose whole point is "what just
+        // disappeared". Two separate OrderByDescending calls, not a ternary inside one, to keep the
+        // sort key's nullability (DeletedAt) from ever mixing with CreatedAt's in one expression.
+        var ordered = deleted
+            ? query.OrderByDescending(x => x.DeletedAt).ThenBy(x => x.Hash)
+            : query.OrderByDescending(x => x.CreatedAt).ThenBy(x => x.Hash);
+
         var skip = (long)(page - 1) * PageSize;
         var items = skip >= totalCount
             ? []
-            : await query
-                // CreatedAt alone isn't unique - two links created in the same request batch (or
-                // restored/seeded rows) can share it, and SQL gives no ordering guarantee among rows
-                // with an equal sort key, so a row could be duplicated across two pages or skipped
-                // when paging through results. Hash (the primary key) as a tie-breaker makes the
-                // order - and therefore which rows land on which page - fully deterministic.
-                .OrderByDescending(x => x.CreatedAt)
-                .ThenBy(x => x.Hash)
+            : await ordered
                 .Skip((int)skip)
                 .Take(PageSize)
-                .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount, x.HasCustomAlias))
+                .Select(x => new LinkListItemResponse(x.ShortenLink, x.OriginalLink, x.CreatedAt, x.ClickCount, x.HasCustomAlias, x.ExpiresAt, x.DeletedAt))
                 .ToListAsync(cancellationToken);
 
         return new LinksPageResponse(items, page, PageSize, totalCount, totalPages);

@@ -20,6 +20,7 @@ export type AuthResponse = {
 export type LinkCreateRequest = {
   originalLink: string
   alias?: string
+  ttlSeconds?: number
 }
 
 export type LinkResponse = {
@@ -33,6 +34,8 @@ export type LinkListItem = {
   createdAt: string
   clickCount: number
   hasCustomAlias: boolean
+  expiresAt: string | null
+  deletedAt: string | null
 }
 
 export type LinksPage = {

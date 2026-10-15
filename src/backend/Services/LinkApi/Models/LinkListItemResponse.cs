@@ -1,3 +1,10 @@
 namespace LinkApi.Models;
 
-public record LinkListItemResponse(string ShortenLink, string OriginalLink, DateTime CreatedAt, int ClickCount, bool HasCustomAlias);
+public record LinkListItemResponse(
+    string ShortenLink,
+    string OriginalLink,
+    DateTime CreatedAt,
+    int ClickCount,
+    bool HasCustomAlias,
+    DateTime? ExpiresAt,
+    DateTime? DeletedAt);

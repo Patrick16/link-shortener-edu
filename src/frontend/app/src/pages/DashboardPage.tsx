@@ -1,12 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
-import { buildShortUrl, getLinks } from '../api/linkApi'
+import { buildShortUrl, deleteLink, getLinks } from '../api/linkApi'
 import { getClickSummary } from '../api/statsApi'
 import { ApiError } from '../api/client'
 import { ClicksByDayChart } from '../components/ClicksByDayChart'
 import { TopLinksPanel } from '../components/TopLinksPanel'
 import { useTopLinks } from '../hooks/useTopLinks'
-import type { ClickSummary, LinksPage } from '../types'
+import type { ClickSummary, LinkListItem, LinksPage } from '../types'
+
+type Tab = 'active' | 'deleted'
+
+// Both a manual delete and a TTL expiry just set DeletedAt - there's no separate "reason" field on
+// the row itself (only the Redis tombstone the backend writes has one, and that's not exposed
+// here). Approximates it for display: if the link had a TTL and that TTL had already passed by
+// the time it was marked deleted, call it "Expired", otherwise "Deleted". Good enough for a label,
+// not meant to be exact to the millisecond.
+function deletionLabel(item: LinkListItem): string {
+  if (item.expiresAt && item.deletedAt && new Date(item.expiresAt).getTime() <= new Date(item.deletedAt).getTime()) {
+    return 'Expired'
+  }
+  return 'Deleted'
+}
 
 // Keyed by hash. 'loading'/'error' are distinct from "not yet requested" (absent key) so toggling
 // a panel closed and back open doesn't refetch - this is a CQRS read model fed asynchronously from
@@ -43,12 +57,23 @@ function StatsPanel({ summary }: { summary: SummaryState }) {
 
 export default function DashboardPage() {
   const { user } = useAuth()
+  const [tab, setTab] = useState<Tab>('active')
   const [page, setPage] = useState(1)
   const [data, setData] = useState<LinksPage | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expandedHash, setExpandedHash] = useState<string | null>(null)
   const [summaries, setSummaries] = useState<Record<string, SummaryState>>({})
+  const [deletingHash, setDeletingHash] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const topLinks = useTopLinks(Boolean(user))
+
+  function switchTab(next: Tab) {
+    if (next === tab) return
+    setTab(next)
+    // Each tab is its own disjoint list (see linkApi.getLinks's own comment) - carrying over the
+    // other tab's page number would silently 404-equivalent into an empty page more often than not.
+    setPage(1)
+  }
 
   // Guards the stats fetch below against setting state after unmount, same reason the getLinks
   // effect just below uses its own local `cancelled` flag - a ref (not state) since toggleStats is
@@ -72,7 +97,7 @@ export default function DashboardPage() {
     if (!user) return
 
     let cancelled = false
-    getLinks(page)
+    getLinks(page, tab === 'deleted')
       .then((response) => {
         if (cancelled) return
         setData(response)
@@ -86,7 +111,29 @@ export default function DashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [user, page])
+  }, [user, page, tab])
+
+  async function handleDelete(hash: string) {
+    // Irreversible (a deleted hash is never reissued) - a plain confirm() is the simplest guard
+    // against a stray click, consistent with this being the only destructive action on this page.
+    if (!window.confirm('Delete this link? This cannot be undone.')) return
+
+    setDeletingHash(hash)
+    setDeleteError(null)
+    try {
+      await deleteLink(hash)
+      // Optimistic local removal rather than a refetch - the backend's own delete flow is
+      // asynchronous (DeleteLink dispatches an event; ShortenerService persists DeletedAt a beat
+      // later), so an immediate refetch could still show the link as active for a moment. Removing
+      // it from this tab's list directly reflects what the user just asked for; it'll show up in
+      // the Deleted tab whenever that tab is next loaded.
+      setData((prev) => (prev ? { ...prev, items: prev.items.filter((i) => i.shortenLink !== hash), totalCount: Math.max(0, prev.totalCount - 1) } : prev))
+    } catch (err) {
+      setDeleteError(err instanceof ApiError ? err.message : 'Could not delete that link. Please try again.')
+    } finally {
+      setDeletingHash(null)
+    }
+  }
 
   function toggleStats(hash: string) {
     if (expandedHash === hash) {
@@ -124,10 +171,24 @@ export default function DashboardPage() {
 
       <h2>My links</h2>
 
+      <div className="tab-bar">
+        <button type="button" className={`tab-button${tab === 'active' ? ' tab-button-active' : ''}`} onClick={() => switchTab('active')}>
+          Active
+        </button>
+        <button type="button" className={`tab-button${tab === 'deleted' ? ' tab-button-active' : ''}`} onClick={() => switchTab('deleted')}>
+          Deleted
+        </button>
+      </div>
+
       {loading && <p className="hint">Loading…</p>}
       {error && <p className="error">{error}</p>}
+      {deleteError && <p className="error">{deleteError}</p>}
 
-      {data && data.items.length === 0 && <p className="hint">You haven't created any links yet.</p>}
+      {data && data.items.length === 0 && (
+        <p className="hint">
+          {tab === 'active' ? "You haven't created any links yet." : 'No deleted or expired links.'}
+        </p>
+      )}
 
       {data && data.items.length > 0 && (
         <>
@@ -138,6 +199,14 @@ export default function DashboardPage() {
                   {buildShortUrl(item.shortenLink)}
                 </a>
                 {item.hasCustomAlias && <span className="alias-badge">Custom alias</span>}
+                {tab === 'active' && item.expiresAt && (
+                  <span className="ttl-badge">Expires {new Date(item.expiresAt).toLocaleString()}</span>
+                )}
+                {tab === 'deleted' && (
+                  <span className="deleted-badge">
+                    {deletionLabel(item)} {item.deletedAt && new Date(item.deletedAt).toLocaleString()}
+                  </span>
+                )}
                 <span className="link-list-original">{item.originalLink}</span>
                 <span className="link-list-clicks">
                   {item.clickCount} {item.clickCount === 1 ? 'click' : 'clicks'}
@@ -145,6 +214,16 @@ export default function DashboardPage() {
                 <button type="button" className="link-stats-toggle" onClick={() => toggleStats(item.shortenLink)}>
                   {expandedHash === item.shortenLink ? 'Hide stats' : 'Stats'}
                 </button>
+                {tab === 'active' && (
+                  <button
+                    type="button"
+                    className="link-delete-button"
+                    disabled={deletingHash === item.shortenLink}
+                    onClick={() => handleDelete(item.shortenLink)}
+                  >
+                    {deletingHash === item.shortenLink ? 'Deleting…' : 'Delete'}
+                  </button>
+                )}
                 {expandedHash === item.shortenLink && (
                   <StatsPanel summary={summaries[item.shortenLink] ?? 'loading'} />
                 )}

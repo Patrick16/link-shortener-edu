@@ -58,7 +58,7 @@ describe('CreateLinkPage', () => {
     await user.type(input, 'https://example.com/a/long/path')
     await user.click(screen.getByRole('button', { name: 'Shorten' }))
 
-    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com/a/long/path', undefined))
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com/a/long/path', undefined, undefined))
     expect(screen.getByRole('link', { name: linkApi.buildShortUrl('abc12345') })).toBeInTheDocument()
     expect(input).toHaveValue('')
   })
@@ -154,7 +154,7 @@ describe('CreateLinkPage', () => {
     await user.type(screen.getByPlaceholderText('my-cool-link'), 'my-link')
     await user.click(screen.getByRole('button', { name: 'Shorten' }))
 
-    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', 'my-link'))
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', 'my-link', undefined))
     expect(screen.getByPlaceholderText('my-cool-link')).toHaveValue('')
   })
 
@@ -166,7 +166,7 @@ describe('CreateLinkPage', () => {
     await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
     await user.click(screen.getByRole('button', { name: 'Shorten' }))
 
-    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', undefined))
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', undefined, undefined))
   })
 
   it('shows the "ready right away" hint for an alias result instead of the async-delay one', async () => {
@@ -193,5 +193,43 @@ describe('CreateLinkPage', () => {
     await user.click(screen.getByRole('button', { name: 'Shorten' }))
 
     expect(await screen.findByText("Alias 'taken' is already taken.")).toBeInTheDocument()
+  })
+
+  it('sends the chosen TTL in seconds and shows the expiry hint on success', async () => {
+    const user = userEvent.setup()
+    vi.mocked(linkApi.createLink).mockResolvedValue({ shortenLink: 'abc12345', createdAt: '2099-01-01T00:00:00Z' })
+    render(<CreateLinkPage />)
+
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.selectOptions(screen.getByLabelText('Expires'), '1 hour')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', undefined, 3600))
+    expect(await screen.findByText('Expires in 1 hour.')).toBeInTheDocument()
+  })
+
+  it('omits ttlSeconds when "Never" is left selected', async () => {
+    const user = userEvent.setup()
+    vi.mocked(linkApi.createLink).mockResolvedValue({ shortenLink: 'abc12345', createdAt: '2099-01-01T00:00:00Z' })
+    render(<CreateLinkPage />)
+
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+
+    await waitFor(() => expect(linkApi.createLink).toHaveBeenCalledWith('https://example.com', undefined, undefined))
+    expect(screen.queryByText(/Expires in/)).not.toBeInTheDocument()
+  })
+
+  it('resets the Expires selector back to Never after a successful submit', async () => {
+    const user = userEvent.setup()
+    vi.mocked(linkApi.createLink).mockResolvedValue({ shortenLink: 'abc12345', createdAt: '2099-01-01T00:00:00Z' })
+    render(<CreateLinkPage />)
+
+    await user.type(screen.getByPlaceholderText('https://example.com/a/very/long/path'), 'https://example.com')
+    await user.selectOptions(screen.getByLabelText('Expires'), '5 minutes')
+    await user.click(screen.getByRole('button', { name: 'Shorten' }))
+    await screen.findByText('Expires in 5 minutes.')
+
+    expect(screen.getByLabelText('Expires')).toHaveValue('')
   })
 })

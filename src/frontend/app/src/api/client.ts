@@ -26,7 +26,7 @@ export function setAccessToken(token: string | null): void {
 }
 
 type RequestOptions = {
-  method?: 'GET' | 'POST'
+  method?: 'GET' | 'POST' | 'DELETE'
   body?: unknown
   auth?: boolean
   // Sends/receives cookies cross-origin (the httpOnly refresh-token cookie AuthApi issues).

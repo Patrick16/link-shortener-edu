@@ -4,15 +4,31 @@ import { ApiError } from '../api/client'
 import { useAuth } from '../auth/AuthContext'
 import type { LinkResponse } from '../types'
 
+// Presets, not a raw seconds input - nobody thinks in seconds for a form field. The backend takes
+// a plain integer (LinkCreateRequest.TtlSeconds); this is the one place that counts it out, per
+// the project's own "frontend counts seconds" design decision.
+const TTL_OPTIONS = [
+  { value: '', label: 'Never' },
+  { value: '300', label: '5 minutes' },
+  { value: '3600', label: '1 hour' },
+  { value: '86400', label: '1 day' },
+  { value: '604800', label: '7 days' },
+] as const
+
 export default function CreateLinkPage() {
   const { user } = useAuth()
   const [originalLink, setOriginalLink] = useState('')
   const [alias, setAlias] = useState('')
+  const [ttl, setTtl] = useState('')
   const [result, setResult] = useState<LinkResponse | null>(null)
   // A custom alias is created synchronously - by the time the response comes back, the row is
   // already durably persisted, unlike the plain-hash path. Tracked separately from `result` so the
   // "it can take a moment" hint below only shows when it's actually true.
   const [resultWasAlias, setResultWasAlias] = useState(false)
+  // The chosen TTL label, snapshotted at submit time - `ttl` itself gets reset to 'Never' right
+  // after, so the result card's "expires in..." hint would otherwise show the wrong thing (or
+  // nothing) by the time it renders.
+  const [resultTtlLabel, setResultTtlLabel] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -38,12 +54,15 @@ export default function CreateLinkPage() {
     // below) and can't hold a value, but guard here too rather than trusting that alone, since
     // this reads component state, not the DOM.
     const usedAlias = user ? alias.trim() : ''
+    const ttlSeconds = ttl ? Number(ttl) : undefined
     try {
-      const response = await createLink(originalLink, usedAlias || undefined)
+      const response = await createLink(originalLink, usedAlias || undefined, ttlSeconds)
       setResult(response)
       setResultWasAlias(usedAlias !== '')
+      setResultTtlLabel(ttlSeconds ? (TTL_OPTIONS.find((o) => o.value === ttl)?.label ?? null) : null)
       setOriginalLink('')
       setAlias('')
+      setTtl('')
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not shorten that link. Please try again.')
     } finally {
@@ -92,6 +111,16 @@ export default function CreateLinkPage() {
             title="3-32 characters, letters/digits/dashes/underscores, starting with a letter or digit"
           />
         </label>
+        <label>
+          Expires
+          <select value={ttl} onChange={(e) => setTtl(e.target.value)}>
+            {TTL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
         {!user && <p className="hint">Sign in to pick your own short link instead of a random one.</p>}
         {error && <p className="error">{error}</p>}
         <button type="submit" disabled={submitting}>
@@ -121,6 +150,7 @@ export default function CreateLinkPage() {
               It can take a brief moment to become active — the link is created asynchronously.
             </p>
           )}
+          {resultTtlLabel && <p className="hint">Expires in {resultTtlLabel.toLowerCase()}.</p>}
         </div>
       )}
     </div>

@@ -526,6 +526,28 @@ public class LinksControllerTests
     }
 
     [Fact]
+    public async Task GetLinks_DeletedTrue_ReturnsOnlyDeletedAndExpiredLinks()
+    {
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("live0001", "https://a.example", "live0001", DateTime.UtcNow, userId));
+        context.Links.Add(new Link("del00001", "https://b.example", "del00001", DateTime.UtcNow, userId, DeletedAt: DateTime.UtcNow));
+        context.Links.Add(new Link("exp00001", "https://c.example", "exp00001", DateTime.UtcNow, userId, ExpiresAt: DateTime.UtcNow.AddMinutes(-1)));
+        context.Links.Add(new Link("fut00001", "https://d.example", "fut00001", DateTime.UtcNow, userId, ExpiresAt: DateTime.UtcNow.AddHours(1)));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var result = await sut.GetLinks(page: 1, CancellationToken.None, deleted: true);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        var hashes = response.Items.Select(i => i.ShortenLink).ToList();
+        Assert.Equal(2, response.TotalCount);
+        Assert.Contains("del00001", hashes);
+        Assert.Contains("exp00001", hashes);
+    }
+
+    [Fact]
     public async Task DeleteLink_HashDoesNotExist_ReturnsNotFound()
     {
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, Guid.NewGuid().ToString())], "TestAuth");
