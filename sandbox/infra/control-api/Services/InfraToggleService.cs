@@ -244,12 +244,18 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             // pgcat does NOT symmetrically start haproxy back up, though - bringing a node up is an
             // explicit action (the sub-toggle + Save/Apply), never an automatic side effect of
             // flipping something else, so haproxy stays off until the user turns it back on
-            // themselves. Calls the un-gated helper directly, not SetHaproxyEnabledAsync itself -
+            // themselves. Calls the un-gated helpers directly, not SetHaproxyEnabledAsync itself -
             // this whole delegate already runs inside RunExclusiveToggleAsync's gate, which isn't
-            // reentrant.
+            // reentrant. Also collapses pgcat to 1 replica, same as SetHaproxyEnabledAsync(false)
+            // does standalone - found live: calling this endpoint directly (bypassing the Topology
+            // panel's UI, which always re-applies both toggles together and happens to self-heal
+            // this) could otherwise leave pgcat at 3 idle replicas with haproxy off, contradicting
+            // SyncPgcatReplicaCountAsync's own "always exactly 1 or 3, in lockstep with haproxy"
+            // invariant.
             if (!enabled)
             {
                 await SyncHaproxyContainerAsync(false, ct);
+                await SyncPgcatReplicaCountAsync(1, ct);
             }
 
             return await GetInfraStatusAsync(ct);
@@ -325,8 +331,12 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     {
         var env = new Dictionary<string, string> { ["PGCAT_TOML_HOST_PATH"] = await GetOwnPgcatConfigHostPathAsync(ct) };
 
+        // --no-deps is load-bearing here too, same reasoning as SetPgcatEnabledAsync's own comment on
+        // it: without it, `up` also starts pgcat's depends_on chain (postgres-replica1/2, condition
+        // service_healthy) - found live, this toggle could silently restart replicas the separate
+        // "Postgres replicas" toggle had deliberately stopped.
         logger.LogWarning("Scaling pgcat to {Replicas} replica(s) (haproxy enabled: {HaproxyEnabled})", replicas, replicas > 1);
-        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--scale", $"pgcat={replicas}", "--no-recreate", "pgcat"], env, ct);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--scale", $"pgcat={replicas}", "--no-recreate", "--no-deps", "pgcat"], env, ct);
         if (exitCode != 0)
         {
             logger.LogWarning("Scaling pgcat to {Replicas} failed (exit {ExitCode}): {Output}", replicas, exitCode, output);
@@ -470,6 +480,15 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             if (enabled)
             {
                 await SyncRedisMasterContainerAsync(true, ct);
+                // redis-master's entrypoint always bakes in min-replicas-to-write=1 on every restart
+                // (a CLI flag, never persisted to disk) regardless of whether Sentinel/replicas are
+                // actually up - found live: starting Redis back up while Sentinel was still off
+                // (REDIS_CONN still pointed directly at redis-master, no replica connected)
+                // reintroduced the exact NOREPLICAS write-fencing bug SetRedisSentinelEnabledAsync's
+                // own min-replicas-to-write handling already fixes, since nothing here re-synced this
+                // fresh container back to the toggle's actual current state. Match it to the current
+                // REDIS_CONN form instead of trusting the container's own just-applied default.
+                await SetRedisMinReplicasToWriteAsync(_redisConnectionViaSentinel ? 1 : 0, ct);
                 _cacheEnabled = true;
                 await RecreateCacheUsingServicesAsync(ct);
             }
@@ -561,11 +580,24 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         }
     }
 
-    // Best-effort, same reasoning as PgcatService.ReloadAllInstancesAsync: redis-master being
-    // transiently unreachable for this one CONFIG SET must not abort a toggle that already
-    // stopped/started real containers - the entrypoint's own MIN_REPLICAS_FLAGS is still the
-    // authoritative value on redis-master's next restart regardless, so a swallowed failure here
-    // only means this one toggle cycle ran with whichever value was already in effect.
+    // Best-effort overall, same reasoning as PgcatService.ReloadAllInstancesAsync: redis-master being
+    // unreachable after retrying must not abort a toggle that already stopped/started real
+    // containers - the entrypoint's own MIN_REPLICAS_FLAGS is still the authoritative value on
+    // redis-master's next restart regardless, so an exhausted-retries failure here only means this
+    // one toggle cycle ran with whichever value was already in effect.
+    //
+    // Retries with exit-code checking, not a single ExecAsync call - found live, right after
+    // SyncRedisMasterContainerAsync(true, ...) starts the container, redis-server can take a real,
+    // not-brief moment to actually accept connections: redis-node-entrypoint.sh's own Sentinel-
+    // discovery attempt (getent + up to 5 retries of a 2s-spaced SENTINEL query against each of 3
+    // sentinel hosts before falling back to NODE_DEFAULT_ROLE) can legitimately run ~10s before it
+    // ever execs redis-server, confirmed live - a first attempt at 500ms and a short handful of
+    // retries both still hit Connection refused the whole way through. 20 attempts a second apart
+    // covers that worst case with headroom. ExecAsync doesn't surface a non-zero exit code (its own
+    // contract is "whichever of stdout/stderr has content", not success/failure), so a `redis-cli`
+    // that merely printed a connection error used to look identical to one that actually applied the
+    // setting - confirmed live: the ON path's own fix for this exact method appeared to succeed in
+    // the logs while min-replicas-to-write silently stayed at the entrypoint's baked-in default.
     private async Task SetRedisMinReplicasToWriteAsync(int value, CancellationToken ct)
     {
         var container = await runtime.FindAsync("redis-master", ct);
@@ -575,15 +607,24 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             return;
         }
 
-        try
+        const int maxAttempts = 20;
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
-            await runtime.ExecAsync(container.ID, ["redis-cli", "CONFIG", "SET", "min-replicas-to-write", value.ToString()], ct);
-            logger.LogWarning("Set redis-master min-replicas-to-write={Value}", value);
+            var (exitCode, output) = await runtime.ExecWithExitCodeAsync(container.ID, ["redis-cli", "CONFIG", "SET", "min-replicas-to-write", value.ToString()], ct);
+            if (exitCode == 0)
+            {
+                logger.LogWarning("Set redis-master min-replicas-to-write={Value} (attempt {Attempt}/{MaxAttempts})", value, attempt, maxAttempts);
+                return;
+            }
+
+            logger.LogDebug("SetRedisMinReplicasToWriteAsync: attempt {Attempt}/{MaxAttempts} failed (exit {ExitCode}): {Output}", attempt, maxAttempts, exitCode, output);
+            if (attempt < maxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1), ct);
+            }
         }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Setting redis-master min-replicas-to-write={Value} failed", value);
-        }
+
+        logger.LogWarning("Setting redis-master min-replicas-to-write={Value} failed after {MaxAttempts} attempts", value, maxAttempts);
     }
 
     // Best-effort, same reasoning as SetRedisMinReplicasToWriteAsync: `REPLICAOF NO ONE` on a node

@@ -176,7 +176,43 @@ public sealed class MongoTopologyService(IContainerRuntime runtime, ILogger<Mong
             }
         }
 
+        // The success path's own removeScript resets priorities back to 1 once it's done - this
+        // timeout means that script never runs, so without an explicit reset here the priority bump
+        // above would be left permanently skewing every future election, not just this one attempt.
+        await TryResetMemberPrioritiesAsync(ct);
         throw new InvalidOperationException("mongo1 did not become rs0's primary after stepping the previous one down - cannot safely remove mongo2/mongo3 without risking a self-removal error on whichever node is still primary");
+    }
+
+    // Best-effort cleanup for EnsureMongo1IsPrimaryAsync's timeout path - see its own comment. Finds
+    // whichever node is CURRENTLY primary (not necessarily mongo1 - the election this is cleaning up
+    // after never confirmed settling on it) and resets every member's priority back to the shipped
+    // default (1) from there.
+    private async Task TryResetMemberPrioritiesAsync(CancellationToken ct)
+    {
+        var primaryServiceId = await TryFindPrimaryServiceIdAsync(ct);
+        var container = primaryServiceId is null ? null : await runtime.FindAsync(primaryServiceId, ct);
+        if (container is null)
+        {
+            logger.LogWarning("TryResetMemberPrioritiesAsync: no reachable primary to reset rs0's member priorities from - they may stay skewed until a future call fixes this");
+            return;
+        }
+
+        const string resetScript = """
+            var cfg = rs.conf();
+            if (cfg.members.some(m => m.priority !== 1)) {
+              cfg.members.forEach(m => { m.priority = 1; });
+              cfg.version += 1;
+              rs.reconfig(cfg);
+            }
+            """;
+        try
+        {
+            await runtime.ExecAsync(container.ID, ["mongosh", "--quiet", "--eval", resetScript], ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "TryResetMemberPrioritiesAsync: failed to reset rs0's member priorities from {ServiceId} - they may stay skewed until a future call fixes this", primaryServiceId);
+        }
     }
 
     // Idempotent both directions - checks rs.conf()'s current members first and only
