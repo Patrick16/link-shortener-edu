@@ -10,6 +10,7 @@ builder.AddWebApiDefaults();
 builder.AddPostgresDbContextPool<DatabaseContext>();
 builder.AddRedisDistributedCache();
 builder.AddClickCounter();
+builder.AddLinkDeletionMarkerStore();
 
 // RabbitMQ's publish side (connection, SQLite fallback, warmup/retry workers, health check) is
 // only needed in the default async/bus mode - see LinkApi/Program.cs's identical comment (found

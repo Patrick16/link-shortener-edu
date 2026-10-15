@@ -11,8 +11,12 @@ case.
 
 ## How it works
 
-`GET /{hash}`: cache-aside lookup ([Caching](pattern:caching)), publish a `ClickTrackedEvent`
-([Async messaging](pattern:async-messaging)), record the click in the owner's Redis day bucket, then a 302.
+`GET /{hash}`: a Redis "deleted" tombstone check first, then cache-aside lookup
+([Caching](pattern:caching)) with a live `DeletedAt`/`ExpiresAt` check on what comes back, then
+(if still alive) publish a `ClickTrackedEvent` ([Async messaging](pattern:async-messaging)),
+record the click in the owner's Redis day bucket, then a 302. A dead hash - whichever check caught
+it - gets an HTML "gone" (`410`) or "not found" (`404`) page instead, not this API's usual JSON
+`ProblemDetails` shape; see below for why that's a deliberately different response type.
 
 ## How it's implemented here
 
@@ -20,8 +24,16 @@ case.
 // src/backend/Services/RedirectApi/Controllers/RedirectController.cs:26
 public async Task<IActionResult> RedirectToOrigin(string hash, CancellationToken ct)
 {
+    var marker = await _deletionMarkers.GetAsync(hash, ct);
+    if (marker is not null) return GonePage(marker.Reason, marker.DeletedAt);
+
     var link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, ct);
-    if (link is null) return NotFound();
+    if (link is null) return NotFoundPage();
+
+    if (link.DeletedAt is not null || link.ExpiresAt <= DateTime.UtcNow)
+    {
+        return GonePage(/* ... */);
+    }
 
     var clickEvent = new ClickTrackedEvent { Id = Guid.NewGuid(), Hash = hash, /* ... */ };
     await _dispatcher.DispatchAsync(clickEvent, Topics.ClickTracked, ct);
@@ -32,6 +44,23 @@ public async Task<IActionResult> RedirectToOrigin(string hash, CancellationToken
     return Redirect(link.OriginalLink); // 302, never permanent - the target can change
 }
 ```
+
+The tombstone check (`ILinkDeletionMarkerStore.GetAsync`, Redis key `link:deleted:{hash}` -
+deliberately separate from the `link:{hash}` cache-aside entry) runs before anything else: once a
+hash is tombstoned, nothing else about the record matters for this decision, and it skips a Redis
+AND a potential Postgres round trip for a hash already known dead. It isn't the *only* check,
+though - that tombstone is only guaranteed to exist once
+[ShortenerService](node:shortener-service)'s consumer or sweep job has actually confirmed it, and
+the sweep runs once a minute, so the live `DeletedAt`/`ExpiresAt` check on the `Link` row itself
+closes the window a tombstone-only check would otherwise leave open for up to that whole minute.
+
+The gone/not-found pages are plain inline HTML (`ContentResult`, explicit status code), the first
+HTML response anywhere in `src/backend` - a short-link redirect is followed by a browser's
+top-level navigation, not a script reading JSON, so a human needs something readable here instead
+of the usual `{type,title,status,detail}` shape. Written with the body already populated
+specifically so `UseApiExceptionHandling`'s `UseStatusCodePages` callback - which only fires on a
+response that's still empty - leaves it alone; verified against the running stack, not just
+assumed from the ASP.NET Core docs.
 
 Two separate consumers process `ClickTrackedEvent` downstream, for different reasons:
 `ShortenerService` maintains `Links.ClickCount` as a fast display counter, `TrafficService` writes

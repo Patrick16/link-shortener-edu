@@ -9,12 +9,15 @@ public static class ShortenerServiceExtensions
     {
         // Registered as itself first, then wrapped as the IHostedService - not just
         // AddHostedService<LinkCreatedConsumer>() - because MessagingGrpcService (gRPC mode's
-        // server side) also needs to resolve LinkCreatedConsumer directly, to call its
-        // HandleBatchAsync with a batch of one. AddHostedService<T> alone only registers T as
-        // IHostedService, not as T itself.
+        // server side) also needs to resolve LinkCreatedConsumer/LinkDeletedConsumer directly, to
+        // call their HandleBatchAsync with a batch of one. AddHostedService<T> alone only
+        // registers T as IHostedService, not as T itself.
         builder.Services.AddSingleton<LinkCreatedConsumer>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LinkCreatedConsumer>());
+        builder.Services.AddSingleton<LinkDeletedConsumer>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LinkDeletedConsumer>());
         builder.Services.AddHostedService<ClickTrackedConsumer>();
+        builder.Services.AddHostedService<LinkExpiryWorker>();
         return builder;
     }
 }

@@ -4,24 +4,27 @@ using Infrastructure;
 
 namespace Infrastructure.Grpc;
 
-// Shared server-side shape for the messaging-mode toggle's gRPC endpoint. ShortenerService and
-// TrafficService each have their own MessagingGrpcService validating a different topic/event
-// type, but the validate-topic / deserialize-payload / dispatch-batch-of-one / ack sequence
-// around that was identical in both - factored out here after the two copies drifted to needing
-// the same "see X's identical class" comment instead of a shared base (found during review).
-public abstract class MessagingGrpcServiceBase<TEvent>(string expectedTopic) : MessagingService.MessagingServiceBase
+// Shared server-side shape for the messaging-mode toggle's gRPC endpoint. Topic-keyed rather than
+// generic-over-one-TEvent: a single concrete MessagingGrpcService per host maps to the gRPC
+// service's one fixed route (ASP.NET Core can't map two classes to the same
+// MessagingService.MessagingServiceBase route), but a host can need to handle more than one event
+// type through it - ShortenerService does, once LinkDeletedEvent also respects Messaging:Mode
+// alongside LinkCreatedEvent. Concrete classes build their topic->handler map with ForTopic below
+// and pass it to this base constructor; TrafficService's ClickTrackedEvent-only case is just a
+// map with one entry.
+public abstract class MessagingGrpcServiceBase(
+    IReadOnlyDictionary<string, MessagingGrpcServiceBase.TopicHandler> handlersByTopic) : MessagingService.MessagingServiceBase
 {
+    protected delegate Task<BatchOutcome> TopicHandler(string messageId, string payloadJson, CancellationToken cancellationToken);
+
     public override async Task<PublishAck> Publish(PublishRequest request, ServerCallContext context)
     {
-        if (request.Topic != expectedTopic)
+        if (!handlersByTopic.TryGetValue(request.Topic, out var handler))
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, $"Unknown topic: {request.Topic}"));
         }
 
-        var message = JsonSerializer.Deserialize<TEvent>(request.Payload)
-            ?? throw new RpcException(new Status(StatusCode.InvalidArgument, $"Payload did not deserialize to a {typeof(TEvent).Name}."));
-
-        var outcome = await HandleAsync(new BatchItem<TEvent>(request.MessageId, message), context.CancellationToken);
+        var outcome = await handler(request.MessageId, request.Payload, context.CancellationToken);
 
         // Unlike the RabbitMQ transport (which dead-letters a poison message and acks the rest of
         // its batch), a sync caller is waiting for exactly this one message's outcome - a poison
@@ -36,5 +39,14 @@ public abstract class MessagingGrpcServiceBase<TEvent>(string expectedTopic) : M
         return new PublishAck { Success = true };
     }
 
-    protected abstract Task<BatchOutcome> HandleAsync(BatchItem<TEvent> item, CancellationToken cancellationToken);
+    // Builds one topic's handler: deserialize-payload-as-TEvent, then dispatch as a batch of one to
+    // the given consumer method. Kept here, generic, so concrete classes (one per host) don't each
+    // re-implement the deserialize/error-wrap boilerplate per event type they support.
+    protected static TopicHandler ForTopic<TEvent>(Func<BatchItem<TEvent>, CancellationToken, Task<BatchOutcome>> handleAsync) =>
+        (messageId, payloadJson, cancellationToken) =>
+        {
+            var message = JsonSerializer.Deserialize<TEvent>(payloadJson)
+                ?? throw new RpcException(new Status(StatusCode.InvalidArgument, $"Payload did not deserialize to a {typeof(TEvent).Name}."));
+            return handleAsync(new BatchItem<TEvent>(messageId, message), cancellationToken);
+        };
 }

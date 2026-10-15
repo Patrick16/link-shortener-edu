@@ -15,12 +15,14 @@ public class RedirectController(
     IEntityCacheService<Link> cache,
     IEventDispatcher dispatcher,
     IClickCounterService clickCounter,
+    ILinkDeletionMarkerStore deletionMarkers,
     ILogger<RedirectController> logger) : Controller
 {
     private readonly DatabaseContext _context = context;
     private readonly IEntityCacheService<Link> _cache = cache;
     private readonly IEventDispatcher _dispatcher = dispatcher;
     private readonly IClickCounterService _clickCounter = clickCounter;
+    private readonly ILinkDeletionMarkerStore _deletionMarkers = deletionMarkers;
     private readonly ILogger<RedirectController> _logger = logger;
 
     [HttpGet("{hash}")]
@@ -28,6 +30,15 @@ public class RedirectController(
         [FromRoute] string hash,
         CancellationToken cancellationToken)
     {
+        // Checked first, before ever touching the main Link cache-aside path below - once a hash
+        // is tombstoned, nothing else about the record matters for this decision, and this skips
+        // both a Redis AND (on a cache miss) a Postgres round trip for a hash already known dead.
+        var marker = await _deletionMarkers.GetAsync(hash, cancellationToken);
+        if (marker is not null)
+        {
+            return GonePage(marker.Reason, marker.DeletedAt);
+        }
+
         async Task<Link?> Fetch() =>
             await _context.Links.AsNoTracking().FirstOrDefaultAsync(x => x.Hash == hash, cancellationToken);
 
@@ -37,7 +48,19 @@ public class RedirectController(
             // Debug, not Warning - an unknown hash is an everyday user/bot mistake (typo, expired
             // link, scanner probing), not a system anomaly worth surfacing by default.
             _logger.LogDebug("Redirect miss for unknown hash {Hash}", hash);
-            return NotFound();
+            return NotFoundPage();
+        }
+
+        // Live check, not just the tombstone lookup above: the tombstone is only guaranteed to
+        // exist once LinkDeletedConsumer/LinkExpiryWorker has actually confirmed it, and the TTL
+        // sweep runs once a minute - without this, a link could sit expired-but-still-redirecting
+        // for up to that whole window. DeletedAt is checked too in case the confirm step's own
+        // Redis write failed (RedisLinkDeletionMarkerStore fails open) but the Postgres row itself
+        // is already the real, authoritative answer either way.
+        if (link.DeletedAt is not null || (link.ExpiresAt is { } expiresAt && expiresAt <= DateTime.UtcNow))
+        {
+            var reason = link.DeletedAt is not null ? DeletedReason.Manual : DeletedReason.Expired;
+            return GonePage(reason, link.DeletedAt ?? link.ExpiresAt!.Value);
         }
 
         var clickEvent = new ClickTrackedEvent
@@ -88,4 +111,38 @@ public class RedirectController(
         // never be cached as permanent by the browser.
         return Redirect(link.OriginalLink);
     }
+
+    // HTML, not ProblemDetails - the first genuinely HTML response anywhere in src/backend. A
+    // short-link redirect is followed directly by a browser's top-level navigation, not a script
+    // reading JSON, so a human needs something readable here instead of this API's usual
+    // {type,title,status,detail} shape. Written directly to the response body via ContentResult
+    // (not a bare NotFound()/StatusCode()) specifically so UseApiExceptionHandling's
+    // UseStatusCodePages callback - which only fires on a response that's still empty - leaves it
+    // alone; verified live, not just assumed from the ASP.NET Core docs (see this feature's plan).
+    private static ContentResult GonePage(DeletedReason reason, DateTime deletedAt) =>
+        HtmlPage(
+            StatusCodes.Status410Gone,
+            "Link gone",
+            reason == DeletedReason.Expired
+                ? $"This link expired on {deletedAt:u} and is no longer available."
+                : $"This link was deleted on {deletedAt:u} and is no longer available.");
+
+    private static ContentResult NotFoundPage() =>
+        HtmlPage(StatusCodes.Status404NotFound, "Link not found", "This link doesn't exist.");
+
+    private static ContentResult HtmlPage(int statusCode, string title, string message) => new()
+    {
+        StatusCode = statusCode,
+        ContentType = "text/html; charset=utf-8",
+        Content = $"""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head><meta charset="utf-8"><title>{title}</title></head>
+            <body style="font-family: sans-serif; text-align: center; margin-top: 15vh;">
+                <h1>{title}</h1>
+                <p>{message}</p>
+            </body>
+            </html>
+            """,
+    };
 }

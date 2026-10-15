@@ -26,22 +26,34 @@ public class RedirectControllerTests
         DatabaseContext context,
         out Mock<IEntityCacheService<Link>> cache,
         out Mock<IEventDispatcher> dispatcher,
-        out Mock<IClickCounterService> clickCounter)
+        out Mock<IClickCounterService> clickCounter,
+        out Mock<ILinkDeletionMarkerStore> deletionMarkers)
     {
         cache = new Mock<IEntityCacheService<Link>>();
         dispatcher = new Mock<IEventDispatcher>();
         clickCounter = new Mock<IClickCounterService>();
+        deletionMarkers = new Mock<ILinkDeletionMarkerStore>();
+        // Default: no tombstone for any hash - individual tests opt into one explicitly.
+        deletionMarkers.Setup(x => x.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((LinkDeletionMarker?)null);
 
         var httpContext = new DefaultHttpContext();
         httpContext.Request.Scheme = "https";
         httpContext.Request.Host = new HostString("short.example");
         httpContext.Request.Path = "/abc12345";
 
-        return new RedirectController(context, cache.Object, dispatcher.Object, clickCounter.Object, NullLogger<RedirectController>.Instance)
+        return new RedirectController(context, cache.Object, dispatcher.Object, clickCounter.Object, deletionMarkers.Object, NullLogger<RedirectController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext },
         };
     }
+
+    private static RedirectController NewController(
+        DatabaseContext context,
+        out Mock<IEntityCacheService<Link>> cache,
+        out Mock<IEventDispatcher> dispatcher,
+        out Mock<IClickCounterService> clickCounter) =>
+        NewController(context, out cache, out dispatcher, out clickCounter, out _);
 
     [Fact]
     public async Task RedirectToOrigin_LinkFound_Returns302ToOriginalLink()
@@ -158,12 +170,78 @@ public class RedirectControllerTests
 
         var result = await sut.RedirectToOrigin("missing", CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(StatusCodes.Status404NotFound, content.StatusCode);
         dispatcher.Verify(
             x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
         clickCounter.Verify(
             x => x.RecordClickAsync(It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_TombstonePresent_ReturnsGoneWithoutTouchingTheLinkCache()
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out var dispatcher, out var clickCounter, out var deletionMarkers);
+        deletionMarkers.Setup(x => x.GetAsync("deleted-hash", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LinkDeletionMarker(DateTime.UtcNow, DeletedReason.Manual));
+
+        var result = await sut.RedirectToOrigin("deleted-hash", CancellationToken.None);
+
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(StatusCodes.Status410Gone, content.StatusCode);
+        Assert.Equal("text/html; charset=utf-8", content.ContentType);
+        cache.Verify(
+            x => x.GetOrFetch(It.IsAny<string>(), It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        clickCounter.Verify(
+            x => x.RecordClickAsync(It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_LinkHasDeletedAtSet_ReturnsGoneEvenWithoutAConfirmedTombstone()
+    {
+        // The live DeletedAt check on the Link row itself, independent of the tombstone - covers
+        // the case where RedisLinkDeletionMarkerStore.ConfirmAsync failed open (Redis hiccup) but
+        // Postgres, the real source of truth, already has the deletion.
+        await using var context = NewContext();
+        var link = new Link("abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, null, DeletedAt: DateTime.UtcNow);
+        var sut = NewController(context, out var cache, out var dispatcher, out _);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(link);
+
+        var result = await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(StatusCodes.Status410Gone, content.StatusCode);
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_LinkExpiresAtInThePast_ReturnsGoneEvenBeforeTheSweepJobRuns()
+    {
+        await using var context = NewContext();
+        var link = new Link(
+            "abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, null,
+            ExpiresAt: DateTime.UtcNow.AddMinutes(-1));
+        var sut = NewController(context, out var cache, out var dispatcher, out _);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(link);
+
+        var result = await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        var content = Assert.IsType<ContentResult>(result);
+        Assert.Equal(StatusCodes.Status410Gone, content.StatusCode);
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 }

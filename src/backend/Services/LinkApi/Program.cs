@@ -10,6 +10,7 @@ builder.AddWebApiDefaults();
 
 builder.AddPostgresDbContextPool<DatabaseContext>();
 builder.AddRedisDistributedCache();
+builder.AddLinkDeletionMarkerStore();
 
 // RabbitMQ's publish side (connection, SQLite fallback, warmup/retry workers, health check) is
 // only needed in the default async/bus mode - in messaging-mode=grpc nothing ever resolves

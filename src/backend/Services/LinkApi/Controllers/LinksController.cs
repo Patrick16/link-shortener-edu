@@ -22,6 +22,7 @@ public partial class LinksController(
     IEventDispatcher dispatcher,
     IHashGenerator hashGenerator,
     ICustomAliasCreator aliasCreator,
+    ILinkDeletionMarkerStore deletionMarkers,
     ILogger<LinksController> logger) : Controller
 {
     private const int PageSize = 50;
@@ -56,6 +57,7 @@ public partial class LinksController(
     private readonly IEventDispatcher _dispatcher = dispatcher;
     private readonly IHashGenerator _hashGenerator = hashGenerator;
     private readonly ICustomAliasCreator _aliasCreator = aliasCreator;
+    private readonly ILinkDeletionMarkerStore _deletionMarkers = deletionMarkers;
     private readonly ILogger<LinksController> _logger = logger;
 
     [HttpPost]
@@ -79,7 +81,19 @@ public partial class LinksController(
                 title: "Invalid link.");
         }
 
+        if (request.TtlSeconds is <= 0)
+        {
+            return Problem(
+                detail: "TtlSeconds must be a positive number of seconds.",
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid link.");
+        }
+
         var createdAt = DateTime.UtcNow;
+        // Frontend counts seconds, not a target timestamp - see LinkCreateRequest.TtlSeconds's own
+        // comment for why. Computed once here so both creation paths (plain hash and custom alias)
+        // apply the exact same rule.
+        var expiresAt = request.TtlSeconds is { } ttlSeconds ? createdAt.AddSeconds(ttlSeconds) : (DateTime?)null;
 
         // Anonymous callers are fine — nothing here requires [Authorize]. If a valid Bearer token
         // is present, ASP.NET Core's auth middleware has already populated User from its claims;
@@ -89,7 +103,7 @@ public partial class LinksController(
 
         if (request.Alias is not null)
         {
-            return await CreateWithAliasAsync(request.Alias, request.OriginalLink, userId, createdAt, cancellationToken);
+            return await CreateWithAliasAsync(request.Alias, request.OriginalLink, userId, createdAt, expiresAt, cancellationToken);
         }
 
         var hash = _hashGenerator.Generate(request.OriginalLink);
@@ -100,7 +114,8 @@ public partial class LinksController(
             OriginalLink = request.OriginalLink,
             ShortenLink = hash,
             CreatedAt = createdAt,
-            UserId = userId
+            UserId = userId,
+            ExpiresAt = expiresAt,
         };
 
         // In the default (async/bus) messaging mode, this enqueues and returns in microseconds -
@@ -115,7 +130,7 @@ public partial class LinksController(
         // never created at all, and this request fails outright (see GlobalExceptionHandler's
         // RpcException mapping) - writing the cache entry first would leave a ghost entry for a hash
         // that will never resolve anywhere, for up to a minute, for no reason.
-        var link = new Link(hash, request.OriginalLink, hash, createdAt, userId);
+        var link = new Link(hash, request.OriginalLink, hash, createdAt, userId, ExpiresAt: expiresAt);
         await _service.CacheAsync(link, hash, cancellationToken, OptimisticCacheTtlSeconds);
 
         // Debug, not Information - this fires on every CreateLink call, including under a k6 load
@@ -133,7 +148,7 @@ public partial class LinksController(
     // hashes stay async because a collision there is astronomically unlikely and unchecked (see the
     // same doc); a human-chosen alias colliding with another human's choice is not.
     private async Task<ActionResult<LinkResponse>> CreateWithAliasAsync(
-        string rawAlias, string originalLink, Guid? userId, DateTime createdAt, CancellationToken cancellationToken)
+        string rawAlias, string originalLink, Guid? userId, DateTime createdAt, DateTime? expiresAt, CancellationToken cancellationToken)
     {
         if (userId is null)
         {
@@ -168,6 +183,7 @@ public partial class LinksController(
             CreatedAt = createdAt,
             UserId = userId,
             HasCustomAlias = true,
+            ExpiresAt = expiresAt,
         };
 
         var result = await _aliasCreator.CreateAsync(aliasEvent, cancellationToken);
@@ -184,7 +200,7 @@ public partial class LinksController(
         // row is already durably committed in Postgres (that's the whole point of the synchronous
         // path), so there's no "might never actually persist" risk to hedge against. Matches exactly
         // how LinkCreatedConsumer.cs itself populates the cache right after a real persist.
-        var link = new Link(alias, originalLink, alias, createdAt, userId, HasCustomAlias: true);
+        var link = new Link(alias, originalLink, alias, createdAt, userId, HasCustomAlias: true, ExpiresAt: expiresAt);
         await _service.CacheAsync(link, alias, cancellationToken);
 
         _logger.LogDebug("Link {Hash} created via custom alias for {OriginalLink}", alias, originalLink);
@@ -210,7 +226,13 @@ public partial class LinksController(
                 title: "Invalid query parameter.");
         }
 
-        var query = _context.Links.AsNoTracking();
+        // Deleted/expired links are hidden by default - nothing in this feature calls for a
+        // "show them anyway" toggle, so there isn't one; control-api's data-pool preload (the
+        // InternalApiKey caller) gets the same filtering, since a deleted/expired row is no more
+        // useful as sample data for it than it is in a user's own dashboard.
+        var now = DateTime.UtcNow;
+        var query = _context.Links.AsNoTracking()
+            .Where(x => x.DeletedAt == null && (x.ExpiresAt == null || x.ExpiresAt > now));
         if (!User.HasClaim(Constants.InternalClaim, "true"))
         {
             // [Authorize] already guarantees one of the two schemes succeeded; for the JWT scheme
@@ -263,5 +285,48 @@ public partial class LinksController(
         }
 
         return new LinkResponse(res.ShortenLink, res.CreatedAt);
+    }
+
+    // Manual delete - the only trigger that needs the bus at all; the TTL sweep
+    // (LinkExpiryWorker, ShortenerService) runs in the process that owns links_db and never comes
+    // through here. Deliberately queried straight from Postgres, not the Link cache - this is a
+    // rare, low-traffic request, not a hot path worth optimizing, and it needs an accurate
+    // DeletedAt/UserId right now, not whatever the optimistic/short-TTL cache entry happens to say.
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    [HttpDelete("{hash}")]
+    public async Task<IActionResult> DeleteLink([FromRoute] string hash, CancellationToken cancellationToken)
+    {
+        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+
+        var link = await _context.Links.AsNoTracking().FirstOrDefaultAsync(x => x.Hash == hash, cancellationToken);
+        if (link is null)
+        {
+            return NotFound();
+        }
+
+        // 403, not 404 - the caller already knows this hash exists (they're asking to delete it);
+        // telling the true owner's mistaken/malicious guess "not found" instead of "not allowed"
+        // would leak nothing extra anyway, since the hash is already in their hands, but would be a
+        // confusing response for a legitimate owner hitting this with the wrong account. Anonymous
+        // links (UserId == null) always fail this check too - there is no owner who could ever pass.
+        if (link.UserId != userId)
+        {
+            return Forbid();
+        }
+
+        if (link.DeletedAt is not null)
+        {
+            return NoContent(); // already deleted - idempotent success, not an error
+        }
+
+        // Always publishes, regardless of whether this wins or loses the SETNX race below (a
+        // concurrent duplicate DELETE for the same hash) - simpler than branching on the result,
+        // and redundant delivery is exactly what LinkDeletedConsumer is built to tolerate.
+        await _deletionMarkers.TryMarkOptimisticallyAsync(hash, DeletedReason.Manual, cancellationToken);
+        await _dispatcher.DispatchAsync(new LinkDeletedEvent { Hash = hash }, Topics.LinkDeleted, cancellationToken);
+
+        _logger.LogDebug("Link {Hash} marked for deletion, queued for publish to {Topic}", hash, Topics.LinkDeleted);
+
+        return NoContent();
     }
 }

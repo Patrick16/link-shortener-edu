@@ -185,5 +185,6 @@ public sealed class LinkCreatedConsumer(
         item.Payload.ShortenLink,
         item.Payload.CreatedAt,
         item.Payload.UserId,
-        HasCustomAlias: item.Payload.HasCustomAlias);
+        HasCustomAlias: item.Payload.HasCustomAlias,
+        ExpiresAt: item.Payload.ExpiresAt);
 }

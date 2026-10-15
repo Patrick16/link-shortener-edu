@@ -5,5 +5,6 @@ namespace Contracts.Events;
 public static class Topics
 {
     public const string LinkCreated = "link.created";
+    public const string LinkDeleted = "link.deleted";
     public const string ClickTracked = "click.tracked";
 }

@@ -12,6 +12,7 @@ builder.AddGrpcKestrelEndpoint();
 builder.AddPostgresDbContextFactory<DatabaseContext>();
 builder.AddRedisDistributedCache();
 builder.Services.AddSingleton<IEntityCacheService<Link>, LinkCacheService>();
+builder.AddLinkDeletionMarkerStore();
 builder.AddRabbitMqConsumer();
 builder.AddLinkEventConsumers();
 // Always hosted - see GrpcMessagingExtensions.AddMessagingGrpcServer's own comment for why this

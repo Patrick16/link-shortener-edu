@@ -31,14 +31,16 @@ public class LinksControllerTests
         out Mock<IEventDispatcher> dispatcher,
         out Mock<IHashGenerator> hashGenerator,
         out Mock<ICustomAliasCreator> aliasCreator,
+        out Mock<ILinkDeletionMarkerStore> deletionMarkers,
         ClaimsPrincipal? user = null)
     {
         cache = new Mock<IEntityCacheService<Link>>();
         dispatcher = new Mock<IEventDispatcher>();
         hashGenerator = new Mock<IHashGenerator>();
         aliasCreator = new Mock<ICustomAliasCreator>();
+        deletionMarkers = new Mock<ILinkDeletionMarkerStore>();
 
-        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, aliasCreator.Object, NullLogger<LinksController>.Instance)
+        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, aliasCreator.Object, deletionMarkers.Object, NullLogger<LinksController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -47,6 +49,15 @@ public class LinksControllerTests
         };
         return controller;
     }
+
+    private static LinksController NewController(
+        DatabaseContext context,
+        out Mock<IEntityCacheService<Link>> cache,
+        out Mock<IEventDispatcher> dispatcher,
+        out Mock<IHashGenerator> hashGenerator,
+        out Mock<ICustomAliasCreator> aliasCreator,
+        ClaimsPrincipal? user = null) =>
+        NewController(context, out cache, out dispatcher, out hashGenerator, out aliasCreator, out _, user);
 
     [Fact]
     public async Task CreateLink_AnonymousCaller_PublishesEventWithNullUserId()
@@ -447,5 +458,152 @@ public class LinksControllerTests
         aliasCreator.Verify(
             x => x.CreateAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task CreateLink_NonPositiveTtlSeconds_ReturnsBadRequestWithoutPublishing(int ttlSeconds)
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out var dispatcher, out _, out _);
+
+        var result = await sut.CreateLink(
+            new LinkCreateRequest { OriginalLink = "https://example.com", TtlSeconds = ttlSeconds },
+            CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<LinkCreatedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateLink_WithTtlSeconds_PublishesEventWithExpiresAtSetAndCachesIt()
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out var dispatcher, out var hashGenerator, out _);
+        hashGenerator.Setup(x => x.Generate(It.IsAny<string>())).Returns("abc12345");
+        var before = DateTime.UtcNow;
+
+        await sut.CreateLink(
+            new LinkCreateRequest { OriginalLink = "https://example.com", TtlSeconds = 60 },
+            CancellationToken.None);
+
+        var after = DateTime.UtcNow;
+        dispatcher.Verify(
+            x => x.DispatchAsync(
+                It.Is<LinkCreatedEvent>(e => e.ExpiresAt != null && e.ExpiresAt >= before.AddSeconds(60) && e.ExpiresAt <= after.AddSeconds(60)),
+                Topics.LinkCreated,
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+        cache.Verify(
+            x => x.CacheAsync(It.Is<Link>(l => l.ExpiresAt != null), "abc12345", It.IsAny<CancellationToken>(), 60),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task GetLinks_ExcludesDeletedAndExpiredLinksByDefault()
+    {
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("live0001", "https://a.example", "live0001", DateTime.UtcNow, userId));
+        context.Links.Add(new Link("del00001", "https://b.example", "del00001", DateTime.UtcNow, userId, DeletedAt: DateTime.UtcNow));
+        context.Links.Add(new Link("exp00001", "https://c.example", "exp00001", DateTime.UtcNow, userId, ExpiresAt: DateTime.UtcNow.AddMinutes(-1)));
+        context.Links.Add(new Link("fut00001", "https://d.example", "fut00001", DateTime.UtcNow, userId, ExpiresAt: DateTime.UtcNow.AddHours(1)));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var result = await sut.GetLinks(page: 1, CancellationToken.None);
+
+        var response = Assert.IsType<LinksPageResponse>(result.Value);
+        var hashes = response.Items.Select(i => i.ShortenLink).ToList();
+        Assert.Equal(2, response.TotalCount);
+        Assert.Contains("live0001", hashes);
+        Assert.Contains("fut00001", hashes);
+    }
+
+    [Fact]
+    public async Task DeleteLink_HashDoesNotExist_ReturnsNotFound()
+    {
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, Guid.NewGuid().ToString())], "TestAuth");
+        await using var context = NewContext();
+        var sut = NewController(context, out _, out _, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var result = await sut.DeleteLink("missing", CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+    }
+
+    [Fact]
+    public async Task DeleteLink_NotTheOwner_ReturnsForbidWithoutPublishing()
+    {
+        var ownerId = Guid.NewGuid();
+        var callerId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, ownerId));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, callerId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out var dispatcher, out _, out _, out var deletionMarkers, new ClaimsPrincipal(identity));
+
+        var result = await sut.DeleteLink("abc12345", CancellationToken.None);
+
+        Assert.IsType<ForbidResult>(result);
+        dispatcher.Verify(x => x.DispatchAsync(It.IsAny<LinkDeletedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        deletionMarkers.Verify(x => x.TryMarkOptimisticallyAsync(It.IsAny<string>(), It.IsAny<DeletedReason>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteLink_AnonymousLink_ReturnsForbid()
+    {
+        // UserId == null can never match a caller's own Guid - anonymous links aren't deletable by anyone.
+        var callerId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, callerId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out _, out _, out _, out _, new ClaimsPrincipal(identity));
+
+        var result = await sut.DeleteLink("abc12345", CancellationToken.None);
+
+        Assert.IsType<ForbidResult>(result);
+    }
+
+    [Fact]
+    public async Task DeleteLink_AlreadyDeleted_ReturnsNoContentWithoutPublishingAgain()
+    {
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, userId, DeletedAt: DateTime.UtcNow));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out var dispatcher, out _, out _, out var deletionMarkers, new ClaimsPrincipal(identity));
+
+        var result = await sut.DeleteLink("abc12345", CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        dispatcher.Verify(x => x.DispatchAsync(It.IsAny<LinkDeletedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        deletionMarkers.Verify(x => x.TryMarkOptimisticallyAsync(It.IsAny<string>(), It.IsAny<DeletedReason>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task DeleteLink_Owner_MarksOptimisticallyAndPublishesDeletedEvent()
+    {
+        var userId = Guid.NewGuid();
+        await using var context = NewContext();
+        context.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, userId));
+        await context.SaveChangesAsync();
+        var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
+        var sut = NewController(context, out _, out var dispatcher, out _, out _, out var deletionMarkers, new ClaimsPrincipal(identity));
+
+        var result = await sut.DeleteLink("abc12345", CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        deletionMarkers.Verify(x => x.TryMarkOptimisticallyAsync("abc12345", DeletedReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.Is<LinkDeletedEvent>(e => e.Hash == "abc12345"), Topics.LinkDeleted, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

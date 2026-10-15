@@ -1,7 +1,8 @@
 ## What it is
 
 An ASP.NET Core Web API — one of five .NET services in this project. Accepts link-creation
-requests and serves reads (single-hash lookup and "my links" listing).
+requests and serves reads (single-hash lookup and "my links" listing), plus authenticated-owner
+deletion.
 
 ## What it solves
 
@@ -57,6 +58,21 @@ branches to a different path that calls ShortenerService synchronously over gRPC
 once the row is confirmed persisted or the alias is confirmed taken — see
 [Custom aliases](pattern:custom-aliases) for why a real uniqueness guarantee needs that trade-off
 even though the plain-hash path deliberately never makes it.
+
+**`DELETE /Links/{hash}` is owner-only and publishes through the same `IEventDispatcher` as
+`CreateLink`** - no forced transport the way custom aliases force sync gRPC; delete respects
+whichever messaging mode is active. Anonymous links (`UserId == null`) can never be deleted by
+anyone, and a caller who isn't the link's own owner gets `403`, not `404` - the hash is already in
+their hands (they're asking to delete it), so there's nothing extra to protect by pretending it
+doesn't exist. An already-deleted hash returns `204` idempotently instead of erroring. Before
+publishing, the handler writes an optimistic "deleted" marker to a *separate* Redis key
+(`link:deleted:{hash}`, not the main `link:{hash}` cache entry) via `ILinkDeletionMarkerStore` -
+see [RedirectApi](node:redirect-api) for why that key is checked first on every resolve, and
+[ShortenerService](node:shortener-service) for how the marker gets confirmed. `CreateLink` also
+accepts an optional `TtlSeconds`, converted once to an absolute `ExpiresAt` and carried on
+`LinkCreatedEvent` for both the plain-hash and custom-alias paths - see ShortenerService's
+`LinkExpiryWorker` for what actually acts on it. `GetLinks` filters out deleted and expired links
+by default; there's no "show them anyway" toggle, since nothing in this feature calls for one.
 
 ## Pitfalls
 

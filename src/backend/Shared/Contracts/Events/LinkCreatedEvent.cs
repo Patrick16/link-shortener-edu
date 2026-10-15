@@ -10,4 +10,8 @@ public sealed record LinkCreatedEvent
     public required DateTime CreatedAt { get; init; }
     public Guid? UserId { get; init; }
     public bool HasCustomAlias { get; init; }
+
+    // Optional TTL, set from LinkCreateRequest.TtlSeconds at creation time - LinkExpiryWorker
+    // (ShortenerService) sweeps rows past this timestamp into DeletedAt, same as a manual delete.
+    public DateTime? ExpiresAt { get; init; }
 }

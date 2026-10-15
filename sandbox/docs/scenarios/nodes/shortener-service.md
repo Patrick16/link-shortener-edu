@@ -3,6 +3,8 @@
 A .NET Worker Service (no HTTP surface beyond `/health/live`/`/health/ready`) — consumes
 `LinkCreatedEvent` and persists links to `links_db`. Also consumes `ClickTrackedEvent` to maintain
 `Links.ClickCount`, a separate concern from [TrafficService](node:traffic-service)'s audit trail.
+Also owns the two sides of deletion: consuming `LinkDeletedEvent` (manual delete, triggered from
+[LinkApi](node:link-api)) and a once-a-minute sweep job that expires links past their `ExpiresAt`.
 
 ## What it solves
 
@@ -69,6 +71,54 @@ code path for it. Its redelivery-safety check now compares each conflicting row'
 not just whether the hash already exists, so a custom alias losing a uniqueness race is reported as
 a conflict (`BatchOutcome.WithPoison`) instead of being silently absorbed the way a genuine
 redelivery still is — see [Custom aliases](pattern:custom-aliases) for the full reasoning.
+
+### Deletion: one flow, two triggers
+
+Manual delete and TTL expiry end up doing the exact same thing to a row (`DeletedAt = now()` +
+confirm a Redis tombstone), but they arrive through different doors. `LinkDeletedConsumer`
+consumes batches of `LinkDeletedEvent` from RabbitMQ (published by LinkApi's `DELETE` endpoint,
+through the same `IEventDispatcher`/`Messaging:Mode` toggle `LinkCreatedEvent` uses - no forced
+transport here, unlike custom aliases). `LinkExpiryWorker` runs *in this same process* on a
+`PeriodicTimer`, once a minute, and goes straight to Postgres with its own `UPDATE ... RETURNING`
+- there's no cross-service hop to make, since the process doing the sweep already owns `links_db`,
+so routing it through RabbitMQ would only make it slower and more failure-prone for no benefit.
+
+```csharp
+// src/backend/Services/ShortenerService/LinkDeletedConsumer.cs, HandleBatchAsync (trimmed)
+var existingHashes = await context.Links.Where(x => hashes.Contains(x.Hash)).Select(x => x.Hash).ToHashSetAsync(ct);
+
+await context.Links
+    .Where(x => hashes.Contains(x.Hash) && x.DeletedAt == null)
+    .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.DeletedAt, now), ct);
+
+foreach (var hash in existingHashes)
+{
+    await _deletionMarkers.ConfirmAsync(hash, DeletedReason.Manual, now, ct);
+}
+
+var missingHashes = hashes.Where(h => !existingHashes.Contains(h)).ToList();
+if (missingHashes.Count > 0) throw new InvalidOperationException(/* ... */);
+```
+
+`ExecuteUpdateAsync` - the same bulk-update primitive `ClickTrackedConsumer` already uses for
+`ClickCount` - sidesteps having to load-then-mutate `Link.DeletedAt`, an `init`-only record
+property. The `missingHashes` throw exists for a real race: LinkApi's own optimistic cache write
+means a `DELETE` request can be accepted (and this event published) for a hash whose
+`LinkCreatedEvent` hasn't been consumed yet - RabbitMQ gives no cross-topic ordering guarantee.
+Throwing hands it to `RabbitMqConsumer`'s existing bounded delivery-attempt retry (with backoff)
+instead of silently dropping it - unlike `ClickTrackedConsumer`'s own "no row found" case (which
+just logs and moves on, since a missed click-count increment is an approximate display number by
+design), a dropped delete would leave the link alive forever despite its owner asking for it to be
+deleted, with nobody ever finding out.
+
+`LinkExpiryWorker` follows `PartitionMaintenanceWorker`'s exact shape (see
+[TrafficService](node:traffic-service)): same session-scoped Postgres advisory lock pattern
+(`"shortener-service:link-expiry"`), same direct-not-through-pgcat connection, same
+`OpenConnectionAsync`/`CloseConnectionAsync` pinning around the lock's acquire/release. Its
+`UPDATE ... RETURNING "Hash"` both flips `DeletedAt` and tells the worker exactly which hashes it
+just touched, so it can confirm a `DeletedReason.Expired` tombstone for each - the `DeletedAt IS
+NULL` guard in its `WHERE` clause means a hash a manual delete reached first simply isn't among the
+rows returned, so the two triggers can never double-process the same row.
 
 ## Pitfalls
 

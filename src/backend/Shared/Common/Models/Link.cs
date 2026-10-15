@@ -7,4 +7,6 @@ public record Link(
     DateTime CreatedAt,
     Guid? UserId,
     int ClickCount = 0,
-    bool HasCustomAlias = false);
+    bool HasCustomAlias = false,
+    DateTime? ExpiresAt = null,
+    DateTime? DeletedAt = null);

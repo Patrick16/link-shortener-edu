@@ -1,6 +1,7 @@
 using Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using StackExchange.Redis;
 
@@ -31,17 +32,30 @@ public static class RedisExtensions
     }
 
     // Raw multiplexer for the sorted-set and pub/sub commands IDistributedCache can't express.
-    // Shared by RedirectApi (writes per-user day buckets) and ReportingApi (reads them and
-    // subscribes to change notifications).
+    // Shared by RedirectApi (writes per-user day buckets, reads deletion markers) and ReportingApi
+    // (reads the buckets and subscribes to change notifications).
     // AbortOnConnectFail=false: with the default (true), Connect throws when Sentinel isn't reachable
     // yet, which takes the whole host down on startup - a Redis blip at boot must not stop an API
     // that can serve everything else. The multiplexer keeps retrying in the background instead.
+    // TryAddSingleton, not AddSingleton: a host (e.g. RedirectApi) can reach this through more than
+    // one caller (AddClickCounter and AddLinkDeletionMarkerStore both need it) - idempotent
+    // registration means whichever runs first wins, instead of opening a second, wasted connection.
     public static IHostApplicationBuilder AddRedisMultiplexer(this IHostApplicationBuilder builder)
     {
         var connectionString = builder.Configuration.GetConnectionString(Constants.RedisConnectionString);
         var options = ConfigurationOptions.Parse(connectionString!);
         options.AbortOnConnectFail = false;
-        builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(options));
+        builder.Services.TryAddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(options));
+        return builder;
+    }
+
+    // Shared by LinkApi (writes the optimistic marker on DELETE), RedirectApi (reads it on every
+    // resolve) and ShortenerService (confirms it from the consumer and the TTL sweep job) - all
+    // three need it wired identically, so it lives here rather than being duplicated three times.
+    public static IHostApplicationBuilder AddLinkDeletionMarkerStore(this IHostApplicationBuilder builder)
+    {
+        builder.AddRedisMultiplexer();
+        builder.Services.AddSingleton<ILinkDeletionMarkerStore, RedisLinkDeletionMarkerStore>();
         return builder;
     }
 }
