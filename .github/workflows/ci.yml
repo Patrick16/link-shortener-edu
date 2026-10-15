@@ -84,7 +84,7 @@ jobs:
       # second time with no cache shared across jobs (GitHub-hosted runners don't share a Docker
       # daemon between jobs, so a plain `needs:` alone wouldn't avoid the rebuild).
       - run: docker save -o /tmp/e2e-images.tar sandbox-auth-api sandbox-link-api sandbox-redirect-api sandbox-shortener-service sandbox-traffic-service
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: e2e-images
           path: /tmp/e2e-images.tar
