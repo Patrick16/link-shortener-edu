@@ -28,22 +28,26 @@ is the one place in the project meant to show what a real columnar OLAP query lo
 hidden behind a query builder.
 
 **Owner-scoped reports.** The endpoint only ever returns data for hashes the caller owns.
-`ClickHouseClickFactQueryService.GetSummaryAsync` runs the 4 per-owner bucket queries (now filtered
-`AND user_id = callerId`) alongside a 5th scalar query — `count() WHERE hash = ? AND user_id IS NOT
-NULL AND user_id != callerId` — concurrently via `Task.WhenAll`; that 5th query is the only thing
-distinguishing "owned, zero clicks yet" (ordinary all-zero `200`) from "owned by someone else"
-(`null` from the query service, which `ReportsController` turns into a plain `404`). The owner
-travels with the click itself (`RedirectController` already holds `link.UserId` when it publishes
-`ClickTrackedEvent`; `ClickTrackedConsumer` carries it into `ClickFact.UserId` — no extra lookup
-anywhere in the chain), so this is additive, not a new network hop.
+`ClickHouseClickFactQueryService.GetSummaryAsync` runs the 4 bucket queries filtered
+`AND user_id = callerId` and nothing else — that filter is what actually keeps someone else's click
+data out of the response. The owner travels with the click itself (`RedirectController` already
+holds `link.UserId` when it publishes `ClickTrackedEvent`; `ClickTrackedConsumer` carries it into
+`ClickFact.UserId` — no extra lookup anywhere in the chain), so this is additive, not a new network
+hop.
 
-**404, not 403, is deliberate.** A caller who doesn't own a hash gets exactly the same response as a
-caller querying a hash that never existed, on purpose — this endpoint can't be used to probe which
-hashes belong to other users. An anonymously-created link (`user_id IS NULL` on every one of its
-click rows) has no reporting view for *anyone*, not a shared public one either — `NULL`-owner rows
-never match any caller's `user_id = callerId` filter, and are explicitly excluded from the
-"owned by someone else" check too, so every caller sees the same all-zero `200`, never real data
-and never a `404`.
+**Always `200`, never a leak oracle — found in review, not designed in from the start.** An earlier
+version ran a 5th scalar query (`count() WHERE hash = ? AND user_id IS NOT NULL AND user_id !=
+callerId`) to tell "owned by someone else" apart from "doesn't exist", turning the former into a
+`404` and leaving the latter (and "owned, zero clicks yet") as an ordinary all-zero `200`. That was
+itself the privacy leak it was meant to prevent: a caller could tell "this hash exists and belongs
+to someone else" apart from "this hash doesn't exist" by which status code came back. The fix
+removed that branch entirely — `GetSummaryAsync` never returns `null`, so a hash that doesn't exist,
+a hash the caller genuinely owns with zero clicks, a hash owned by someone else, and an
+anonymously-created link (`user_id IS NULL` on every one of its click rows, which never matches any
+caller's filter either) are all indistinguishable from the outside: every one of them gets the same
+all-zero `200`. An anonymous link still has no reporting view for anyone, not a shared public one
+either — it's just one more case that quietly falls out of the same filter instead of a case this
+endpoint has to special-case.
 
 **Live top links**, three pieces working together:
 
