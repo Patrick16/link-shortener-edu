@@ -14,26 +14,17 @@ public sealed class ClickHouseClickFactQueryService(
     private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
     private readonly string _httpClientName = httpClientName;
 
-    public async Task<ClickSummary?> GetSummaryAsync(string hash, Guid callerUserId, CancellationToken cancellationToken = default)
+    public async Task<ClickSummary> GetSummaryAsync(string hash, Guid callerUserId, CancellationToken cancellationToken = default)
     {
-        // Owner-scoped: every bucket query below filters on user_id = callerUserId, same as this
-        // one - so a hash with zero rows at all (fresh link, no clicks yet) and a hash this caller
-        // genuinely owns both come back as an ordinary (possibly all-zero) summary. The one case
-        // that needs telling apart from those is "this hash belongs to someone else" - a row with a
-        // *different*, non-null user_id exists for it. (NULL rows - an anonymously-created link -
-        // never count as "someone else's": per this feature's design, an unowned link has no
-        // reporting view for anyone, not a shared one.) Run concurrently with the bucket queries
-        // below, not sequentially first, since a genuine owner's request shouldn't pay extra
-        // latency for a check that will almost always come back empty.
-        var ownedByOtherTask = RunScalarCountAsync(
-            "SELECT count() FROM clicks WHERE hash = {hash:String} AND user_id IS NOT NULL AND user_id != toUUID({userId:String})",
-            hash, callerUserId, cancellationToken);
-
-        // Four independent queries, none depending on another's result - run them concurrently on
-        // their own connections rather than one connection serially (found during review: a single
-        // ADO.NET connection can't run overlapping commands anyway, so "share one connection" and
-        // "run concurrently" were mutually exclusive; each connection here draws from the same
-        // pooled HttpClient via IHttpClientFactory, so opening several is cheap, not Nx the socket cost).
+        // Owner-scoped: every bucket query below filters on user_id = callerUserId, so a hash with
+        // zero rows at all (fresh link, no clicks yet), a hash this caller genuinely owns, and a
+        // hash owned by someone else all come back as an ordinary (possibly all-zero) summary.
+        // There used to be a separate "does anyone *else* own this hash" check here whose result
+        // picked between returning null (-> ReportsController's 404) and this all-zero summary -
+        // removed in review: that branch was the actual privacy leak it was trying to prevent,
+        // since "exists, owned by someone else" (404) and "doesn't exist" (200, zeros) were
+        // distinguishable from the outside. Filtering every query to callerUserId is what actually
+        // keeps someone else's data out of the response; no extra branch is needed on top.
         var byDayTask = RunBucketsAsync(
             "SELECT toString(toDate(clicked_at)) AS k, count() AS c FROM clicks WHERE hash = {hash:String} AND user_id = toUUID({userId:String}) GROUP BY k ORDER BY k",
             hash, callerUserId, cancellationToken);
@@ -41,12 +32,7 @@ public sealed class ClickHouseClickFactQueryService(
         var byDeviceTask = RunTopBucketsAsync("device_type", hash, callerUserId, cancellationToken);
         var byBrowserTask = RunTopBucketsAsync("browser", hash, callerUserId, cancellationToken);
 
-        await Task.WhenAll(ownedByOtherTask, byDayTask, byCountryTask, byDeviceTask, byBrowserTask);
-
-        if (await ownedByOtherTask > 0)
-        {
-            return null;
-        }
+        await Task.WhenAll(byDayTask, byCountryTask, byDeviceTask, byBrowserTask);
 
         var byDay = await byDayTask;
 
@@ -100,18 +86,6 @@ public sealed class ClickHouseClickFactQueryService(
         }
 
         return buckets;
-    }
-
-    private async Task<long> RunScalarCountAsync(string sql, string hash, Guid userId, CancellationToken cancellationToken)
-    {
-        await using var connection = NewConnection();
-        await connection.OpenAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        AddParameters(command, hash, userId);
-
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        return Convert.ToInt64(result, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     // userId is passed as a plain String parameter, then cast with toUUID({userId:String}) in SQL

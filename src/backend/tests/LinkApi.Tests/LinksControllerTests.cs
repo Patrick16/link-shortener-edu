@@ -219,6 +219,39 @@ public class LinksControllerTests
     }
 
     [Fact]
+    public async Task GetLink_Deleted_ReturnsGoneNotTheStaleMetadata()
+    {
+        // Regression: the cached/DB row for a deleted link can still exist until the deletion
+        // consumer catches up, but GetLink used to return it as if the link were still active -
+        // inconsistent with GetLinks, which already filters DeletedAt.
+        await using var context = NewContext();
+        var deletedLink = new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null, DeletedAt: DateTime.UtcNow);
+        var sut = NewController(context, out var cache, out _, out _, out _);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(deletedLink);
+
+        var result = await sut.GetLink("abc12345", CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status410Gone, objectResult.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetLink_Expired_ReturnsGoneNotTheStaleMetadata()
+    {
+        await using var context = NewContext();
+        var expiredLink = new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null, ExpiresAt: DateTime.UtcNow.AddMinutes(-1));
+        var sut = NewController(context, out var cache, out _, out _, out _);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expiredLink);
+
+        var result = await sut.GetLink("abc12345", CancellationToken.None);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status410Gone, objectResult.StatusCode);
+    }
+
+    [Fact]
     public async Task GetLinks_AuthenticatedCaller_ReturnsOnlyOwnLinks()
     {
         var userId = Guid.NewGuid();

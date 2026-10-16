@@ -39,17 +39,20 @@ public class ReportsControllerTests
     }
 
     [Fact]
-    public async Task GetSummary_HashOwnedBySomeoneElse_ReturnsNotFound()
+    public async Task GetSummary_HashOwnedBySomeoneElseOrUnknown_ReturnsOkWithZeroedSummary()
     {
         // Regression: a hash with no reporting data of this caller's own (not owner, or truly
-        // unknown) must come back as a plain 404 - see ReportsController's own comment on why that's
-        // deliberate (not distinguishable from "this hash doesn't exist" on purpose).
+        // unknown) must come back exactly like a hash with zero clicks - see ReportsController's own
+        // comment on why distinguishing "owned by someone else" (a 404) from "doesn't exist" (a 200)
+        // was itself the privacy leak, not the fix for one.
         var sut = NewSut(out var queryService, out var userId);
-        queryService.Setup(x => x.GetSummaryAsync("abc12345", userId, It.IsAny<CancellationToken>())).ReturnsAsync((ClickSummary?)null);
+        var zeroedSummary = new ClickSummary("abc12345", 0, [], [], [], []);
+        queryService.Setup(x => x.GetSummaryAsync("abc12345", userId, It.IsAny<CancellationToken>())).ReturnsAsync(zeroedSummary);
 
         var result = await sut.GetSummary("abc12345", CancellationToken.None);
 
-        Assert.IsType<NotFoundResult>(result);
+        var ok = Assert.IsType<OkObjectResult>(result);
+        Assert.Same(zeroedSummary, ok.Value);
     }
 
     [Theory]

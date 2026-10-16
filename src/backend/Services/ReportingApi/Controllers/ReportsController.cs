@@ -34,10 +34,13 @@ public partial class ReportsController(IClickFactQueryService queryService) : Co
         // parseable - same guarantee LinksController relies on for its own owner checks.
         var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
 
+        // Always 200: GetSummaryAsync already scopes every underlying query to this caller's own
+        // user_id, so a hash this caller doesn't own comes back as an ordinary all-zero summary -
+        // the same shape a hash that doesn't exist at all gets - rather than this controller adding
+        // its own 404 branch on top (see .notes/PLAN.md's Owner-scoped reporting entry for the full
+        // reasoning, and IClickFactQueryService's own comment for why an earlier 404-for-someone-
+        // else's-hash branch was itself the privacy leak it was meant to prevent).
         var summary = await _queryService.GetSummaryAsync(hash, userId, cancellationToken);
-        // 404, not 403 - a hash this caller doesn't own gets the same answer as one that doesn't
-        // exist at all, so a caller can't use this endpoint to probe which hashes belong to other
-        // users (see .notes/PLAN.md's Owner-scoped reporting entry for the full reasoning).
-        return summary is null ? NotFound() : Ok(summary);
+        return Ok(summary);
     }
 }

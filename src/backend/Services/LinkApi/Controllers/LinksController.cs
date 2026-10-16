@@ -294,6 +294,19 @@ public partial class LinksController(
             return NotFound();
         }
 
+        // Mirrors RedirectApi's own live check (RedirectController.cs) - a deleted/expired link's
+        // row (or its optimistic/cached copy) can still be present until the deletion consumer or
+        // the TTL sweep catches up, but it must not be readable as if it were still active. Found
+        // in review: without this, GetLinks (which does filter DeletedAt/ExpiresAt) and GetLink
+        // disagreed about whether a gone link's metadata was still visible.
+        if (res.DeletedAt is not null || (res.ExpiresAt is { } expiresAt && expiresAt <= DateTime.UtcNow))
+        {
+            return Problem(
+                detail: "This link has expired or been deleted.",
+                statusCode: StatusCodes.Status410Gone,
+                title: "Link gone.");
+        }
+
         return new LinkResponse(res.ShortenLink, res.CreatedAt);
     }
 

@@ -23,15 +23,16 @@ public class RedisClickCounterService(
             return;
         }
 
+        Task increment = Task.CompletedTask, expire = Task.CompletedTask, publish = Task.CompletedTask;
         try
         {
             var db = _connectionMultiplexer.GetDatabase();
             var key = TopLinks.DayKey(userId, DateOnly.FromDateTime(clickedAtUtc.ToUniversalTime()));
 
             var batch = db.CreateBatch();
-            var increment = batch.SortedSetIncrementAsync(key, hash, 1);
-            var expire = batch.KeyExpireAsync(key, DayKeyTtl);
-            var publish = batch.PublishAsync(
+            increment = batch.SortedSetIncrementAsync(key, hash, 1);
+            expire = batch.KeyExpireAsync(key, DayKeyTtl);
+            publish = batch.PublishAsync(
                 RedisChannel.Literal(TopLinks.ChangedChannel), userId.ToString("N"));
             batch.Execute();
 
@@ -44,5 +45,21 @@ public class RedisClickCounterService(
             // lost click only costs one entry in a rolling top list.
             _logger.LogWarning(ex, "Failed to record click for hash {Hash} in the top-links counter", hash);
         }
+        finally
+        {
+            // If batch.Execute() itself threw (e.g. the connection was already down), the three
+            // tasks above were created but never reached Task.WhenAll - each still completes on its
+            // own later (faulted or not), and an unobserved fault on a Task that's been garbage
+            // collected surfaces as an UnobservedTaskException. Observing them here is a no-op in
+            // the normal case where Task.WhenAll already awaited them.
+            ObserveIfFaulted(increment);
+            ObserveIfFaulted(expire);
+            ObserveIfFaulted(publish);
+        }
     }
+
+    private static void ObserveIfFaulted(Task task) =>
+        task.ContinueWith(
+            static t => _ = t.Exception,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
 }

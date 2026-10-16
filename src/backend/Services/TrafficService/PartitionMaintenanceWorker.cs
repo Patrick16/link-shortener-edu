@@ -97,10 +97,13 @@ public class PartitionMaintenanceWorker(
                 // EF1002 flags interpolated-string SQL as injection risk, but a table/partition
                 // name can never be parameterized by ANY SQL client - identifiers aren't values.
                 // This is the exact same constraint ConvertClicksToPartitionedTable's migration
-                // worked around with Postgres's own format()/%I. Safe here because every
-                // interpolated value is server-computed by PartitionPlanner from DateOnly math
-                // (clicks_yYYYYmMM / ISO date strings) - never user input, never anything that
-                // reaches this method from outside the process.
+                // worked around with Postgres's own format()/%I. Every interpolated value here is
+                // already server-computed by PartitionPlanner from DateOnly math (clicks_yYYYYmMM /
+                // ISO date strings) - never user input, never anything that reaches this method
+                // from outside the process - but QuoteIdentifier is applied anyway as defense in
+                // depth (found in review): it costs nothing and means a future change to
+                // PartitionPlanner's naming can't turn this into an injection point just by
+                // forgetting to keep validating it as strictly as today.
 #pragma warning disable EF1002
                 var toCreate = PartitionPlanner.GetPartitionsToEnsure(nowUtc, LookAheadMonths)
                     .Where(p => !existingPartitions.Contains(p.Name, StringComparer.Ordinal))
@@ -112,7 +115,7 @@ public class PartitionMaintenanceWorker(
                     // and suspenders, not load-bearing on its own.
                     await context.Database.ExecuteSqlRawAsync(
                         $"""
-                        CREATE TABLE IF NOT EXISTS "{partition.Name}" PARTITION OF clicks
+                        CREATE TABLE IF NOT EXISTS {QuoteIdentifier(partition.Name)} PARTITION OF clicks
                         FOR VALUES FROM ('{partition.Start:yyyy-MM-dd}') TO ('{partition.End:yyyy-MM-dd}')
                         """,
                         cancellationToken);
@@ -121,7 +124,7 @@ public class PartitionMaintenanceWorker(
                 var toDrop = PartitionPlanner.GetPartitionsToDrop(nowUtc, RetentionMonths, existingPartitions);
                 foreach (var name in toDrop)
                 {
-                    await context.Database.ExecuteSqlRawAsync($"""DROP TABLE IF EXISTS "{name}" """, cancellationToken);
+                    await context.Database.ExecuteSqlRawAsync($"DROP TABLE IF EXISTS {QuoteIdentifier(name)}", cancellationToken);
                 }
 #pragma warning restore EF1002
 
@@ -164,6 +167,10 @@ public class PartitionMaintenanceWorker(
 
     private static Task<int> ReleaseAdvisoryLockAsync(DatabaseContext context, CancellationToken cancellationToken) =>
         context.Database.ExecuteSqlRawAsync($"SELECT pg_advisory_unlock(hashtext('{AdvisoryLockName}'))", cancellationToken);
+
+    // Postgres's own identifier-quoting rule: wrap in double quotes, double up any embedded
+    // double quote. Equivalent to quote_ident() done client-side instead of a server round trip.
+    private static string QuoteIdentifier(string identifier) => $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
 
     // pg_inherits is how Postgres tracks partition membership - every child of the `clicks`
     // parent, by name, regardless of what created it (the bootstrap migration, an earlier tick of

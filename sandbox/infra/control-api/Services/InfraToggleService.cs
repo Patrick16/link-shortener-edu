@@ -627,12 +627,18 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         logger.LogWarning("Setting redis-master min-replicas-to-write={Value} failed after {MaxAttempts} attempts", value, maxAttempts);
     }
 
-    // Best-effort, same reasoning as SetRedisMinReplicasToWriteAsync: `REPLICAOF NO ONE` on a node
-    // that's already master is a documented no-op, not an error, so this is safe to call
-    // unconditionally every time Sentinel turns on, not just after a confirmed bad state. A failure
-    // here (redis-master unreachable) is caught by SyncRedisHaContainersAsync's own
-    // container-not-found check right after anyway, so swallowing it here just avoids double-logging
-    // the same underlying problem.
+    // `REPLICAOF NO ONE` on a node that's already master is a documented no-op, but redis-master
+    // is NOT always already master at this point - if a real Sentinel failover already promoted a
+    // different node before this toggle cycle ran (e.g. a previous ON/OFF/ON that left redis-master
+    // demoted to a replica of that node), forcing it back to master here unconditionally would
+    // create a second master instead of fixing anything: SelfHealSentinelAsync right after this can
+    // only safely re-point Sentinel when exactly one node reports ROLE=master to anchor on (see
+    // RedisInfraService.SelectSoleMaster) - a self-inflicted two-master state makes it see >1
+    // master, give up for that tick, and leave every Sentinel stuck, possibly pointed at neither
+    // real node. Found in review: checking the real topology first and skipping the reclaim when
+    // some OTHER node already holds the master role avoids manufacturing exactly the ambiguous state
+    // SelectSoleMaster can't resolve on its own - that other node is already the unambiguous ground
+    // truth SelfHealSentinelAsync needs, nothing to reclaim.
     private async Task ReclaimRedisMasterRoleAsync(CancellationToken ct)
     {
         var container = await runtime.FindAsync("redis-master", ct);
@@ -641,6 +647,20 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             return;
         }
 
+        var topology = await redis.GetRedisTopologyAsync(ct);
+        var otherMaster = topology.Roles.FirstOrDefault(r => r.ServiceId != "redis-master" && r.Role == "master");
+        if (otherMaster is not null)
+        {
+            logger.LogWarning(
+                "Skipping redis-master's REPLICAOF NO ONE - {OtherServiceId} is already reporting ROLE=master, so it's already the unambiguous master for SelfHealSentinelAsync to anchor on",
+                otherMaster.ServiceId);
+            return;
+        }
+
+        // Still safe to call unconditionally here (including when redis-master is already master
+        // itself) - a failure (redis-master unreachable) is caught by SyncRedisHaContainersAsync's
+        // own container-not-found check right after anyway, so swallowing it here just avoids
+        // double-logging the same underlying problem.
         try
         {
             await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "REPLICAOF", "NO", "ONE"], ct);
