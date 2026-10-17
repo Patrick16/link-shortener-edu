@@ -238,8 +238,8 @@ button:disabled {
 
 .service-card-chaos {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
   margin-top: 10px;
   padding-top: 10px;
@@ -255,6 +255,21 @@ button:disabled {
   padding: 4px 6px;
   font-size: 13px;
   width: 90px;
+}
+
+.service-card-chaos-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.service-card-chaos-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text);
 }
 
 .service-card-error {

@@ -202,17 +202,35 @@ a container) just shows the details card.
 
 ### 4.4 Chaos: Degrade / Heal
 
-Clicking **Degrade** expands a small form: pick a chaos type (**Delay** in ms, **Loss** as a
-percentage, or **Partition** — 100% loss), an amount, and a duration in seconds, then **Start**:
+Clicking **Degrade** expands a small form. Pick a chaos type from the dropdown first — the panel
+shows a one-line explanation of what that type actually does right below it, and the field(s)
+under that change to match: an amount field labeled for the type you picked (**Delay (ms)** or
+**Loss (%)** — **Partition** has none, since it's always a full 100% cut), plus a **Duration (s)**
+field that applies to all three. Hit **Start** once both look right:
 
-![The Degrade sub-panel, expanded on PgCat](assets/user-guide/pgcat-degrade-chaos.jpg)
+![The Degrade sub-panel, expanded on PgCat, with Loss selected](assets/user-guide/pgcat-degrade-chaos.jpg)
+
+**The three chaos types, in order of severity:**
+
+- **Delay** adds latency to every packet in and out of the container — nothing is dropped, every
+  request still arrives, just later. Good for feeling what a slow dependency (a distant service, a
+  congested link) does to the rest of the system without anything actually failing. The amount is
+  milliseconds of added latency per packet (1–10000).
+- **Loss** randomly drops the given percentage of packets in and out of the container. Most
+  requests still get through; a random subset silently don't, which is what makes it a good stand-in
+  for a flaky, unreliable network link (as opposed to Delay's "slow but reliable" or Partition's
+  "reliably nothing"). The amount is a percentage (1–100).
+- **Partition** cuts all network traffic in and out of the container — 100% loss, no amount field
+  because there's nothing to tune. This is the closest thing to actually unplugging the container's
+  network cable: the harshest of the three, useful for seeing what a clean total outage looks like
+  (as opposed to Loss's partial, intermittent failures).
 
 Under the hood this spins up a throwaway [Pumba](https://github.com/alexei-led/pumba) container
 that runs `pumba netem` against the target container's network namespace for the given duration,
-then reverts automatically. **Heal** stops that Pumba container early if you don't want to wait out
-the timer. This is the sandbox's way of answering "what does a slow/flaky dependency actually do to
-the rest of the system" — degrade PgCat, Redis, RabbitMQ, or any service, then watch the graph,
-the metrics, and a k6 run react.
+then reverts automatically — Duration is how long the effect lasts, not a delay before it starts.
+**Heal** (next to Degrade on the same row) stops that Pumba container early if you don't want to
+wait out the timer. This applies uniformly to any node with the generic controls (PgCat, Redis,
+RabbitMQ, or any service) — degrade one, then watch the graph, the metrics, and a k6 run react.
 
 ### 4.5 Scaling a service
 
