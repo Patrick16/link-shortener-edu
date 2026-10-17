@@ -17,6 +17,7 @@ import { RunHistoryPanel } from './components/RunHistoryPanel'
 import { PresetsModal } from './components/PresetsModal'
 import { TopologyPanel } from './components/TopologyPanel'
 import { filterArchitecture } from './utils/topologyFilter'
+import { observabilityLinks } from './utils/observabilityLinks'
 import { resolveServiceId } from './utils/resolveServiceId'
 import { applySystemConfig, runRequestToScenario } from './utils/reuseRunConfig'
 import type { ArchitectureData } from './types/architecture'
@@ -112,6 +113,21 @@ function App() {
         <button className="app-header-presets-btn" onClick={() => setPresetsOpen(true)}>
           Presets
         </button>
+        <div className="app-header-observability">
+          <span className="app-header-observability-label">Observability</span>
+          {observabilityLinks.map((link) => (
+            <a
+              key={link.url}
+              className="app-header-observability-link"
+              href={link.url}
+              target="_blank"
+              rel="noreferrer"
+              title={link.title}
+            >
+              {link.label} ↗
+            </a>
+          ))}
+        </div>
         <TrafficResultPanel {...trafficRun} fallbackTotalSeconds={trafficConfig.totalDuration} />
       </header>
 

@@ -29,6 +29,42 @@
   font-size: 22px;
 }
 
+/* Observability quick links - cross-cutting (no node of its own on the graph, see
+   observabilityLinks.ts), so it lives in the header rather than any node panel. Pill styling
+   mirrors .node-panel-quick-link. */
+
+.app-header-observability {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+
+.app-header-observability-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  margin-right: 2px;
+}
+
+.app-header-observability-link {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.app-header-observability-link:hover {
+  filter: brightness(1.1);
+}
+
 .app-body {
   flex: 1;
   display: flex;
