@@ -201,6 +201,14 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
             rabbitmq: LinkApi/RedirectApi enqueue and return immediately. grpc: the request waits for the downstream
             worker to persist the row - no fallback queue if it's unreachable, by design.
           </p>
+          {draft.messagingMode === 'grpc' && (
+            <p className="messaging-mode-warning">
+              ⚠ Demo-only mode, not a production option - it exists to show sync coupling's latency cost. In gRPC
+              mode RedirectApi dispatches click.tracked straight to TrafficService instead of publishing to
+              RabbitMQ, so the other two fan-out consumers of that event - ShortenerService's click-count bump and
+              ReportingService's ClickHouse write - never receive it and silently go stale while this is active.
+            </p>
+          )}
         </div>
 
         {error && <p className="service-card-error">{error}</p>}

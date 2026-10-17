@@ -9,8 +9,9 @@ import { statusColor } from '../utils/statusColor'
 import { getQuickLinks } from '../utils/quickLink'
 import { getAccessInfo } from '../utils/accessInfo'
 import { getNodeDoc } from '../utils/docsRegistry'
+import { getMessagingModeWarning } from '../utils/messagingModeWarning'
 import type { ArchComponent } from '../types/architecture'
-import type { ManagedContainer, ResourceSample } from '../types/controlApi'
+import type { InfraStatus, ManagedContainer, ResourceSample } from '../types/controlApi'
 
 interface Props {
   component: ArchComponent
@@ -20,6 +21,8 @@ interface Props {
   // (see useLiveStack), so every instance below gets its own chart instead of all of them sharing
   // one arbitrary instance's numbers.
   resourceHistoryByContainer: Record<string, ResourceSample[]>
+  // For getMessagingModeWarning - the only thing this panel needs the global infra status for.
+  infraStatus: InfraStatus | null
   onClose: () => void
   // Both omitted for a node with no controllable container (see the !serviceId branch in App) -
   // there's no live CPU/RAM/TCP reading to pin in that case.
@@ -28,8 +31,9 @@ interface Props {
   onSelectNode?: (id: string) => void
 }
 
-export function NodePanel({ component, serviceId, instances, resourceHistoryByContainer, onClose, pinned, onTogglePin, onSelectNode }: Props) {
+export function NodePanel({ component, serviceId, instances, resourceHistoryByContainer, infraStatus, onClose, pinned, onTogglePin, onSelectNode }: Props) {
   const primary = instances[0]
+  const messagingWarning = getMessagingModeWarning(component.id, infraStatus)
   const hasCharts = instances.some((instance) => (resourceHistoryByContainer[instance.containerId]?.length ?? 0) > 0)
   const quickLinks = getQuickLinks(component)
   const accessInfo = getAccessInfo(component)
@@ -67,6 +71,8 @@ export function NodePanel({ component, serviceId, instances, resourceHistoryByCo
           )}
         </div>
       )}
+
+      {messagingWarning && <p className="messaging-mode-warning">⚠ {messagingWarning}</p>}
 
       {showAccessInfo && accessInfo && (
         <AccessInfoModal title={component.name} info={accessInfo} onClose={() => setShowAccessInfo(false)} />

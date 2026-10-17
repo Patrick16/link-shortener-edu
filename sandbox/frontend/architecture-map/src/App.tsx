@@ -142,6 +142,7 @@ function App() {
                   serviceId={selectedServiceId}
                   instances={selectedInstances}
                   resourceHistoryByContainer={resourceHistory}
+                  infraStatus={infraStatus.status}
                   onClose={() => setSelection(null)}
                   pinned={pins.isPinned(selectedComponent.id)}
                   onTogglePin={() => pins.togglePin(selectedComponent.id)}
@@ -154,6 +155,7 @@ function App() {
                   serviceId={null}
                   instances={[]}
                   resourceHistoryByContainer={{}}
+                  infraStatus={infraStatus.status}
                   onClose={() => setSelection(null)}
                   onSelectNode={(id) => setSelection({ kind: 'component', id })}
                 />
