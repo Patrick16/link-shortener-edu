@@ -504,11 +504,11 @@
           "editorMode": "code",
           "range": true,
           "refId": "A",
-          "expr": "haproxy_server_status{proxy=\"pgcat_back\", state=\"UP\"}",
+          "expr": "haproxy_server_status{proxy=\"pgcat_back\", state=\"UP\"} unless on(server) (haproxy_server_status{proxy=\"pgcat_back\", state=\"MAINT\"} == 1)",
           "legendFormat": "{{server}}"
         }
       ],
-      "description": "Per pgcat instance, via option pgsql-check - see infra/haproxy/haproxy.cfg."
+      "description": "Per pgcat instance, via option pgsql-check - see infra/haproxy/haproxy.cfg. haproxy's exporter emits one series per (server, state) pair, always, so a plain state=\"UP\" filter still returns a 0-valued series for haproxy.cfg's 3 unused server-template slots (reserved headroom, never assigned a replica - see that file's comment) - without the `unless`, those read as 3 dead pgcat instances instead of 3 unused slots. Confirmed live against the real exporter output before relying on this."
     },
     {
       "datasource": {
@@ -599,11 +599,11 @@
           "editorMode": "code",
           "range": true,
           "refId": "A",
-          "expr": "haproxy_server_current_sessions{proxy=\"pgcat_back\"}",
+          "expr": "haproxy_server_current_sessions{proxy=\"pgcat_back\"} unless on(server) (haproxy_server_status{proxy=\"pgcat_back\", state=\"MAINT\"} == 1)",
           "legendFormat": "{{server}}"
         }
       ],
-      "description": "The load-balancing story in one panel - with balance leastconn, these three lines should track each other closely under any sustained load."
+      "description": "The load-balancing story in one panel - with balance leastconn, these three lines should track each other closely under any sustained load. Excludes haproxy.cfg's 3 unused server-template slots (reserved headroom, same filter as this row's 'Backend server up/down' panel) - without it, 3 permanently-flat 0 lines for slots that never had a replica assigned clutter the legend."
     },
     {
       "datasource": {

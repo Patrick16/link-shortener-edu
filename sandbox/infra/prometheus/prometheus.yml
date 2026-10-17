@@ -19,16 +19,31 @@ scrape_configs:
 
   - job_name: pgcat
     scrape_interval: 5s
-    # 3 instances behind haproxy (Pooler Scaling feature, 2026-10-09) - each pgcat process only
-    # reports its own connections/pools, so relabeled with which instance scraped found it; nothing
-    # in pgcat's own metric labels says this on its own (confirmed live against a real exporter).
-    static_configs:
-      - targets: ["pgcat-1:9930"]
-        labels: { instance_name: pgcat-1 }
-      - targets: ["pgcat-2:9930"]
-        labels: { instance_name: pgcat-2 }
-      - targets: ["pgcat-3:9930"]
-        labels: { instance_name: pgcat-3 }
+    # pgcat is one Compose service scaled to 3 replicas (deploy.replicas: 3 - see docker-compose.
+    # yml's pgcat service), not 3 separately-named services, so there's no "pgcat-1"/"pgcat-2"/
+    # "pgcat-3" hostname to put in a static target list - only the service-level "pgcat" DNS name
+    # resolves, to however many replicas' IPs as separate A records (confirmed live via `nslookup
+    # pgcat` from inside this container - same fact haproxy.cfg's server-template already relies on
+    # for the identical reason). This job used to hardcode pgcat-1/2/3:9930 from before that
+    # consolidation; those hostnames stopped resolving the moment pgcat became one scaled service
+    # (same DNS failure mode haproxy.cfg hit and fixed - see sandbox/docs/scenarios/pitfalls/
+    # haproxy-server-template-replaces-static-server-list.md), silently dropping every pgcat_* metric
+    # and leaving every panel/alert built on them with no data. dns_sd_configs is Prometheus's own
+    # equivalent of haproxy's server-template: it re-resolves "pgcat" every refresh_interval and
+    # creates one scrape target per A record, so it keeps working if the replica count ever changes.
+    dns_sd_configs:
+      - names: ["pgcat"]
+        type: A
+        port: 9930
+        refresh_interval: 15s
+    relabel_configs:
+      # Replicas are identical peers with no stable per-instance identity (the same reasoning
+      # architecture.json's single pgcat node, drawn with a x3 badge rather than 3 separate nodes,
+      # already reflects) - label by the actual scraped address instead of inventing a "pgcat-N"
+      # name nothing can resolve. PgcatClientsWaiting (alerts.yml) and the infra dashboard's
+      # per-pool panels still work off this - they just identify an instance by IP:port now.
+      - source_labels: [__address__]
+        target_label: instance_name
 
   - job_name: haproxy
     scrape_interval: 5s
