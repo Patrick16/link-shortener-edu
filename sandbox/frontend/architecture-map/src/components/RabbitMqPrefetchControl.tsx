@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { controlApi, ControlApiError } from '../api/controlApi'
 import type { CapabilityControlProps } from '../utils/capabilityControlProps'
 
-// Recreates shortener-service and traffic-service - prefetch is read once at consumer startup, not
-// a live setting (see RabbitMqConsumer's own _prefetchCount field).
+// Recreates shortener-service, traffic-service and reporting-service - prefetch is read once at
+// consumer startup, not a live setting (see RabbitMqConsumer's own _prefetchCount field).
 export function RabbitMqPrefetchControl(_props: CapabilityControlProps) {
   const [current, setCurrent] = useState<number | null>(null)
   const [prefetchCount, setPrefetchCount] = useState(10)
@@ -42,7 +42,7 @@ export function RabbitMqPrefetchControl(_props: CapabilityControlProps) {
       <button onClick={apply} disabled={busy || prefetchCount === current}>
         {busy ? 'Applying...' : `Set to ${prefetchCount}`}
       </button>
-      <p className="infra-toggle-description">Recreates shortener-service and traffic-service (read once at consumer startup) - takes a few seconds.</p>
+      <p className="infra-toggle-description">Recreates shortener-service, traffic-service and reporting-service (read once at consumer startup) - takes a few seconds.</p>
       {error && <p className="service-card-error">{error}</p>}
     </div>
   )

@@ -305,8 +305,9 @@ export interface SentinelConfig {
   failoverTimeoutMs: number
 }
 
-// Consumer QoS for shortener-service/traffic-service's RabbitMQ consumers - read once at consumer
-// startup, so setting this recreates both containers (see SetRabbitMqPrefetchAsync on the backend).
+// Consumer QoS for shortener-service/traffic-service/reporting-service's RabbitMQ consumers - read
+// once at consumer startup, so setting this recreates all three containers (see
+// SetRabbitMqPrefetchAsync on the backend).
 export interface RabbitMqPrefetch {
   prefetchCount: number
 }

@@ -22,12 +22,14 @@ public sealed class ContainerLifecycleService(IContainerRuntime runtime, IInfraT
     // with "is not a scalable service" until now (found during review).
     private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service"];
 
-    // The two RabbitMQ consumers - mirrors InfraToggleService's own RabbitMqConsumingServices list.
-    // Duplicated rather than shared: it's a stable domain fact (which services are RabbitMQ
-    // consumers), not mutable state, and ScaleAsync only needs it to know whether to forward the
-    // current prefetch value on a scale-up - not worth a cross-service dependency just to read a
-    // 2-item constant.
-    private static readonly IReadOnlyList<string> RabbitMqConsumingServices = ["shortener-service", "traffic-service"];
+    // The three RabbitMQ consumers - mirrors InfraToggleService's own RabbitMqConsumingServices
+    // list (see its own comment on why reporting-service belongs here too - it used to be missing,
+    // which silently left reporting-service off the prefetch toggle entirely). Duplicated rather
+    // than shared: it's a stable domain fact (which services are RabbitMQ consumers), not mutable
+    // state, and ScaleAsync only needs it to know whether to forward the current prefetch value on
+    // a scale-up - not worth a cross-service dependency just to read a 3-item constant.
+    private static readonly IReadOnlyList<string> RabbitMqConsumingServices =
+        ["shortener-service", "traffic-service", "reporting-service"];
 
     public async Task<IReadOnlyList<ManagedContainer>> ListContainersAsync(CancellationToken ct)
     {

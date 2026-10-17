@@ -1197,6 +1197,14 @@ services:
       # .notes/review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md).
       ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       Redis__InstanceName: "GeoIpCache"
+      # Was missing entirely until this feature's prefetch bug was found live - without these three,
+      # RabbitMqConsumer falls back to its hardcoded defaults (prefetch=10/batch=100/timeout=500ms)
+      # no matter what the control plane's prefetch toggle is set to, since control-api only forwards
+      # RABBITMQ_PREFETCH to the services whose compose block actually reads it. See traffic-service's
+      # identical block for the same three vars.
+      RabbitMq__PrefetchCount: "${RABBITMQ_PREFETCH:-10}"
+      RabbitMq__BatchSize: "${RABBITMQ_BATCH_SIZE:-100}"
+      RabbitMq__BatchTimeoutMs: "${RABBITMQ_BATCH_TIMEOUT_MS:-500}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       OTEL_BSP_SCHEDULE_DELAY: "1000"
       # See auth-api's identical comment on these two - same default/override story everywhere.

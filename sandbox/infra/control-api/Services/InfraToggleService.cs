@@ -58,9 +58,17 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // they never need recreating when this toggle flips, unlike every other DB-touching toggle.
     private static readonly IReadOnlyList<string> MessagingUsingServices = ["link-api", "redirect-api"];
 
-    // The two RabbitMQ consumers - workers that each run a LinkCreatedConsumer and/or
+    // The three RabbitMQ consumers - workers that each run a LinkCreatedConsumer and/or
     // ClickTrackedConsumer, all sharing RabbitMqConsumer's own _prefetchCount field.
-    private static readonly IReadOnlyList<string> RabbitMqConsumingServices = ["shortener-service", "traffic-service"];
+    // reporting-service was missing here for a while after it was added as a third click.tracked
+    // consumer (CQRS/ClickHouse feature) - its docker-compose.yml block never got the
+    // RabbitMq__PrefetchCount/BatchSize/BatchTimeoutMs env vars either, so this toggle silently
+    // never touched it: no matter what prefetch was set here, reporting-service stayed on
+    // RabbitMqConsumer's hardcoded defaults (prefetch=10), capping its throughput regardless of
+    // this control or how many replicas were running (found live - reported as "only ~70 msg/s
+    // no matter the QoS/replica count" while shortener-service/traffic-service scaled fine).
+    private static readonly IReadOnlyList<string> RabbitMqConsumingServices =
+        ["shortener-service", "traffic-service", "reporting-service"];
 
     // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
     // tool despite not surviving a control-api restart.
