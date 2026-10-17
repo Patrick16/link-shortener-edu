@@ -157,10 +157,10 @@ result.
 
 ### 4.1 Layout
 
-Three fixed zones: a header (title, connection status, a **Presets** button, and a strip showing
-the current/last load-test run), a resizable **left sidebar** whose content depends entirely on
-what's selected, and the **graph** itself in the center, with a metrics overlay that can float on
-top of it.
+Three fixed zones: a header (title, connection status, **Topology** and **Presets** buttons, and a
+strip showing the current/last load-test run), a resizable **left sidebar** whose content depends
+entirely on what's selected, and the **graph** itself in the center, with a metrics overlay that
+can float on top of it.
 
 ![The full stack rendered as a graph](assets/user-guide/architecture-map-overview.jpg)
 
@@ -229,10 +229,32 @@ These are declared per node in `architecture.json`'s `capabilities` array and re
 automatically — see [`adding-a-component.md`](adding-a-component.md) if you want to add a new one.
 Here's what each one actually does, grouped by the node that carries it.
 
-**PgCat** — four capabilities on one node:
+**Topology** (header button, global — not tied to any node) is the odd one out: it used to be four
+single-purpose per-node toggles (nginx bypass, PgCat on/off, Redis caching on/off, messaging
+transport), each applying the instant it was flipped from its own node's panel. They were retired
+and replaced with one panel that stages every change locally and only applies them together on
+**Save** — so a half-finished edit never mid-air recreates containers. It has grown since: eight
+toggles today — load balancing (nginx), connection pooling (PgCat) and HAProxy in front of it,
+Postgres read replicas, Redis and Redis Sentinel (HA), MongoDB replicas, and the messaging
+transport (RabbitMQ ⇄ gRPC) — each staged independently and diffed against the live configuration
+before Save does anything.
 
-- *Connection pooling* (toggle) — off reconnects every DB-touching service straight to Postgres,
-  bypassing PgCat entirely, to demonstrate the system *without* pooling. Recreates 5 containers.
+![The Topology panel: Messaging transport set to gRPC (sync), with its warning visible](assets/user-guide/topology-panel-messaging.jpg)
+
+Switching **Messaging transport** to **gRPC (sync)** shows this warning right there in the panel:
+it's a demo-only mode (built to let you *feel* synchronous coupling's latency cost against the
+default async path), not a production option, and it silently breaks RabbitMQ's pub/sub fan-out —
+`LinkApi`/`RedirectApi` dispatch straight to the downstream worker instead of publishing, so
+`ShortenerService`'s click-count bump and `ReportingService`'s ClickHouse write stop receiving
+events while it's active. The same warning reappears on `RedirectApi`'s, `ShortenerService`'s and
+`ReportingService`'s own node panels for as long as gRPC mode stays on, so it isn't forgotten if
+you come back to one of them later without revisiting Topology:
+
+![RedirectApi's node panel with the persistent gRPC-mode warning](assets/user-guide/redirect-api-grpc-warning.jpg)
+
+**PgCat** — three capabilities on one node (connection pooling on/off moved into the Topology panel
+above):
+
 - *Pool settings* — pool mode (Transaction/Session), read/write splitting on/off, and pool size per
   logical database — all three pools (`users_db`/`links_db`/`clicks_db`) at once. Hot-reloaded by
   PgCat itself in ~15s, no container recreate.
@@ -257,12 +279,11 @@ unlike every other capability above):
 headroom over the 3 replicas that actually exist (see [HAProxy](scenarios/nodes/haproxy.md)), and an
 unused slot has nothing to connect to.
 
-**Redis (master)** — caching toggle and a manual flush:
+**Redis (master)** — a manual flush (the caching on/off toggle moved into the Topology panel above,
+in lockstep with Redis on/off itself — see that toggle's own description):
 
-![Caching on/off and "Flush cache (cold start)"](assets/user-guide/redis-cache-toggle-flush.jpg)
+![Redis (master)'s node panel: generic controls plus "Flush cache (cold start)"](assets/user-guide/redis-cache-toggle-flush.jpg)
 
-Turning caching off makes LinkApi/RedirectApi always hit Postgres directly (recreates 2
-containers) — useful for seeing what the system looks like *without* the cache pattern at all.
 **Flush cache** just empties Redis, simulating a cold start under load.
 
 **Redis Sentinels** — failover tuning, shared across all three Sentinel containers at once:
@@ -289,11 +310,13 @@ read once at consumer startup, so changing it recreates both services:
 
 ![RabbitMQ's prefetch control](assets/user-guide/rabbitmq-prefetch.jpg)
 
-**nginx** — load-balancing toggle. Off routes k6's generated traffic straight to a single
-link-api/redirect-api container, bypassing nginx (which keeps running regardless) — useful for
-isolating "is nginx itself the bottleneck":
+**nginx** has no component-specific control of its own anymore — its load-balancing bypass moved
+into the Topology panel above (off routes k6's generated traffic straight to a single
+link-api/redirect-api container, bypassing nginx, which keeps running regardless — useful for
+isolating "is nginx itself the bottleneck"). Its node panel is just the generic Stop/Restart/Heal/
+Degrade row, CPU/memory, and the static details card:
 
-![nginx's load-balancing toggle](assets/user-guide/nginx-toggle.jpg)
+![nginx's node panel: only the generic controls, no toggle of its own](assets/user-guide/nginx-panel.jpg)
 
 ### 4.7 Connections (edges)
 
