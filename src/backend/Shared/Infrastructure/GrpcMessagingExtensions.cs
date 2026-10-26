@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Infrastructure;
 
@@ -57,6 +58,12 @@ public static class GrpcMessagingExtensions
 
             builder.Services.AddSingleton(_ => GrpcChannel.ForAddress(targetUrl));
             builder.Services.AddSingleton(sp => new MessagingService.MessagingServiceClient(sp.GetRequiredService<GrpcChannel>()));
+            // Only registered in gRPC mode - the async/bus mode never constructs SyncGrpcDispatcher,
+            // so there's no point keeping this breaker alive (and its own OnOpened/OnClosed log
+            // noise) in a process that's never going to call it.
+            builder.Services.TryAddKeyedSingleton(Constants.GrpcCircuitBreakerKey, (sp, key) =>
+                ResiliencePipelines.BuildCircuitBreaker(
+                    (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!)));
             builder.Services.AddSingleton<IEventDispatcher, SyncGrpcDispatcher>();
         }
         else

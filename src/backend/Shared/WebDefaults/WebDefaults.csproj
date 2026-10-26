@@ -25,6 +25,9 @@
 		     service that validates AuthApi-issued tokens. -->
 		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
 		<PackageReference Include="System.IdentityModel.Tokens.Jwt" />
+		<!-- GlobalExceptionHandler maps Polly.CircuitBreaker.BrokenCircuitException to 503, same
+		     shape as the RpcException-Unavailable branch right above it. -->
+		<PackageReference Include="Polly.Core" />
 	</ItemGroup>
 
 	<ItemGroup>

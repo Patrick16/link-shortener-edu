@@ -9,8 +9,15 @@
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
 		<PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
+		<!-- FromKeyedServicesAttribute, used on EntityCacheService's/LinkCacheService's circuit-
+		     breaker constructor parameter - abstractions only, no DI container implementation. -->
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
 		<PackageReference Include="MongoDB.Bson" />
+		<!-- ResiliencePipelines/ResilienceMetrics - the shared circuit-breaker builder used here
+		     (EntityCacheService/Redis) and, via this project reference, by Infrastructure (gRPC,
+		     RabbitMQ) too. -->
+		<PackageReference Include="Polly.Core" />
 		<PackageReference Include="UAParser" />
 	</ItemGroup>
 

@@ -1,15 +1,29 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Polly;
 using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace Common;
 
-public abstract class EntityCacheService<T>(IDistributedCache cache, IConfiguration configuration, ILogger<EntityCacheService<T>> logger) : IEntityCacheService<T> where T : class
+public abstract class EntityCacheService<T>(
+    IDistributedCache cache,
+    IConfiguration configuration,
+    ILogger<EntityCacheService<T>> logger,
+    [FromKeyedServices(Constants.RedisCircuitBreakerKey)] ResiliencePipeline resiliencePipeline) : IEntityCacheService<T> where T : class
 {
     protected readonly IDistributedCache _cache = cache;
     protected static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    // A dead Redis still means every call pays ConnectTimeout/SyncTimeout before this class's own
+    // try/catch below turns it into a fail-open no-op - the breaker's job is to skip straight to
+    // that no-op once Redis is known-dead, instead of re-discovering it on every single request.
+    // BrokenCircuitException is an Exception like any other, so it's caught by the exact same
+    // catch blocks already here - no separate handling needed for "breaker open" vs. "Redis
+    // actually threw".
+    private readonly ResiliencePipeline _resilience = resiliencePipeline;
 
     // Coalesces concurrent GetOrFetch misses for the same key into a single DB fetch + cache write
     // (see GetOrFetch). Entries are removed as soon as the fetch they represent completes, so this
@@ -35,7 +49,8 @@ public abstract class EntityCacheService<T>(IDistributedCache cache, IConfigurat
             {
                 AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(ttlSeconds)
             };
-            await _cache.SetStringAsync(Key(id), json, options, cancellationToken);
+            await _resilience.ExecuteAsync(
+                ct => new ValueTask(_cache.SetStringAsync(Key(id), json, options, ct)), cancellationToken);
         }
         catch (Exception ex)
         {
@@ -52,7 +67,7 @@ public abstract class EntityCacheService<T>(IDistributedCache cache, IConfigurat
 
         try
         {
-            await _cache.RemoveAsync(Key(id));
+            await _resilience.ExecuteAsync(ct => new ValueTask(_cache.RemoveAsync(Key(id), ct)), CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -66,7 +81,8 @@ public abstract class EntityCacheService<T>(IDistributedCache cache, IConfigurat
 
         try
         {
-            string? json = await _cache.GetStringAsync(Key(id), cancellationToken);
+            string? json = await _resilience.ExecuteAsync(
+                ct => new ValueTask<string?>(_cache.GetStringAsync(Key(id), ct)), cancellationToken);
             return json is null ? null : JsonSerializer.Deserialize<T>(json, JsonOptions);
         }
         catch (Exception ex)

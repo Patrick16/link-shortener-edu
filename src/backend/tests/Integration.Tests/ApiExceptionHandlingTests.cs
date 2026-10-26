@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Polly.CircuitBreaker;
 using WebDefaults;
 
 namespace Integration.Tests;
@@ -37,6 +38,7 @@ public class ApiExceptionHandlingTests
                     endpoints.MapGet("/missing", () => Results.NotFound());
                     endpoints.MapGet("/grpc-unavailable", ThrowUnavailable);
                     endpoints.MapGet("/grpc-invalid-argument", ThrowInvalidArgument);
+                    endpoints.MapGet("/circuit-broken", ThrowBrokenCircuit);
                 });
             });
         });
@@ -50,6 +52,8 @@ public class ApiExceptionHandlingTests
     private static IResult ThrowUnavailable() => throw new RpcException(new Status(StatusCode.Unavailable, "test"));
 
     private static IResult ThrowInvalidArgument() => throw new RpcException(new Status(StatusCode.InvalidArgument, "test"));
+
+    private static IResult ThrowBrokenCircuit() => throw new BrokenCircuitException();
 
     [Fact]
     public async Task BareNotFoundResult_IsFormattedAsProblemDetailsJson()
@@ -102,5 +106,24 @@ public class ApiExceptionHandlingTests
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>();
         Assert.NotNull(problem);
         Assert.NotEqual("Downstream service unavailable.", problem.Title);
+    }
+
+    [Fact]
+    public async Task BrokenCircuitException_MapsTo503DownstreamUnavailable()
+    {
+        // Same user-facing shape as the RpcException-Unavailable case above - from the caller's
+        // side, "a circuit breaker is open for this dependency" and "the downstream call itself
+        // timed out" are the same story: a dependency this request needs isn't currently
+        // reachable, just reached cheaper, without paying the real timeout first (see
+        // ResiliencePipelines/GlobalExceptionHandler).
+        using var server = await NewServerAsync();
+        using var client = server.CreateClient();
+
+        var response = await client.GetAsync("/circuit-broken");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+        Assert.NotNull(problem);
+        Assert.Equal("Downstream service unavailable.", problem.Title);
     }
 }

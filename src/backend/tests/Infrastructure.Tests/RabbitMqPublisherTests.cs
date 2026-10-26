@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Polly;
 using RabbitMQ.Client;
 
 namespace Infrastructure.Tests;
@@ -8,6 +9,10 @@ namespace Infrastructure.Tests;
 public class RabbitMqPublisherTests
 {
     private static readonly ILogger<RabbitMqPublisher> NullLogger = NullLogger<RabbitMqPublisher>.Instance;
+
+    // ResiliencePipeline.Empty - these tests exercise RabbitMqPublisher's own fail-open/fallback
+    // behavior, not the circuit breaker itself (see ResiliencePipelinesTests in Common.Tests).
+    private static readonly ResiliencePipeline NoBreaker = ResiliencePipeline.Empty;
 
     private static Mock<IChannel> NewOpenChannelMock()
     {
@@ -41,7 +46,7 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
 
@@ -56,7 +61,7 @@ public class RabbitMqPublisherTests
         connection.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("broker unreachable"));
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
 
@@ -78,7 +83,7 @@ public class RabbitMqPublisherTests
         await cts.CancelAsync();
         var connection = new Mock<IRabbitMqConnection>();
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", cts.Token);
 
@@ -98,7 +103,7 @@ public class RabbitMqPublisherTests
             .ThrowsAsync(new InvalidOperationException("broker unreachable"));
         var fallbackStore = new Mock<IMessageFallbackStore>();
         var logger = new Mock<ILogger<RabbitMqPublisher>>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, logger.Object);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, logger.Object, NoBreaker);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
 
@@ -122,7 +127,7 @@ public class RabbitMqPublisherTests
             .Returns(ValueTask.FromException(new InvalidOperationException("publish failed")));
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
 
         await sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None);
 
@@ -137,7 +142,7 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
 
         await sut.PublishAsync(new { }, "topic.a", CancellationToken.None);
         await sut.PublishAsync(new { }, "topic.b", CancellationToken.None);
@@ -173,7 +178,7 @@ public class RabbitMqPublisherTests
                 return channel.Object;
             });
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
 
         // One more publish than the pool's fixed capacity (16) - if a slot leaked on every
         // failure, the pool would already be fully exhausted well before this many calls.
@@ -200,7 +205,7 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
         var message = new FallbackMessage("msg-1", "some.topic", "{}", DateTime.UtcNow);
 
         var result = await sut.TryRepublishAsync(message, CancellationToken.None);
@@ -215,7 +220,7 @@ public class RabbitMqPublisherTests
         connection.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("still unreachable"));
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
         var message = new FallbackMessage("msg-1", "some.topic", "{}", DateTime.UtcNow);
 
         var result = await sut.TryRepublishAsync(message, CancellationToken.None);
@@ -233,7 +238,7 @@ public class RabbitMqPublisherTests
         var channel = NewOpenChannelMock();
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
         await sut.PublishAsync(new { }, "some.topic", CancellationToken.None);
 
         await sut.DisposeAsync();
@@ -265,7 +270,7 @@ public class RabbitMqPublisherTests
             });
         var connection = NewConnectionReturning(channel.Object);
         var fallbackStore = new Mock<IMessageFallbackStore>();
-        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger);
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, NullLogger, NoBreaker);
 
         var publishTask = sut.PublishAsync(new { }, "some.topic", CancellationToken.None);
         await channelRented.Task;

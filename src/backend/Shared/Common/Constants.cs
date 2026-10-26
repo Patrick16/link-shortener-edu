@@ -43,4 +43,11 @@ public static class Constants
     public const string InternalApiKeyHeaderName = "X-Internal-Api-Key";
     public const string InternalApiKeyAuthenticationScheme = "InternalApiKey";
     public const string InternalClaim = "internal";
+
+    // Keys for the keyed-DI circuit-breaker pipelines registered via ResiliencePipelines -
+    // constants (not ad hoc string literals at each registration/injection site) so a typo
+    // becomes a compile error, not a keyed-service lookup that silently fails at startup.
+    public const string RedisCircuitBreakerKey = "redis";
+    public const string GrpcCircuitBreakerKey = "grpc";
+    public const string RabbitMqCircuitBreakerKey = "rabbitmq";
 }

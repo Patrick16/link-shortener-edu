@@ -1,7 +1,9 @@
 using Common.Models;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Polly;
 
 namespace Common;
 
@@ -17,8 +19,12 @@ namespace Common;
 // pitfalls/redis-instance-name-breaks-cross-service-cache-sharing.md. All three now share one
 // empty InstanceName for this reason; do not give any of them a distinct one without re-reading
 // that pitfall first.
-public class LinkCacheService(IDistributedCache cache, IConfiguration configuration, ILogger<EntityCacheService<Link>> logger) :
-    EntityCacheService<Link>(cache, configuration, logger)
+public class LinkCacheService(
+    IDistributedCache cache,
+    IConfiguration configuration,
+    ILogger<EntityCacheService<Link>> logger,
+    [FromKeyedServices(Constants.RedisCircuitBreakerKey)] ResiliencePipeline resiliencePipeline) :
+    EntityCacheService<Link>(cache, configuration, logger, resiliencePipeline)
 {
     protected override string Key(string id) => $"link:{id}";
 }

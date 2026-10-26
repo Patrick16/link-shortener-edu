@@ -1,7 +1,10 @@
+using Common;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Extensions.Logging;
+using Polly;
 
 namespace Infrastructure;
 
@@ -20,13 +23,30 @@ public static class GeoIpExtensions
     {
         builder.AddRedisDistributedCache();
         builder.Services.AddHttpClient<IpApiGeoIpResolver>(client =>
-        {
-            client.BaseAddress = new Uri("http://ip-api.com");
-        });
+            {
+                client.BaseAddress = new Uri("http://ip-api.com");
+            })
+            // ip-api.com's free tier is both rate-limited and a real network hop with a 3s
+            // timeout per call (see IpApiGeoIpResolver) - a dead or throttled dependency would
+            // otherwise make every click pay that full 3s before falling back to "no geo data"
+            // (CachingGeoIpResolver's own catch). Microsoft.Extensions.Http.Resilience wires this
+            // straight into the HttpClient pipeline, unlike Redis/gRPC/RabbitMQ below which have
+            // no such built-in hook and need an explicit ExecuteAsync at the call site.
+            .AddResilienceHandler("geo-ip-circuit-breaker", resilience => resilience.AddCircuitBreaker(new()
+            {
+                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                    .Handle<Exception>(ex => ex is not OperationCanceledException)
+                    .HandleResult(response => (int)response.StatusCode >= 500),
+                FailureRatio = 0.5,
+                MinimumThroughput = 10,
+                SamplingDuration = TimeSpan.FromSeconds(30),
+                BreakDuration = TimeSpan.FromSeconds(15),
+            }));
         builder.Services.AddSingleton<IGeoIpResolver>(sp => new CachingGeoIpResolver(
             sp.GetRequiredService<IpApiGeoIpResolver>(),
             sp.GetRequiredService<IDistributedCache>(),
-            sp.GetRequiredService<ILogger<CachingGeoIpResolver>>()));
+            sp.GetRequiredService<ILogger<CachingGeoIpResolver>>(),
+            sp.GetRequiredKeyedService<ResiliencePipeline>(Constants.RedisCircuitBreakerKey)));
 
         return builder;
     }

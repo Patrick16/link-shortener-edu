@@ -2,13 +2,17 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Polly;
 
 namespace Common.Tests;
 
 public record TestEntity(string Id, string Value);
 
+// ResiliencePipeline.Empty is a no-op pipeline (always runs the delegate, never trips) - these
+// tests exercise GetCachedAsync/CacheAsync/InvalidateCacheAsync's own fail-open behavior, not the
+// circuit breaker itself (see ResiliencePipelinesTests for that).
 public class TestEntityCacheService(IDistributedCache cache, IConfiguration configuration)
-    : EntityCacheService<TestEntity>(cache, configuration, NullLogger<EntityCacheService<TestEntity>>.Instance)
+    : EntityCacheService<TestEntity>(cache, configuration, NullLogger<EntityCacheService<TestEntity>>.Instance, ResiliencePipeline.Empty)
 {
     protected override string Key(string id) => $"test:{id}";
 }

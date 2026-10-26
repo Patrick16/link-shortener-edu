@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging;
+using Polly;
 
 namespace Infrastructure;
 
@@ -15,7 +16,16 @@ namespace Infrastructure;
 // same Redis instance *and* the same Redis:InstanceName, so a cache entry either consumer writes
 // is visible to the other - whichever of the two near-simultaneous deliveries resolves first wins
 // the real API call, the other has a real chance of hitting cache instead.
-public sealed class CachingGeoIpResolver(IGeoIpResolver inner, IDistributedCache cache, ILogger<CachingGeoIpResolver> logger) : IGeoIpResolver
+// resiliencePipeline is the same Redis circuit breaker RedisExtensions.AddRedisDistributedCache
+// registers for EntityCacheService/LinkCacheService - passed in explicitly here (this type is
+// always constructed via a factory lambda in GeoIpExtensions, never auto-activated by the
+// container) rather than resolved through [FromKeyedServices], since there's no DI activation
+// happening at this call site to attach the attribute to.
+public sealed class CachingGeoIpResolver(
+    IGeoIpResolver inner,
+    IDistributedCache cache,
+    ILogger<CachingGeoIpResolver> logger,
+    ResiliencePipeline resiliencePipeline) : IGeoIpResolver
 {
     // Comfortably longer than how far apart two fan-out consumers' deliveries for the same event
     // can realistically drift, and short enough that a visitor's geolocation (which can genuinely
@@ -42,7 +52,8 @@ public sealed class CachingGeoIpResolver(IGeoIpResolver inner, IDistributedCache
         // error on the cache write turned a successfully-persisted click into a 502 to the browser).
         try
         {
-            var cached = await cache.GetStringAsync(key, cancellationToken);
+            var cached = await resiliencePipeline.ExecuteAsync(
+                ct => new ValueTask<string?>(cache.GetStringAsync(key, ct)), cancellationToken);
             if (cached is not null)
             {
                 return JsonSerializer.Deserialize<GeoLocation>(cached);
@@ -61,7 +72,8 @@ public sealed class CachingGeoIpResolver(IGeoIpResolver inner, IDistributedCache
             // lookup for a given IP is just as expensive to repeat against the rate limit as a
             // successful one, and just as likely to still be true moments later for the other
             // consumer.
-            await cache.SetStringAsync(key, JsonSerializer.Serialize(resolved), CacheOptions, cancellationToken);
+            await resiliencePipeline.ExecuteAsync(
+                ct => new ValueTask(cache.SetStringAsync(key, JsonSerializer.Serialize(resolved), CacheOptions, ct)), cancellationToken);
         }
         catch (Exception ex)
         {

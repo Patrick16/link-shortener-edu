@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Polly.CircuitBreaker;
 
 namespace WebDefaults;
 
@@ -91,6 +92,29 @@ internal sealed class GlobalExceptionHandler(
                     Status = grpcStatusCode,
                     Title = "Downstream service unavailable.",
                     Detail = "The synchronous gRPC call to the downstream service failed. No fallback queue exists for this messaging mode.",
+                    Type = "https://tools.ietf.org/html/rfc7231#section-6.6.4",
+                },
+            });
+        }
+
+        // A Polly circuit breaker (Redis/gRPC/RabbitMQ, see ResiliencePipelines) that's currently
+        // open throws this instead of letting the call attempt and time out. Same honest shape as
+        // the RpcException branch above - "a dependency this request needs is currently being
+        // bypassed," not "this service itself is broken" - and the same status code a slow timeout
+        // from the same dependency would eventually have produced anyway, just without the wait.
+        if (exception is BrokenCircuitException)
+        {
+            httpContext.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+
+            return await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
+            {
+                HttpContext = httpContext,
+                Exception = exception,
+                ProblemDetails = new ProblemDetails
+                {
+                    Status = StatusCodes.Status503ServiceUnavailable,
+                    Title = "Downstream service unavailable.",
+                    Detail = "A circuit breaker is currently open for this dependency - failing fast instead of waiting out its timeout.",
                     Type = "https://tools.ietf.org/html/rfc7231#section-6.6.4",
                 },
             });

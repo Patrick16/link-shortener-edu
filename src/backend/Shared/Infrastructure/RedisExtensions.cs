@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
 namespace Infrastructure;
@@ -28,6 +29,16 @@ public static class RedisExtensions
             options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
         });
         builder.Services.AddHostedService<RedisWarmupService>();
+
+        // Shared by EntityCacheService/LinkCacheService (this IDistributedCache) and, in whichever
+        // service also calls AddGeoIpResolution, CachingGeoIpResolver - same registration either
+        // way, since both wrap calls into Redis. Keyed, not a plain singleton: a process can also
+        // register a gRPC/RabbitMQ breaker (see GrpcMessagingExtensions/RabbitMqExtensions) and
+        // ResiliencePipeline has no other way to tell them apart by type alone.
+        builder.Services.TryAddKeyedSingleton(Constants.RedisCircuitBreakerKey, (sp, key) =>
+            ResiliencePipelines.BuildCircuitBreaker(
+                (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!)));
+
         return builder;
     }
 

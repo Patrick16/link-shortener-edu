@@ -1,7 +1,9 @@
 using Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace Infrastructure;
 
@@ -19,6 +21,9 @@ public static class RabbitMqExtensions
 
         var fallbackConnectionString = builder.Configuration.GetConnectionString(Constants.RabbitMqFallbackConnectionString);
         builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallbackStore(fallbackConnectionString!));
+        builder.Services.TryAddKeyedSingleton(Constants.RabbitMqCircuitBreakerKey, (sp, key) =>
+            ResiliencePipelines.BuildCircuitBreaker(
+                (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!)));
         builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
         builder.Services.AddHostedService<RabbitMqWarmupService>();
         builder.Services.AddHostedService<RabbitMqRetryWorker>();

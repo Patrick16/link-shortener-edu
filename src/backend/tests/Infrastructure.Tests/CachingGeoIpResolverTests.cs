@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Polly;
 
 namespace Infrastructure.Tests;
 
@@ -13,8 +14,10 @@ public class CachingGeoIpResolverTests
         return inner;
     }
 
+    // ResiliencePipeline.Empty: these tests exercise ResolveAsync's own fail-open try/catch, not
+    // the circuit breaker itself (see ResiliencePipelinesTests in Common.Tests for that).
     private static CachingGeoIpResolver NewSut(Mock<IGeoIpResolver> inner, Mock<IDistributedCache> cache) =>
-        new(inner.Object, cache.Object, NullLogger<CachingGeoIpResolver>.Instance);
+        new(inner.Object, cache.Object, NullLogger<CachingGeoIpResolver>.Instance, ResiliencePipeline.Empty);
 
     [Fact]
     public async Task ResolveAsync_CacheWriteThrows_StillReturnsTheResolvedResultInsteadOfThrowing()

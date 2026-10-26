@@ -3,7 +3,10 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using Common;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Polly;
 using RabbitMQ.Client;
 
 namespace Infrastructure;
@@ -11,11 +14,19 @@ namespace Infrastructure;
 public sealed class RabbitMqPublisher(
     IRabbitMqConnection connection,
     IMessageFallbackStore fallbackStore,
-    ILogger<RabbitMqPublisher> logger) : IMessagePublisher, IAsyncDisposable
+    ILogger<RabbitMqPublisher> logger,
+    [FromKeyedServices(Common.Constants.RabbitMqCircuitBreakerKey)] ResiliencePipeline resiliencePipeline) : IMessagePublisher, IAsyncDisposable
 {
     private readonly IRabbitMqConnection _connection = connection;
     private readonly IMessageFallbackStore _fallbackStore = fallbackStore;
     private readonly ILogger<RabbitMqPublisher> _logger = logger;
+
+    // A dead broker still means every publish pays RentChannelAsync's real connect cost (or
+    // whatever's left of TryPublishAsync's own CancellationToken budget) before the existing
+    // catch below falls back to the SQLite queue - the breaker skips straight to that fallback
+    // once RabbitMQ is known-dead. BrokenCircuitException is caught by the same catch(Exception)
+    // below as any other publish failure, so it reaches exactly the same fail-open path.
+    private readonly ResiliencePipeline _resilience = resiliencePipeline;
 
     // Bounded pool of already-open, already-exchange-declared channels, reused across publishes
     // instead of opening a channel + re-declaring the exchange + closing the channel on every single
@@ -86,8 +97,6 @@ public sealed class RabbitMqPublisher(
         var healthy = false;
         try
         {
-            channel = await RentChannelAsync(cancellationToken).ConfigureAwait(false);
-
             var properties = new BasicProperties
             {
                 MessageId = messageId,
@@ -102,13 +111,21 @@ public sealed class RabbitMqPublisher(
                 properties.Headers = new Dictionary<string, object?> { ["traceparent"] = traceParent };
             }
 
+            // Only RentChannelAsync goes through the breaker, not BasicPublishAsync too - renting
+            // against a dead broker is where the real connect cost (and the timeout the breaker
+            // exists to skip) actually gets paid; assigning `channel` immediately once rented,
+            // before attempting the publish, is what lets the existing finally below still
+            // release/dispose it correctly if BasicPublishAsync itself is what fails.
+            channel = await _resilience.ExecuteAsync(
+                ct => new ValueTask<IChannel>(RentChannelAsync(ct)), cancellationToken).ConfigureAwait(false);
+
             await channel.BasicPublishAsync(
                 exchange: MessagingConstants.EventsExchange,
                 routingKey: topic,
                 mandatory: false,
                 basicProperties: properties,
                 body: Encoding.UTF8.GetBytes(payload),
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             healthy = true;
             // Debug, not Information - one publish per CreateLink/redirect request, same volume

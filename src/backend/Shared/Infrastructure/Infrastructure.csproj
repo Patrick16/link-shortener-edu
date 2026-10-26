@@ -25,8 +25,14 @@
 		<PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
 		<PackageReference Include="MongoDB.Driver" />
 		<PackageReference Include="Microsoft.Extensions.Http" />
+		<!-- GeoIpExtensions' AddResilienceHandler on the ip-api.com HttpClient. -->
+		<PackageReference Include="Microsoft.Extensions.Http.Resilience" />
 		<PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" />
 		<PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+		<!-- ResiliencePipelines (via the Common project reference) plus the gRPC/RabbitMQ
+		     circuit-breaker wiring in GrpcMessagingExtensions/RabbitMqExtensions, both of which
+		     construct a ResiliencePipeline directly rather than only consuming Common's. -->
+		<PackageReference Include="Polly.Core" />
 	</ItemGroup>
 
 	<PropertyGroup>

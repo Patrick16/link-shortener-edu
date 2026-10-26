@@ -20,6 +20,13 @@ public static class Extensions
     // below. Add to this list — see Infrastructure/MessagingActivitySource.cs.
     private static readonly string[] AdditionalActivitySources = ["LinkShortener.Messaging"];
 
+    // Same idea as AdditionalActivitySources above, for custom Meters instead of ActivitySources —
+    // see Common/ResilienceMetrics.cs (circuit-breaker open/close/half-open counts). A string
+    // literal here, not a reference to ResilienceMetrics.MeterName: ServiceDefaults is a
+    // foundational project other Shared libraries depend on, so it deliberately doesn't take a
+    // dependency the other direction just to avoid re-typing one constant.
+    private static readonly string[] AdditionalMeterNames = ["LinkShortener.Resilience"];
+
     public static IHostApplicationBuilder AddServiceDefaults(this IHostApplicationBuilder builder)
     {
         var otlpEndpoint = builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"];
@@ -32,9 +39,15 @@ public static class Extensions
         // here without re-registering it.
         builder.Services.AddOpenTelemetry()
             .ConfigureResource(resource => resource.AddService(builder.Environment.ApplicationName))
-            .WithMetrics(metrics => metrics
-                .AddHttpClientInstrumentation()
-                .AddRuntimeInstrumentation())
+            .WithMetrics(metrics =>
+            {
+                metrics.AddHttpClientInstrumentation().AddRuntimeInstrumentation();
+
+                foreach (var meterName in AdditionalMeterNames)
+                {
+                    metrics.AddMeter(meterName);
+                }
+            })
             .WithTracing(tracing =>
             {
                 tracing.AddHttpClientInstrumentation();
