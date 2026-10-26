@@ -2598,6 +2598,75 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Traffic report modal - same overlay/card pattern as .compare-modal-*, holding one
+   TrafficReportView (stat tiles + latency + checks + raw output can get tall, hence its own
+   scrollable card rather than growing the sidebar/header it was opened from). Shared by
+   TrafficResultPanel (a just-finished run) and RunHistoryPanel (a past run), see
+   TrafficReportModal. */
+
+.traffic-report-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 16px;
+}
+
+.traffic-report-modal {
+  width: 100%;
+  max-width: 820px;
+  max-height: 85vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.traffic-report-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.traffic-report-modal-header h3 {
+  font-size: 16px;
+  margin: 0;
+  color: var(--text-h);
+}
+
+.traffic-report-modal-subtitle {
+  font-size: 12px;
+  color: var(--text);
+  margin: 2px 0 0;
+}
+
+.traffic-report-modal-header button {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.traffic-report-modal-header button:hover {
+  color: var(--text-h);
+}
+
+.traffic-report-modal-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* Presets - global modal (reachable regardless of node selection, unlike every other control
    here), opened from the header button. Overlay/header chrome mirrors .access-modal-*; the diff
    table inside the "preview & apply" step reuses .compare-table/.compare-row-diff directly rather

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AxisChart } from './AxisChart'
-import { TrafficReportView } from './TrafficReportView'
+import { TrafficReportModal } from './TrafficReportModal'
 import type { TrafficRunState } from '../hooks/useTrafficRun'
 
 interface Props
@@ -18,16 +18,22 @@ function readCollapsed(): boolean {
   }
 }
 
-// Header strip: while a run is active, its live progress bar + charts; once it finishes, the same
-// report a moment ago would have shown inline. Config lives in the left sidebar instead - this
+// Header strip: while a run is active, its live progress bar + charts, collapsible the same way as
+// before. Once it finishes, the report no longer grows the strip inline - it pops up in
+// TrafficReportModal instead (auto-opened once, reopenable via "View results"), so a tall report
+// never pushes the graph/sidebars below the fold. Config lives in the left sidebar instead - this
 // panel only ever reflects a run already in flight or just completed, never edits anything.
-//
-// A full report (stat tiles + latency + checks + per-endpoint status + raw output) can get tall
-// enough to push the graph and sidebars below the fold if the header were left to grow freely, so
-// its content sits in a height-capped, scrollable box and can be collapsed to a single line.
 export function TrafficResultPanel({ running, progress, progressHistory, report, error, cancelled, cancel, verdict, traceHops, fallbackTotalSeconds }: Props) {
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [cancelling, setCancelling] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
+
+  // Each finished run hands back a fresh `report` object, so this fires exactly once per
+  // completion - popping the modal open automatically instead of making the user hunt for a
+  // "view results" button right after the run they were just watching ends.
+  useEffect(() => {
+    if (report) setModalOpen(true)
+  }, [report])
 
   async function handleCancel() {
     setCancelling(true)
@@ -80,17 +86,25 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
               {cancelling ? 'Cancelling...' : 'Cancel run'}
             </button>
           )}
-          <button type="button" className="traffic-result-toggle" onClick={toggleCollapsed}>
-            {collapsed ? 'Show details' : 'Hide details'}
-          </button>
+          {running ? (
+            <button type="button" className="traffic-result-toggle" onClick={toggleCollapsed}>
+              {collapsed ? 'Show details' : 'Hide details'}
+            </button>
+          ) : (
+            report && (
+              <button type="button" className="traffic-result-toggle" onClick={() => setModalOpen(true)}>
+                View results
+              </button>
+            )
+          )}
         </div>
       </div>
 
       {error && <p className="service-card-error">{error}</p>}
 
-      {!collapsed && (
+      {running && !collapsed && (
         <div className="traffic-result-content">
-          {running && progress?.phase === 'preparing' && (
+          {progress?.phase === 'preparing' && (
             <div className="traffic-progress">
               <div className="progress-bar-track">
                 <div className="progress-bar-fill" style={{ width: `${progress.percentComplete}%` }} />
@@ -101,7 +115,7 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
             </div>
           )}
 
-          {running && progress?.phase !== 'preparing' && (
+          {progress?.phase !== 'preparing' && (
             <div className="traffic-progress">
               <div className="progress-bar-track">
                 <div className="progress-bar-fill" style={{ width: `${progress?.percentComplete ?? 0}%` }} />
@@ -121,9 +135,18 @@ export function TrafficResultPanel({ running, progress, progressHistory, report,
               )}
             </div>
           )}
-
-          {!running && report && <TrafficReportView report={report} verdict={verdict} traceHops={traceHops} />}
         </div>
+      )}
+
+      {modalOpen && report && (
+        <TrafficReportModal
+          title="Last run"
+          subtitle={`${report.httpRequests} requests, ${report.failedRequests} failed`}
+          report={report}
+          verdict={verdict}
+          traceHops={traceHops}
+          onClose={() => setModalOpen(false)}
+        />
       )}
     </div>
   )

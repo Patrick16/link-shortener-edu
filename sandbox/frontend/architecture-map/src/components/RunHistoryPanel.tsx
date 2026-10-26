@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { controlApi } from '../api/controlApi'
-import { TrafficReportView } from './TrafficReportView'
+import { TrafficReportModal } from './TrafficReportModal'
 import { CompareRunsModal } from './CompareRunsModal'
 import { formatTimestamp } from '../utils/formatTimestamp'
 import type { RunSnapshot, RunSummary } from '../types/controlApi'
@@ -174,78 +174,6 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
     return <CompareRunsModal runIds={[...checked]} onClose={() => setComparing(false)} />
   }
 
-  if (selected) {
-    return (
-      <div className="run-history-panel">
-        <div className="run-history-detail-header">
-          <button onClick={() => setSelected(null)}>&larr; Back to history</button>
-          <button className="run-history-reuse" onClick={() => onReuseRun(selected)} title="Load this run's test sequence/ramp and re-apply its system configuration">
-            Reuse config
-          </button>
-        </div>
-        <div className="run-history-detail-title-row">
-          <h3 className="run-history-detail-title">{selected.request.scenario}</h3>
-          <button
-            className="run-history-rename"
-            onClick={() => renameRun(selected.id, selected.request.scenario)}
-            disabled={renamingId === selected.id}
-            title="Rename this run"
-            aria-label="Rename this run"
-          >
-            <PencilIcon />
-          </button>
-        </div>
-        {renameError && <p className="service-card-error">{renameError}</p>}
-        <p className="run-history-detail-timestamp">{formatTimestamp(selected.timestamp)}</p>
-
-        <div className="run-history-detail-section">
-          <h4>Steps</h4>
-          <ol className="run-history-steps">
-            {selected.request.steps.map((step, i) => (
-              <li key={i}>
-                {step.endpointId}
-                {step.pauseAfterSeconds > 0 && ` (pause ${step.pauseAfterSeconds}s)`}
-              </li>
-            ))}
-          </ol>
-        </div>
-
-        <div className="run-history-detail-section">
-          <h4>Infra at the time</h4>
-          <ul className="run-history-infra">
-            <li>load balancing: {selected.infra.nginxBypassed ? 'OFF (bypassed)' : 'ON'}</li>
-            <li>connection pooling: {selected.infra.pgcatEnabled ? 'ON' : 'OFF'}</li>
-            <li>caching: {selected.infra.cacheEnabled ? 'ON' : 'OFF'}</li>
-          </ul>
-          <ul className="run-history-infra">
-            {selected.replicas
-              .filter((r) => r.count !== 1)
-              .map((r) => (
-                <li key={r.serviceId}>
-                  {r.serviceId}: &times;{r.count}
-                </li>
-              ))}
-          </ul>
-        </div>
-
-        {selected.postgresConnections && (
-          <div className="run-history-detail-section">
-            <h4>Postgres connections at the time</h4>
-            <ul className="run-history-infra">
-              {Object.entries(selected.postgresConnections.connectionsByDatabase).map(([db, count]) => (
-                <li key={db}>
-                  {db}: {count}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        <TrafficReportView report={selected.report} verdict={selected.verdict} traceHops={selected.traceHops} snapshot={selected} />
-      </div>
-    )
-  }
-
   return (
     <div className="run-history-panel">
       <div className="run-history-header">
@@ -311,6 +239,81 @@ export function RunHistoryPanel({ lastSavedRunId, onReuseRun }: Props) {
           </li>
         ))}
       </ul>
+
+      {selected && (
+        <TrafficReportModal
+          title={selected.request.scenario}
+          subtitle={formatTimestamp(selected.timestamp)}
+          report={selected.report}
+          verdict={selected.verdict}
+          traceHops={selected.traceHops}
+          snapshot={selected}
+          onClose={() => setSelected(null)}
+        >
+          <div className="run-history-detail-header">
+            <button
+              className="run-history-reuse"
+              onClick={() => onReuseRun(selected)}
+              title="Load this run's test sequence/ramp and re-apply its system configuration"
+            >
+              Reuse config
+            </button>
+            <button
+              className="run-history-rename"
+              onClick={() => renameRun(selected.id, selected.request.scenario)}
+              disabled={renamingId === selected.id}
+              title="Rename this run"
+              aria-label="Rename this run"
+            >
+              <PencilIcon />
+            </button>
+          </div>
+          {renameError && <p className="service-card-error">{renameError}</p>}
+
+          <div className="run-history-detail-section">
+            <h4>Steps</h4>
+            <ol className="run-history-steps">
+              {selected.request.steps.map((step, i) => (
+                <li key={i}>
+                  {step.endpointId}
+                  {step.pauseAfterSeconds > 0 && ` (pause ${step.pauseAfterSeconds}s)`}
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          <div className="run-history-detail-section">
+            <h4>Infra at the time</h4>
+            <ul className="run-history-infra">
+              <li>load balancing: {selected.infra.nginxBypassed ? 'OFF (bypassed)' : 'ON'}</li>
+              <li>connection pooling: {selected.infra.pgcatEnabled ? 'ON' : 'OFF'}</li>
+              <li>caching: {selected.infra.cacheEnabled ? 'ON' : 'OFF'}</li>
+            </ul>
+            <ul className="run-history-infra">
+              {selected.replicas
+                .filter((r) => r.count !== 1)
+                .map((r) => (
+                  <li key={r.serviceId}>
+                    {r.serviceId}: &times;{r.count}
+                  </li>
+                ))}
+            </ul>
+          </div>
+
+          {selected.postgresConnections && (
+            <div className="run-history-detail-section">
+              <h4>Postgres connections at the time</h4>
+              <ul className="run-history-infra">
+                {Object.entries(selected.postgresConnections.connectionsByDatabase).map(([db, count]) => (
+                  <li key={db}>
+                    {db}: {count}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </TrafficReportModal>
+      )}
     </div>
   )
 }
