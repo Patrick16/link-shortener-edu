@@ -97,11 +97,14 @@ internal sealed class GlobalExceptionHandler(
             });
         }
 
-        // A Polly circuit breaker (Redis/gRPC/RabbitMQ, see ResiliencePipelines) that's currently
-        // open throws this instead of letting the call attempt and time out. Same honest shape as
-        // the RpcException branch above - "a dependency this request needs is currently being
-        // bypassed," not "this service itself is broken" - and the same status code a slow timeout
-        // from the same dependency would eventually have produced anyway, just without the wait.
+        // In practice this is only ever the gRPC breaker (SyncGrpcDispatcher) - the Redis
+        // (EntityCacheService/CachingGeoIpResolver) and RabbitMQ (RabbitMqPublisher) breakers both
+        // sit behind their own try/catch(Exception) and fail open internally, so a
+        // BrokenCircuitException from either of those never escapes to this handler at all. Same
+        // honest shape as the RpcException branch above either way - "a dependency this request
+        // needs is currently being bypassed," not "this service itself is broken" - and the same
+        // status code a slow timeout from that dependency would eventually have produced anyway,
+        // just without the wait.
         if (exception is BrokenCircuitException)
         {
             httpContext.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
