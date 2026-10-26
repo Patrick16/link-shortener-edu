@@ -399,7 +399,10 @@ configuration instead and can optionally link to one of these scenarios:
 ![Saving the current combination as a named custom scenario](assets/user-guide/k6-save-scenario.jpg)
 
 Hit **Run traffic**. While it runs, the header strip shows a live progress bar and charts (active
-VUs, iterations/sec); **Cancel run** is available the whole time.
+VUs, iterations/sec); **Cancel run** is available the whole time. The moment the run finishes, its
+report pops up automatically in a modal (the same one described in [§4.11](#411-run-history-reuse-and-compare)
+below) instead of growing the header strip inline; close it and reopen it later with the **View
+results** button that replaces the progress toggle once a run is no longer active.
 
 ### 4.11 Run history, reuse, and compare
 
@@ -408,16 +411,19 @@ with its scenario name, timestamp, request count/rate, and failure count:
 
 ![Past runs list, with real timestamps and rates](assets/user-guide/run-history-panel.jpg)
 
-Opening one shows the full detail: its step sequence, the **infra configuration it ran under**
-(load balancing/pooling/caching on/off, any non-default replica counts, PgCat pool settings,
-Postgres connection counts at the time) — useful for understanding *why* two runs performed
-differently — and a **Reuse config** button that reloads that run's sequence and ramp straight back
-into the k6 panel and reapplies its infra settings:
+Opening one pops up its full detail in a modal over the list — the list itself stays visible
+underneath, dimmed; close the modal (click outside it, press Escape, or hit the **×**) to get back
+to it. The modal shows the run's step sequence, the **infra configuration it ran under** (load
+balancing/pooling/caching on/off, any non-default replica counts, PgCat pool settings, Postgres
+connection counts at the time) — useful for understanding *why* two runs performed differently —
+and a **Reuse config** button that reloads that run's sequence and ramp straight back into the k6
+panel and reapplies its infra settings:
 
 ![A run's detail: steps and the infra snapshot at the time it ran](assets/user-guide/run-detail-top.jpg)
 
-Below that is the full report: stat tiles, a latency breakdown, status codes per endpoint, the raw
-k6 output, and — the most useful part for actually learning from a run — the **bottleneck panel**:
+Below that, inside the same modal, is the full report: stat tiles, a latency breakdown, status
+codes per endpoint, the raw k6 output, and — the most useful part for actually learning from a run
+— the **bottleneck panel**:
 
 ![Stat tiles: 32000 requests, 0 failed, 10 max VUs](assets/user-guide/traffic-report-stats.jpg)
 
