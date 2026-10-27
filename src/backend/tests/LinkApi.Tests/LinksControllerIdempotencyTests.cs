@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Common;
 using Common.Models;
 using Infrastructure;
@@ -23,6 +24,9 @@ internal sealed class FakeIdempotencyStore : IIdempotencyStore
     private readonly Dictionary<string, IdempotencyRecord> _records = [];
 
     public void SeedPending(string key) => _records[key] = new IdempotencyRecord(IdempotencyStatus.Pending);
+
+    public void SeedCompleted(string key, int statusCode, string contentType, string bodyJson) =>
+        _records[key] = new IdempotencyRecord(IdempotencyStatus.Completed, statusCode, contentType, bodyJson);
 
     public bool Contains(string key) => _records.ContainsKey(key);
 
@@ -178,6 +182,50 @@ public class LinksControllerIdempotencyTests
         var secondResult = Assert.IsType<ObjectResult>(second.Result);
         Assert.Equal(StatusCodes.Status400BadRequest, firstResult.StatusCode);
         Assert.Equal(StatusCodes.Status400BadRequest, secondResult.StatusCode);
+        hashGenerator.Verify(x => x.Generate(It.IsAny<string>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CreateLink_ReplayedProblemResponse_RestampsTraceIdToTheReplayingRequestsOwn()
+    {
+        // A replayed problem+json body must carry THIS request's own trace id, not the original
+        // caller's stale one baked in when Problem() first ran - otherwise debugging the replayed
+        // response by its traceId lands on an unrelated, earlier span in Jaeger/Loki/Grafana
+        // (found during review). Seeded directly instead of produced by a real Problem() call,
+        // since this controller-only test harness has no DI-configured ProblemDetailsFactory to
+        // reproduce the real traceId-stamping behavior - this isolates just the replay-side fix.
+        await using var context = NewContext();
+        var idempotencyStore = new FakeIdempotencyStore();
+        idempotencyStore.SeedCompleted(
+            "stale-trace-key",
+            StatusCodes.Status400BadRequest,
+            "application/problem+json",
+            """{"title":"Invalid link.","status":400,"traceId":"stale-original-trace"}""");
+        var sut = NewController(context, idempotencyStore, out _);
+        sut.HttpContext.TraceIdentifier = "current-replaying-trace";
+        var request = new LinkCreateRequest { OriginalLink = "https://example.com" };
+
+        var result = await sut.CreateLink(request, CancellationToken.None, "stale-trace-key");
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        var node = Assert.IsType<JsonObject>(objectResult.Value);
+        Assert.Equal("current-replaying-trace", node["traceId"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task CreateLink_IdempotencyKeyTooLong_Returns400WithoutClaimingOrGeneratingAHash()
+    {
+        await using var context = NewContext();
+        var idempotencyStore = new FakeIdempotencyStore();
+        var sut = NewController(context, idempotencyStore, out var hashGenerator);
+        var request = new LinkCreateRequest { OriginalLink = "https://example.com" };
+        var tooLongKey = new string('a', 257);
+
+        var result = await sut.CreateLink(request, CancellationToken.None, tooLongKey);
+
+        var objectResult = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, objectResult.StatusCode);
+        Assert.False(idempotencyStore.Contains(tooLongKey));
         hashGenerator.Verify(x => x.Generate(It.IsAny<string>()), Times.Never);
     }
 

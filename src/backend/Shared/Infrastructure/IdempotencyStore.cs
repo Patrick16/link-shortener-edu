@@ -49,7 +49,16 @@ public sealed class RedisIdempotencyStore(
 {
     private static string Key(string idempotencyKey) => $"idempotency:links-create:{idempotencyKey}";
 
-    private static readonly TimeSpan InFlightTtl = TimeSpan.FromSeconds(30);
+    // 120s, not a tighter bound - CreateWithAliasAsync always takes the synchronous gRPC path (and
+    // so does the plain-hash path under Messaging:Mode=grpc) with no deadline of its own on that
+    // call, so its real duration is whatever the downstream dependency takes - including this
+    // project's own chaos tooling (Pumba-injected latency/partition) deliberately pushing it past
+    // a few seconds. A claim that expires while the original request is still genuinely in flight
+    // lets a retry start a second, concurrent execution instead of getting 409/replay (found during
+    // review) - 120s comfortably outlasts the delays this sandbox's own scenarios inject, while
+    // still bounding how long a crashed request's claim blocks a legitimate retry to something
+    // reasonable for a demo, not a production SLA.
+    private static readonly TimeSpan InFlightTtl = TimeSpan.FromSeconds(120);
     private static readonly TimeSpan CompletedTtl = TimeSpan.FromHours(24);
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

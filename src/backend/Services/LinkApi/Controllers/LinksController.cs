@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Common;
 using Common.Models;
@@ -39,6 +40,13 @@ public partial class LinksController(
     // overwrites this same cache key with the full TTL once it actually persists
     // (LinkCreatedConsumer.cs) - last-write-wins, no coordination needed.
     private const int OptimisticCacheTtlSeconds = 60;
+
+    // Every other client-supplied identifier here is bounded (alias: 3-32 chars); an
+    // Idempotency-Key had no cap at all, so a buggy/abusive client could mint an unbounded number
+    // of large Redis keys, each held for the full 24h completed-TTL (found during review). 256
+    // matches the conventional bound other idempotency-key APIs (e.g. Stripe) use for the same
+    // opaque-token header.
+    private const int MaxIdempotencyKeyLength = 256;
 
     // Lowercased before this ever runs (see CreateLink) - charset deliberately excludes the mixed
     // case Sha256Base62HashGenerator's alphabet uses, so a custom alias can never collide in format
@@ -88,6 +96,14 @@ public partial class LinksController(
 
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
+            if (idempotencyKey.Length > MaxIdempotencyKeyLength)
+            {
+                return Problem(
+                    detail: $"Idempotency-Key must be at most {MaxIdempotencyKeyLength} characters.",
+                    statusCode: StatusCodes.Status400BadRequest,
+                    title: "Invalid idempotency key.");
+            }
+
             return await CreateLinkIdempotentlyAsync(idempotencyKey, request, cancellationToken);
         }
 
@@ -124,11 +140,7 @@ public partial class LinksController(
 
             // Replay the first caller's exact prior outcome - no new hash generated, nothing
             // re-published to the bus.
-            return new ObjectResult(JsonSerializer.Deserialize<JsonElement>(existing.BodyJson!, ReplayJsonOptions))
-            {
-                StatusCode = existing.StatusCode,
-                ContentTypes = { existing.ContentType! },
-            };
+            return BuildReplayResult(existing);
         }
 
         try
@@ -143,6 +155,31 @@ public partial class LinksController(
             await _idempotency.EvictAsync(idempotencyKey, cancellationToken);
             throw;
         }
+    }
+
+    // A replayed problem+json body must not carry the ORIGINAL caller's traceId - every
+    // ProblemDetails response gets one baked in at Problem()-call time (ApiExceptionHandling
+    // Extensions' CustomizeProblemDetails), so a byte-for-byte replay of the stored JSON would
+    // otherwise serve a stale, unrelated trace id in the one field meant to correlate this
+    // response with the request that produced it (found during review). Re-stamped with THIS
+    // request's own HttpContext.TraceIdentifier instead. JsonNode, not the immutable JsonElement
+    // ReplayJsonOptions path below uses elsewhere, specifically because it needs to be mutated in
+    // place; the success-response shape (LinkResponse) has no traceId field at all and is
+    // unaffected.
+    private ObjectResult BuildReplayResult(IdempotencyRecord existing)
+    {
+        if (existing.ContentType == "application/problem+json")
+        {
+            var node = JsonNode.Parse(existing.BodyJson!)!;
+            node["traceId"] = HttpContext.TraceIdentifier;
+            return new ObjectResult(node) { StatusCode = existing.StatusCode, ContentTypes = { existing.ContentType! } };
+        }
+
+        return new ObjectResult(JsonSerializer.Deserialize<JsonElement>(existing.BodyJson!, ReplayJsonOptions))
+        {
+            StatusCode = existing.StatusCode,
+            ContentTypes = { existing.ContentType! },
+        };
     }
 
     // ActionResult<T>'s own duality (a bare value via implicit conversion vs. an explicit
