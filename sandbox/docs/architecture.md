@@ -59,6 +59,9 @@ schemas) — closer to real microservice isolation, and it's the model `pgcat` p
 - **pgcat** — connection pooling to Postgres, 3 instances behind an HAProxy TCP load balancer
   (Pooler Scaling) — done
 - **nginx** — load balancer in front of the API services — cross-cutting, done
+- **Circuit breakers** (Polly) in front of Redis, RabbitMQ, the gRPC sync-messaging transport, and
+  the ip-api.com geo-IP lookup — fail fast on a known-dead dependency instead of paying its full
+  timeout on every request — done
 
 ---
 
@@ -105,7 +108,12 @@ Short version of what's real today:
   the same [RFC 7807](https://www.rfc-editor.org/rfc/rfc7807) `ProblemDetails` JSON shape (`type`,
   `title`, `status`, `detail`, `traceId`) — a global `IExceptionHandler` catches anything a
   controller doesn't handle itself, and controller code that used to return a bare string
-  (`Conflict("...")`, `Unauthorized("...")`) now returns `Problem(...)` instead.
+  (`Conflict("...")`, `Unauthorized("...")`) now returns `Problem(...)` instead. Polly circuit
+  breakers sit in front of Redis, RabbitMQ, the gRPC sync-messaging transport, and the ip-api.com
+  geo-IP lookup so a known-dead dependency fails fast instead of every request paying its full
+  timeout; the same `IExceptionHandler` maps a `BrokenCircuitException` that escapes the gRPC
+  breaker (the only one with no fail-open fallback of its own) to a `503`. Full write-up:
+  [`scenarios/patterns/circuit-breakers.md`](scenarios/patterns/circuit-breakers.md).
 - **Health checks:** all five .NET services expose `/health/live` (process is up, no dependency
   checks) and `/health/ready` (can it actually serve traffic — Postgres via `CanConnectAsync`, plus
   RabbitMQ via a real channel-open attempt for the four services that use the bus). `ShortenerService`

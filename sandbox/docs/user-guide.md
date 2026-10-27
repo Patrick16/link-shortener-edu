@@ -241,6 +241,17 @@ exhaustion on a laptop-class Docker host is a real risk); the backend caps it at
 nginx re-resolves `link-api`/`redirect-api`'s DNS on a short TTL, so new replicas start receiving
 traffic without a config reload.
 
+Scaling `link-api`/`redirect-api` down (or stopping either directly) now drains in-flight requests
+gracefully instead of risking a mid-request kill: both set `HostOptions.ShutdownTimeout` to 15s and
+Compose's own `stop_grace_period` to 20s, paired so Kestrel finishes its own connection drain
+before Docker would otherwise give up and SIGKILL the container. nginx's own DNS re-resolution
+(`valid=5s`) is a separate concern from this — it can still route a new request to a replica that's
+already mid-drain for up to that 5s window; this fix makes draining itself safe once a request
+*does* land there, it doesn't make nginx stop sending new requests to that replica any faster. See
+[the LinkApi](scenarios/nodes/link-api.md)/[RedirectApi](scenarios/nodes/redirect-api.md) node docs
+and [this pitfall](scenarios/pitfalls/shutdown-timeout-is-one-shared-sequential-clock.md) for the
+mechanism.
+
 ### 4.6 Component-specific controls
 
 These are declared per node in `architecture.json`'s `capabilities` array and rendered
@@ -479,7 +490,8 @@ than only reading about:
 - **Stop `rabbitmq`**. `POST /Links` and clicks both keep returning successfully —
   `LinkApi`/`RedirectApi` spill into a local SQLite fallback queue instead of blocking on the
   publish. Watch it fill via the fallback-queue viewers ([§5](#5-infrastructure-browser-uis),
-  ports 8086/8087); restart `rabbitmq` and `RabbitMqRetryWorker` drains the queue within 30s. See
+  ports 8086/8087); restart `rabbitmq` and `RabbitMqRetryWorker` drains the queue within roughly
+  15s on average (up to 30s, per-tick jitter). See
   [the async-messaging pattern doc](scenarios/patterns/async-messaging.md) for the mechanism, and
   its Pitfalls section for two real bugs found in this exact fallback path.
 

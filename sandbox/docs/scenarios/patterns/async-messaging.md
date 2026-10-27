@@ -43,6 +43,35 @@ Two independent hops exist today: `LinkApi` → `ShortenerService` (`LinkCreated
 `RedirectApi` → `ShortenerService`/`TrafficService` (`ClickTrackedEvent`, consumed by both, for
 different reasons — see [ShortenerService](node:shortener-service)).
 
+### Retry polling uses full jitter, not a flat interval
+
+`RabbitMqRetryWorker` used to tick on a flat `PeriodicTimer(TimeSpan.FromSeconds(30))`. If
+RabbitMQ goes down and comes back, every replica's 30s tick tends to be correlated (replicas
+usually start around the same deploy moment), so every replica's accumulated fallback-queue
+backlog would hit the just-recovered broker in the same instant — a retry storm against the exact
+piece of infrastructure that's most fragile right after recovering from an outage.
+
+The fix is **full jitter** (in the AWS sense — `random(0, base)`, not `base ± some percent`):
+
+```csharp
+// src/backend/Shared/Infrastructure/RabbitMqRetryWorker.cs
+internal static TimeSpan NextPollDelay() =>
+    TimeSpan.FromSeconds(Random.Shared.NextDouble() * PollIntervalSeconds); // PollIntervalSeconds = 30
+```
+
+The delay is re-rolled on every tick (not generated once at startup), so replicas that happened to
+start within the same narrow window keep drifting apart over time rather than staying correlated
+forever. Full jitter, not a smaller wobble, because a ±10% wobble on a 30s base only spreads ticks
+within about ±3s of each other — not enough separation when the real concern is dozens of
+replicas retrying a large backlog simultaneously; full jitter spreads ticks uniformly across the
+entire `[0, 30s)` range instead.
+
+**Accepted tradeoff: the mean poll interval drops from 30s to 15s** (the mean of `random(0, 30)`).
+This is full jitter's known, intentional cost — it decorrelates by sometimes polling much sooner
+than 30s, never later than the 30s base. Anything that assumed "the retry worker checks every 30
+seconds" (docs, mental models, manual-testing wait times) is now only an upper bound, not a
+typical value.
+
 ## Pitfalls
 
 - 🐛 [A failed RabbitMQ connection attempt was cached forever](pitfall:rabbitmq-client-connection-never-retried)
@@ -88,3 +117,5 @@ different reasons — see [ShortenerService](node:shortener-service)).
 
 - [Caching](pattern:caching) — the fix for one fan-out pitfall above is a cache shared between two
   independent consumers of the same event
+- [Circuit breakers](pattern:circuit-breakers) — a Polly breaker sits in front of both the RabbitMQ
+  publish path and the gRPC sync-transport call this pattern's mode toggle switches to

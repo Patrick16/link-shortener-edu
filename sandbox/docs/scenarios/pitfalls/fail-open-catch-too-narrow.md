@@ -45,11 +45,53 @@ cancellation that a shutting-down host or an aborted request relies on.
 **Not reproduced:** no live timeout was induced. The type hierarchy was checked by reflection, and the
 behaviour was verified by reading the code.
 
+## Second concrete instance: a generic catch swallowing cancellation, not just the wrong exception type
+
+The same underlying mistake — a catch filter that doesn't match every exception type a dependency
+can actually throw — recurs with a different exception and a different call site once a per-request
+deadline enters the picture. `EntityCacheService.GetCachedAsync`/`IsNegativelyCachedAsync` both had
+a bare `catch (Exception ex)` around their Redis reads, added for the ordinary fail-open case (a
+real Redis error should degrade to "treat as a cache miss," never fail the request). Once
+[RedirectApi](node:redirect-api) gained a per-request budget, that same broad catch also caught the
+`OperationCanceledException` the budget raises when it trips
+— logging a misleading "failed to read cache" warning and returning `null`/`false` as if it were a
+normal fail-open miss, instead of letting the cancellation propagate so the controller could shed
+the request cleanly with a `503`.
+
+⚠️ **Mistake** — `src/backend/Shared/Common/EntityCacheService.cs` (commit `6174662`):
+
+```csharp
+catch (Exception ex)
+{
+    _logger.LogWarning(ex, "Failed to read cache for {Key} - treating as a cache miss", Key(id));
+    return null;
+}
+```
+
+✅ **Do this instead** (`e9bf63d`) — exclude `OperationCanceledException`, the same shape this
+file's first instance above already used:
+
+```csharp
+catch (Exception ex) when (ex is not OperationCanceledException)
+{
+    _logger.LogWarning(ex, "Failed to read cache for {Key} - treating as a cache miss", Key(id));
+    return null;
+}
+```
+
+`CacheAsync`/`InvalidateCacheAsync` in the same file deliberately still catch broadly — they're
+pure best-effort writes with no caller waiting on a cancellation signal to matter, so there's
+nothing for them to propagate cancellation *to*. The fix only applies to the two read paths a
+caller can be actively waiting on under a deadline.
+
+**Provenance:** found by `feature-review` on commit `6174662`, fixed in `e9bf63d`.
+
 ## Relatives
 
 ### Nodes
 
-- [RedirectApi](node:redirect-api) — records the click after dispatch and must not fail the redirect
+- [RedirectApi](node:redirect-api) — records the click after dispatch and must not fail the redirect;
+  also the source of the second instance's per-request budget
 - [ReportingApi](node:reporting-api) — `RedisTopLinksReader` had the identical catch-too-narrow bug
 - [Redis](node:redis-master) — the dependency whose timeouts escaped the catch
 

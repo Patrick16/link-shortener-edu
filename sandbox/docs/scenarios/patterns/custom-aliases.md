@@ -74,7 +74,8 @@ only crash-recovery backstop) before publishing a `LinkCreatedEvent` to RabbitMQ
 way a random hash already does. A 7-day read-cache, populated after the consumer's real persist (and
 refreshed on any positive existence check, not just after a persist), would let repeat lookups of a
 popular/contested name skip Postgres. The SQLite fallback-queue worker (the one that already retries
-a stuck publish every 30s during a broker outage) would renew the claim on every retry tick, so a
+a stuck publish roughly every 15s, jittered, up to 30s, during a broker outage) would renew the
+claim on every retry tick, so a
 long broker outage wouldn't let the claim expire while the message was still in flight — with a
 `pending`/`published` marker and a reconciliation pass on `LinkApi` startup to clean up orphaned
 claims from a crash between claiming and publishing. The consumer-side conflict handling (the

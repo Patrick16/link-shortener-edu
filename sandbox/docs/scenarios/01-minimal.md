@@ -56,8 +56,8 @@ created in the first place):
    request never gets rejected for it, there's no `[Authorize]` on this endpoint
 3. In the background, `LinkApi` published a `LinkCreatedEvent` (including `userId?`) to RabbitMQ.
    If the broker was unreachable, it's queued in a local SQLite fallback file instead and retried
-   every 30s (`RabbitMqRetryWorker`, shared with `RedirectApi` — see `Shared/Infrastructure/`) — the
-   HTTP response to the caller doesn't wait on any of this
+   with jitter (averaging ~15s, up to 30s — see `RabbitMqRetryWorker`, shared with `RedirectApi`,
+   `Shared/Infrastructure/`) — the HTTP response to the caller doesn't wait on any of this
 4. `ShortenerService` consumes the event and writes the row into `links_db.links`. This is
    the step that's genuinely asynchronous — see the timing note below
 

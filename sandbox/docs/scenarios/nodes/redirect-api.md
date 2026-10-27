@@ -12,7 +12,8 @@ case.
 ## How it works
 
 `GET /{hash}`: a Redis "deleted" tombstone check first, then cache-aside lookup
-([Caching](pattern:caching)) with a live `DeletedAt`/`ExpiresAt` check on what comes back, then
+([Caching](pattern:caching), including the in-process L1 tier and negative caching in front of
+Redis) with a live `DeletedAt`/`ExpiresAt` check on what comes back, then
 (if still alive) publish a `ClickTrackedEvent` ([Async messaging](pattern:async-messaging)),
 record the click in the owner's Redis day bucket, then a 302. A dead hash - whichever check caught
 it - gets an HTML "gone" (`410`) or "not found" (`404`) page instead, not this API's usual JSON
@@ -72,6 +73,39 @@ the real audit trail (Postgres `Clicks` + Mongo click metadata) — see
 view. The request-response cache (`link:{hash}`) is a separate key on the same Redis instance,
 with a different purpose: it's disposable, the day buckets are a rolling aggregate.
 
+### Graceful shutdown
+
+Same `AddGracefulShutdown()`/`stop_grace_period: 20s` pairing as [LinkApi](node:link-api) — see
+that node's doc and [this pitfall](pitfall:shutdown-timeout-is-one-shared-sequential-clock) for the
+mechanism. A replica scaled down or stopped mid-redirect finishes its in-flight response instead of
+being killed before the 302 goes out.
+
+### Request budget + load shedding
+
+The lookup phase above — the tombstone check plus the cache-or-DB fetch — runs under a single
+configurable deadline (`Redirect:RequestBudgetMs`, default 2000ms): a
+`CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)` wraps the caller's own
+request-aborted token, then `CancelAfter(_requestBudget)` arms a timer on the linked source. If
+that phase doesn't finish within budget, the request sheds immediately with `503 Service
+Unavailable` + `Retry-After: 1` instead of waiting out however slow Redis/Postgres currently are.
+
+**The budget deliberately does not cover click-tracking dispatch or the click counter** — by the
+time the code reaches those two calls, the redirect target has already been decided, and a
+deadline that could interrupt an already-decided side effect would turn "shed an overloaded
+request" into "silently drop a click that should have been recorded." They use the caller's own
+token directly, never the budget-linked one. This is the single most important thing to know about
+this feature: a reader expecting a "request-wide deadline" to cover everything after the lookup
+too would be wrong.
+
+No EF `CommandTimeout` is layered on top of the cancellation token for the Postgres fallback fetch
+— the project's `EnableRetryOnFailure` execution strategy would otherwise treat a raw
+command-timeout as a transient fault worth retrying, silently extending a request past its budget
+instead of shedding it on time.
+
+This isn't wired into `control-api`/`architecture-map` — it's a correctness/resilience property of
+the hot path, not a live on/off pattern meant for A/B comparison in the UI. See this node's
+Pitfalls for two subtle bugs this budget's first version got wrong around cancellation.
+
 ## Pitfalls
 
 - 🐛 [Every publish opened and declared a brand-new AMQP channel](pitfall:rabbitmq-publisher-unpooled-channel-hot-path)
@@ -90,6 +124,12 @@ with a different purpose: it's disposable, the day buckets are a rolling aggrega
   (resilience-gap) — fixed
 - ⚠️ [A fail-open tombstone write is not enough on its own to invalidate an already-cached entity](pitfall:deletion-tombstone-alone-leaves-stale-cache-entry)
   (resilience-gap) — fixed; this node's cache-hit read path is the one that stays fooled if the fix fails
+- ⚠️ [`HostOptions.ShutdownTimeout` is one shared clock, not a budget per hosted service](pitfall:shutdown-timeout-is-one-shared-sequential-clock)
+  (config-tuning) — fixed
+- ⚠️ [A per-request deadline's catch filter has to check the caller's own token, not its own local one](pitfall:request-budget-coalesced-fetch-wrong-cancellation-check)
+  (concurrency) — fixed
+- ⚠️ [Accepting a CancellationToken parameter doesn't mean the call underneath actually honors it](pitfall:redis-call-cancellation-token-silently-ignored)
+  (resilience-gap) — fixed
 
 ## Relatives
 

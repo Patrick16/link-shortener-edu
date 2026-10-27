@@ -17,7 +17,8 @@ buy anything the caller can observe, so LinkApi doesn't do one.
 the caller *synchronously* — persistence happens asynchronously afterward. See
 [Async messaging](pattern:async-messaging) for the mechanism.
 
-`GET /Links/{hash}` is a cache-aside read — see [Caching](pattern:caching).
+`GET /Links/{hash}` is a cache-aside read — see [Caching](pattern:caching), including the
+in-process L1 tier and negative caching sitting in front of/alongside Redis here.
 
 ## How it's implemented here
 
@@ -78,8 +79,63 @@ accepts an optional `TtlSeconds`, converted once to an absolute `ExpiresAt` and 
 `LinkExpiryWorker` for what actually acts on it. `GetLinks` filters out deleted and expired links
 by default; there's no "show them anyway" toggle, since nothing in this feature calls for one.
 
+### `Idempotency-Key`: replaying a retry instead of minting a second link
+
+`POST /Links` is at-least-once by default: if a client's connection drops after the hash was
+already generated and dispatched, the normal, correct client behavior (retry) risks minting a
+second link for one logical user action. An optional `Idempotency-Key` header closes that, opt-in,
+without giving up the fast synchronous return described above.
+
+```csharp
+// src/backend/Services/LinkApi/Controllers/LinksController.cs, CreateLinkIdempotentlyAsync (trimmed)
+if (!await _idempotencyStore.TryClaimAsync(idempotencyKey, cancellationToken))
+{
+    var existing = await _idempotencyStore.GetAsync(idempotencyKey, cancellationToken);
+    if (existing is { Status: IdempotencyStatus.Completed })
+        return BuildReplayResult(existing); // byte-identical response, no new hash, no re-publish
+    if (existing is { Status: IdempotencyStatus.Pending })
+        return Problem(detail: "...already being processed...", statusCode: 409);
+    // existing is null: a Redis blip, or the winner's claim already self-expired - fail open
+}
+
+var result = await CreateLinkCoreAsync(request, cancellationToken);
+await _idempotencyStore.CompleteAsync(idempotencyKey, ExtractForReplay(result), cancellationToken);
+return result;
+```
+
+`RedisIdempotencyStore` (`src/backend/Shared/Infrastructure/IdempotencyStore.cs`) holds one record
+per key at `idempotency:links-create:{key}`, with the same two-tier TTL shape as
+`ILinkDeletionMarkerStore`: a short in-flight claim (120s — see this node's Pitfalls for why not
+30s) so a crashed request's claim self-expires instead of blocking retries for the full 24h
+completed-record TTL that a finished response replays from. **Every** outcome — success, or any
+`Problem()` result — is cached and replayed identically; only an unhandled exception evicts the
+claim instead, since that's not a deterministic, safe-to-replay outcome. No header → no behavior
+change at all, same at-least-once semantics as before this feature existed. Fails open on a Redis
+error, same spirit as every other Redis-backed store in this codebase — a Redis outage silently
+degrades back to at-least-once for the duration, it never fails the request.
+
+There is deliberately no `control-api`/`architecture-map` toggle for this — it's per-request client
+behavior (a header), not a standing infra on/off switch with persistent state for a panel to show.
+
+### Graceful shutdown
+
+`AddGracefulShutdown()` (`src/backend/Shared/WebDefaults/WebApiDefaultsExtensions.cs`), called from
+this service's `Program.cs`, sets `HostOptions.ShutdownTimeout = 15s` — paired with
+`stop_grace_period: 20s` on this service's `docker-compose.yml` block, so a scale-down or
+`docker compose stop` drains in-flight requests instead of risking a mid-request kill. See
+[this node's Pitfalls](pitfall:shutdown-timeout-is-one-shared-sequential-clock) for the
+non-obvious part: that 15s is one shared, sequential clock Kestrel's own connection drain consumes
+*first*, not an independent budget this service's own `LocalPublishQueueWorker`/
+`RabbitMqRetryWorker` each get separately.
+
 ## Pitfalls
 
+- ⚠️ [A byte-for-byte idempotency replay can carry a stale traceId into a fresh request](pitfall:idempotency-replay-restamps-stale-trace-id)
+  (resilience-gap) — fixed
+- ⚠️ [An idempotency claim's TTL has to outlast the slowest real call it guards, not an assumed one](pitfall:idempotency-claim-ttl-too-short-for-sync-paths)
+  (config-tuning) — fixed
+- ⚠️ [`HostOptions.ShutdownTimeout` is one shared clock, not a budget per hosted service](pitfall:shutdown-timeout-is-one-shared-sequential-clock)
+  (config-tuning) — fixed
 - ⚠️ [A deletion tombstone written before the delete event's dispatch is confirmed can outlive a delete that never happened](pitfall:delete-tombstone-written-before-dispatch-confirmed)
   (resilience-gap) — fixed
 - ⚠️ [RabbitMQ's publisher stack started even when the active transport doesn't use it](pitfall:rabbitmq-publisher-started-regardless-of-messaging-mode)

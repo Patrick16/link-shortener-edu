@@ -72,3 +72,5 @@ it back ON does **not** auto-restore Sentinel — that stays its own explicit ac
 
 - [Caching](pattern:caching)
 - [High availability & failover](pattern:high-availability-failover)
+- [Circuit breakers](pattern:circuit-breakers) — a Polly breaker sits in front of every call this
+  node's clients make

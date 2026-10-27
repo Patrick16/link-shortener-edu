@@ -10,8 +10,11 @@ scaling was safe by accident: every replica had a private copy. Once the fallbac
 at a shared named volume (so the file survives container recreation and can be inspected via a
 viewer), every replica of a service started sharing one physical SQLite file and one
 `FailedMessages` table — but `GetPendingAsync` was still a plain `SELECT ... ORDER BY CreatedAt`
-with no row-claiming, and each replica's `RabbitMqRetryWorker` polls independently on its own 30s
-timer. Two replicas' ticks could both `SELECT` the same pending row before either deleted it, both
+with no row-claiming, and each replica's `RabbitMqRetryWorker` polls independently on its own timer
+(now a full-jitter delay averaging 15s, up to 30s — see [Async messaging](pattern:async-messaging)'s
+own "Retry polling uses full jitter" section; it was a flat 30s timer when this race was found, but
+the race itself is unchanged by that later change — two replicas' ticks can still overlap either
+way). Two replicas' ticks could both `SELECT` the same pending row before either deleted it, both
 successfully republish it, and the event would be processed twice downstream —
 `RabbitMqConsumer` has no message-id dedup on the consuming side, only a tracing tag.
 

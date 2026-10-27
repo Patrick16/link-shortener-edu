@@ -59,6 +59,15 @@ The same commit also capped `GetPendingAsync`'s query (`LIMIT 500`) — unbounde
 entire pending table into memory on every tick, serially republishing one row at a time, so a long
 RabbitMQ outage made each tick run longer than the poll interval itself.
 
+**Forward note, added later, not a correction to the snippets above:** the loop construct shown in
+"Do this instead" (`PeriodicTimer`/`WaitForNextTickAsync`) was itself later replaced by a jittered
+`Task.Delay(NextPollDelay(), stoppingToken)` in commit `fab3295`, for an unrelated reason
+(thundering-herd avoidance across replicas, not resilience to a transient failure — see
+[Async messaging](pattern:async-messaging)'s "Retry polling uses full jitter" section). The
+try/catch guard this pitfall demonstrates is unchanged by that later commit; the snippets above are
+left as a historical record of the bug this specific fix addressed, not updated to match current
+code.
+
 (fixed in `dd6ac13`)
 
 ## Relatives
