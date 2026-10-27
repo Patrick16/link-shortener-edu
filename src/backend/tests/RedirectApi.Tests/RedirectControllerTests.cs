@@ -49,7 +49,7 @@ public class RedirectControllerTests
         // low tens of milliseconds instead of the full 2s.
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(requestBudgetMs is { } ms
-                ? [new KeyValuePair<string, string?>("RequestBudgetMs", ms.ToString())]
+                ? [new KeyValuePair<string, string?>("Redirect:RequestBudgetMs", ms.ToString())]
                 : [])
             .Build();
 
@@ -327,6 +327,42 @@ public class RedirectControllerTests
         await sut.RedirectToOrigin("abc12345", CancellationToken.None);
 
         Assert.Equal("1", (string?)sut.Response.Headers["Retry-After"]);
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_AnotherRequestsBudgetFiresDuringCoalescedFetch_Returns503InsteadOfThrowing()
+    {
+        // Regression for a bug found in review: _cache.GetOrFetch coalesces concurrent misses for
+        // the same hash behind one shared in-flight Task, driven by whichever request's call wins
+        // the race (see EntityCacheService's own comment on _inFlightFetches). When THAT driver's
+        // budget fires, every joiner observes an OperationCanceledException tied to the DRIVER's own
+        // CancellationTokenSource - not this request's local budgetToken. The old filter
+        // (`budgetToken.IsCancellationRequested && ...`) only recognized its own token firing, so a
+        // joiner's exception propagated uncaught instead of becoming a clean 503. This request's own
+        // budget is left at the long production default (no requestBudgetMs override) and its own
+        // caller token is never cancelled - simulating exactly a joiner whose own deadline is nowhere
+        // near firing, but who still gets cancelled because a sibling request's budget did.
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out var dispatcher, out var clickCounter, out _);
+        using var driversBudget = new CancellationTokenSource();
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task<Link?>>, CancellationToken>((_, _, _) => Task.Run<Link?>(async () =>
+            {
+                await driversBudget.CancelAsync();
+                driversBudget.Token.ThrowIfCancellationRequested();
+                return null; // Unreachable.
+            }));
+
+        var result = await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        var problem = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, problem.StatusCode);
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        clickCounter.Verify(
+            x => x.RecordClickAsync(It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]

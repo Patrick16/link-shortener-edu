@@ -87,7 +87,14 @@ public sealed class RedisLinkDeletionMarkerStore(
         try
         {
             var db = _connectionMultiplexer.GetDatabase();
-            var value = await db.StringGetAsync(Key(hash));
+            // StackExchange.Redis's StringGetAsync has no CancellationToken overload at all (it
+            // isn't cancellable from the inside), so a caller's token - e.g. RedirectController's
+            // request budget - would otherwise be silently ignored here, no matter how slow a
+            // connected-but-hanging Redis gets (found in review: this call was the one piece of
+            // that budget's advertised coverage that wasn't actually bounded by it). WaitAsync races
+            // the real call against the token instead: on cancellation it throws immediately and
+            // abandons the still-running StringGetAsync, whose eventual result is simply discarded.
+            var value = await db.StringGetAsync(Key(hash)).WaitAsync(cancellationToken);
             return value.IsNullOrEmpty ? null : JsonSerializer.Deserialize<LinkDeletionMarker>((string)value!);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

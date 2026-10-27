@@ -126,7 +126,7 @@ public abstract class EntityCacheService<T>(
                 ct => new ValueTask<string?>(_cache.GetStringAsync(Key(id), ct)), cancellationToken);
             return json is null ? null : JsonSerializer.Deserialize<T>(json, JsonOptions);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "Failed to read cache for {Key} - treating as a cache miss", Key(id));
             return null;
@@ -223,7 +223,7 @@ public abstract class EntityCacheService<T>(
             // defaults an unconfigured byte[] return to, decoded through GetStringAsync).
             return !string.IsNullOrEmpty(marker);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Same fail-open spirit as GetCachedAsync - an unreadable negative cache just means
             // "assume it might exist, go check the DB", never a reason to error the request.

@@ -30,14 +30,15 @@ public class RedirectController(
 
     // Not wired into docker-compose/the control panel the way Cache:Enabled etc. are - nothing
     // about "how patient should this hot path be" needs a live on/off A/B comparison the way those
-    // toggles exist for. Configuration-overridable (RequestBudgetMs) purely so tests can shrink it
-    // to a few milliseconds instead of a real production knob - see RedirectControllerTests for why
-    // that matters for a budget whose whole mechanism is wall-clock elapsed time. Covers the
-    // deletion-marker lookup plus the cache-or-DB fetch below (both normally sub-10ms; this only
-    // ever bites when Redis and/or Postgres are genuinely degraded) - deliberately NOT covering the
-    // click-tracking dispatch/counter further down, see the comment at that call site for why.
+    // toggles exist for. Configuration-overridable (Redirect:RequestBudgetMs, matching the
+    // Cache:* hierarchy) purely so tests can shrink it to a few milliseconds instead of a real
+    // production knob - see RedirectControllerTests for why that matters for a budget whose whole
+    // mechanism is wall-clock elapsed time. Covers the deletion-marker lookup plus the cache-or-DB
+    // fetch below (both normally sub-10ms; this only ever bites when Redis and/or Postgres are
+    // genuinely degraded) - deliberately NOT covering the click-tracking dispatch/counter further
+    // down, see the comment at that call site for why.
     private readonly TimeSpan _requestBudget = TimeSpan.FromMilliseconds(
-        int.TryParse(configuration["RequestBudgetMs"], out var requestBudgetMs) ? requestBudgetMs : DefaultRequestBudgetMs);
+        int.TryParse(configuration["Redirect:RequestBudgetMs"], out var requestBudgetMs) ? requestBudgetMs : DefaultRequestBudgetMs);
 
     [HttpGet("{hash}")]
     public async Task<IActionResult> RedirectToOrigin(
@@ -78,9 +79,18 @@ public class RedirectController(
 
             link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, budgetToken);
         }
-        catch (OperationCanceledException) when (budgetToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            // The budget fired, not the caller disconnecting (that case's own IsCancellationRequested
+            // Not "budgetToken.IsCancellationRequested" - _cache.GetOrFetch coalesces concurrent
+            // misses for the same hash behind one shared in-flight Task (see EntityCacheService's
+            // own comment on _inFlightFetches), driven by whichever request's call to GetOrAdd wins
+            // the race. When that driver's OWN budget fires, every joiner sees the SAME
+            // OperationCanceledException, tied to the driver's CancellationTokenSource, not this
+            // request's local budgetToken - so checking only the local token here would miss every
+            // joiner and let the exception propagate uncaught (found in review). Checking the
+            // caller's own cancellationToken instead correctly tells "a budget fired somewhere in
+            // this fetch" (driver's or this request's own - either way, shed the same way) apart
+            // from "this specific client disconnected" (that case's own IsCancellationRequested
             // would already be true on cancellationToken too, and is deliberately left to propagate
             // instead of being caught here - there's no client left to send a 503 to, and the
             // framework's own handling of a cancelled request is the right one for that case).
