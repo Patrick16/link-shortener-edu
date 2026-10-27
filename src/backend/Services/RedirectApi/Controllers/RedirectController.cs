@@ -16,6 +16,7 @@ public class RedirectController(
     IEventDispatcher dispatcher,
     IClickCounterService clickCounter,
     ILinkDeletionMarkerStore deletionMarkers,
+    IConfiguration configuration,
     ILogger<RedirectController> logger) : Controller
 {
     private readonly DatabaseContext _context = context;
@@ -25,24 +26,67 @@ public class RedirectController(
     private readonly ILinkDeletionMarkerStore _deletionMarkers = deletionMarkers;
     private readonly ILogger<RedirectController> _logger = logger;
 
+    private const int DefaultRequestBudgetMs = 2000;
+
+    // Not wired into docker-compose/the control panel the way Cache:Enabled etc. are - nothing
+    // about "how patient should this hot path be" needs a live on/off A/B comparison the way those
+    // toggles exist for. Configuration-overridable (RequestBudgetMs) purely so tests can shrink it
+    // to a few milliseconds instead of a real production knob - see RedirectControllerTests for why
+    // that matters for a budget whose whole mechanism is wall-clock elapsed time. Covers the
+    // deletion-marker lookup plus the cache-or-DB fetch below (both normally sub-10ms; this only
+    // ever bites when Redis and/or Postgres are genuinely degraded) - deliberately NOT covering the
+    // click-tracking dispatch/counter further down, see the comment at that call site for why.
+    private readonly TimeSpan _requestBudget = TimeSpan.FromMilliseconds(
+        int.TryParse(configuration["RequestBudgetMs"], out var requestBudgetMs) ? requestBudgetMs : DefaultRequestBudgetMs);
+
     [HttpGet("{hash}")]
     public async Task<IActionResult> RedirectToOrigin(
         [FromRoute] string hash,
         CancellationToken cancellationToken)
     {
-        // Checked first, before ever touching the main Link cache-aside path below - once a hash
-        // is tombstoned, nothing else about the record matters for this decision, and this skips
-        // both a Redis AND (on a cache miss) a Postgres round trip for a hash already known dead.
-        var marker = await _deletionMarkers.GetAsync(hash, cancellationToken);
-        if (marker is not null)
+        Link? link;
+
+        // Linked, not a bare CancelAfter on cancellationToken itself - this budget's timer must
+        // never outlive the request (it's disposed via `using` below) and must never mask a genuine
+        // client disconnect as a budget trip (the catch below tells the two apart by checking which
+        // token actually fired).
+        using var budgetCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budgetCts.CancelAfter(_requestBudget);
+        var budgetToken = budgetCts.Token;
+
+        try
         {
-            return GonePage(marker.Reason, marker.DeletedAt);
+            // Checked first, before ever touching the main Link cache-aside path below - once a
+            // hash is tombstoned, nothing else about the record matters for this decision, and this
+            // skips both a Redis AND (on a cache miss) a Postgres round trip for a hash already
+            // known dead.
+            var marker = await _deletionMarkers.GetAsync(hash, budgetToken);
+            if (marker is not null)
+            {
+                return GonePage(marker.Reason, marker.DeletedAt);
+            }
+
+            // Deliberately no explicit EF CommandTimeout here alongside the cancellation token -
+            // EnableRetryOnFailure's execution strategy (see PostgresExtensions.cs) never retries an
+            // OperationCanceledException, but a raw Npgsql command-timeout exception IS the kind of
+            // transient-looking fault it's designed to retry, which would silently extend this
+            // request well past the budget instead of shedding on time. The cancellation token
+            // alone - no second, differently-behaved timeout mechanism layered on top - is what
+            // keeps this budget an actual upper bound.
+            async Task<Link?> Fetch() =>
+                await _context.Links.AsNoTracking().FirstOrDefaultAsync(x => x.Hash == hash, budgetToken);
+
+            link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, budgetToken);
+        }
+        catch (OperationCanceledException) when (budgetToken.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // The budget fired, not the caller disconnecting (that case's own IsCancellationRequested
+            // would already be true on cancellationToken too, and is deliberately left to propagate
+            // instead of being caught here - there's no client left to send a 503 to, and the
+            // framework's own handling of a cancelled request is the right one for that case).
+            return BudgetExceededResult();
         }
 
-        async Task<Link?> Fetch() =>
-            await _context.Links.AsNoTracking().FirstOrDefaultAsync(x => x.Hash == hash, cancellationToken);
-
-        var link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, cancellationToken);
         if (link is null)
         {
             // Debug, not Warning - an unknown hash is an everyday user/bot mistake (typo, expired
@@ -78,6 +122,21 @@ public class RedirectController(
             UserId = link.UserId,
         };
 
+        // cancellationToken here, deliberately NOT budgetToken (already out of scope by this point
+        // anyway - the budget only ever wraps the lookup above) - the click has already been
+        // resolved to a destination, so dispatch/the counter below are the "must happen regardless"
+        // side effect PLAN.md's own framing for this item calls out: in async/bus mode this is a
+        // near-instant channel write with no fallback of its own if cancelled mid-write (see
+        // LocalPublishQueue.EnqueueAsync), and in gRPC/sync mode cancelling client-side here can't
+        // undo a downstream write TrafficService may already be persisting. A deadline that could
+        // cut either short would turn "shed an overloaded request" into "silently drop a click" -
+        // exactly the failure mode this item's own pitfall note warns about. Left unbounded by a
+        // deadline here, not by an oversight: the circuit breaker already covers "downstream
+        // persistently broken" for the gRPC path (BrokenCircuitException -> 503, see
+        // SyncGrpcDispatcher), and the async path's own SQLite fallback/retry worker already covers
+        // "RabbitMQ unreachable" - the budget's job is specifically the lookup phase above, which
+        // had no equivalent gate before this item.
+        //
         // In the default (async/bus) messaging mode, this enqueues and returns in microseconds -
         // LocalPublishQueueWorker does the actual IMessagePublisher.PublishAsync call (RabbitMQ, or
         // its SQLite fallback) off this request's critical path, so a slow or reconnecting RabbitMQ
@@ -113,6 +172,21 @@ public class RedirectController(
         // 302 — a short link's target can change (or the link could be deleted), so this must
         // never be cached as permanent by the browser.
         return Redirect(link.OriginalLink);
+    }
+
+    // ProblemDetails, not HtmlPage - unlike Gone/NotFound above, this isn't a human-readable
+    // end-state a browser navigates to, it's a transient "ask again shortly" signal a load-testing
+    // tool or a retrying client is the actual audience for, same shape as every other error response
+    // in this API (see GlobalExceptionHandler). Retry-After: 1 is a short, fixed suggestion, not a
+    // computed backoff - this budget is about shedding THIS request quickly, not about teaching
+    // clients a real retry schedule for an overloaded dependency.
+    private ObjectResult BudgetExceededResult()
+    {
+        Response.Headers["Retry-After"] = "1";
+        return Problem(
+            detail: $"This request's {_requestBudget.TotalMilliseconds:0}ms budget was exceeded while resolving the link - shed instead of waiting on a slow dependency.",
+            statusCode: StatusCodes.Status503ServiceUnavailable,
+            title: "Request budget exceeded.");
     }
 
     // HTML, not ProblemDetails - the first genuinely HTML response anywhere in src/backend. A

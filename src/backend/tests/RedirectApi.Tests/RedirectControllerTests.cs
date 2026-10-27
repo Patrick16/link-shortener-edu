@@ -5,6 +5,7 @@ using Infrastructure;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RedirectApi;
@@ -27,7 +28,8 @@ public class RedirectControllerTests
         out Mock<IEntityCacheService<Link>> cache,
         out Mock<IEventDispatcher> dispatcher,
         out Mock<IClickCounterService> clickCounter,
-        out Mock<ILinkDeletionMarkerStore> deletionMarkers)
+        out Mock<ILinkDeletionMarkerStore> deletionMarkers,
+        int? requestBudgetMs = null)
     {
         cache = new Mock<IEntityCacheService<Link>>();
         dispatcher = new Mock<IEventDispatcher>();
@@ -42,7 +44,16 @@ public class RedirectControllerTests
         httpContext.Request.Host = new HostString("short.example");
         httpContext.Request.Path = "/abc12345";
 
-        return new RedirectController(context, cache.Object, dispatcher.Object, clickCounter.Object, deletionMarkers.Object, NullLogger<RedirectController>.Instance)
+        // Left at the production default (2000ms) unless a test overrides it - only the
+        // budget-exceeded tests need a short one, so the real timer they wait out stays in the
+        // low tens of milliseconds instead of the full 2s.
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(requestBudgetMs is { } ms
+                ? [new KeyValuePair<string, string?>("RequestBudgetMs", ms.ToString())]
+                : [])
+            .Build();
+
+        return new RedirectController(context, cache.Object, dispatcher.Object, clickCounter.Object, deletionMarkers.Object, configuration, NullLogger<RedirectController>.Instance)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext },
         };
@@ -266,5 +277,97 @@ public class RedirectControllerTests
         dispatcher.Verify(
             x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    // Awaits the token actually becoming cancelled instead of assuming it already is - a real
+    // Redis/EF call behaves the same way (it doesn't throw the instant a cancellable call is made,
+    // only once the token it was given actually fires), and this lets the budget-exceeded tests use
+    // RequestController's real CancelAfter timer (just a very short one, via requestBudgetMs) rather
+    // than faking an exception no real dependency call would throw synchronously.
+    private static async Task<Link?> WaitForCancellationAsync(CancellationToken cancellationToken)
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        return null; // Unreachable - Task.Delay above only ever returns by throwing.
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_CacheLookupExceedsRequestBudget_Returns503WithRetryAfterInsteadOfWaiting()
+    {
+        // Simulates a dependency (Redis/Postgres) that's still running but far past the point where
+        // waiting on it is worthwhile - GetOrFetch hangs until RedirectController's own linked
+        // budget token fires (20ms here, see NewController's requestBudgetMs), exactly as a real
+        // cancelled Redis/EF call would.
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out var dispatcher, out var clickCounter, out _, requestBudgetMs: 20);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task<Link?>>, CancellationToken>((_, _, ct) => WaitForCancellationAsync(ct));
+
+        var result = await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        var problem = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, problem.StatusCode);
+        var problemDetails = Assert.IsType<ProblemDetails>(problem.Value);
+        Assert.Equal("Request budget exceeded.", problemDetails.Title);
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        clickCounter.Verify(
+            x => x.RecordClickAsync(It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_CacheLookupExceedsRequestBudget_SetsRetryAfterHeader()
+    {
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out _, out _, out _, requestBudgetMs: 20);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task<Link?>>, CancellationToken>((_, _, ct) => WaitForCancellationAsync(ct));
+
+        await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        Assert.Equal("1", (string?)sut.Response.Headers["Retry-After"]);
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_CallerDisconnectsDuringLookup_PropagatesCancellationInsteadOfReturning503()
+    {
+        // The caller's own token firing (not the budget) must be left to propagate untouched -
+        // ASP.NET Core's own exception-handling middleware already special-cases a request-aborted
+        // OperationCanceledException (no client left to send a 503 to), and catching it here would
+        // instead try to write a now-pointless response. A long (not short) budget here is
+        // deliberate - this proves the caller's own disconnect wins even while the budget itself is
+        // nowhere near firing.
+        await using var context = NewContext();
+        var sut = NewController(context, out var cache, out _, out _);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .Returns<string, Func<Task<Link?>>, CancellationToken>((_, _, ct) => WaitForCancellationAsync(ct));
+        using var callerCts = new CancellationTokenSource();
+        await callerCts.CancelAsync();
+
+        await Assert.ThrowsAsync<TaskCanceledException>(() => sut.RedirectToOrigin("abc12345", callerCts.Token));
+    }
+
+    [Fact]
+    public async Task RedirectToOrigin_LinkFound_DispatchesAndRecordsWithTheCallersOwnTokenNotABudgetBoundOne()
+    {
+        // The click-tracking dispatch/counter calls must receive the exact token RedirectToOrigin
+        // was called with (CancellationToken.None here), never a derived budget-linked token that
+        // could cut them short - see the controller's own comment on why that side effect is
+        // deliberately left unbounded by RequestBudget.
+        await using var context = NewContext();
+        var link = new Link("abc12345", "https://example.com/target", "abc12345", DateTime.UtcNow, null);
+        var sut = NewController(context, out var cache, out var dispatcher, out var clickCounter);
+        cache.Setup(x => x.GetOrFetch("abc12345", It.IsAny<Func<Task<Link?>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(link);
+
+        await sut.RedirectToOrigin("abc12345", CancellationToken.None);
+
+        dispatcher.Verify(
+            x => x.DispatchAsync(It.IsAny<ClickTrackedEvent>(), Topics.ClickTracked, CancellationToken.None),
+            Times.Once);
+        clickCounter.Verify(
+            x => x.RecordClickAsync("abc12345", null, It.IsAny<DateTime>(), CancellationToken.None),
+            Times.Once);
     }
 }
