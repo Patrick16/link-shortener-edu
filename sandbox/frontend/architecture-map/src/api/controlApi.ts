@@ -9,6 +9,7 @@ import type {
   InfraStatus,
   InfraTopology,
   L1CacheStatus,
+  NegativeCacheStatus,
   ManagedContainer,
   MessagingMode,
   PgcatInstanceConnections,
@@ -139,6 +140,9 @@ export const controlApi = {
 
   getL1CacheEnabled: () => request<L1CacheStatus>('/api/infra/l1-cache'),
   setL1CacheEnabled: (enabled: boolean) => request<L1CacheStatus>('/api/infra/l1-cache', 'POST', { enabled }),
+
+  getNegativeCacheEnabled: () => request<NegativeCacheStatus>('/api/infra/negative-cache'),
+  setNegativeCacheEnabled: (enabled: boolean) => request<NegativeCacheStatus>('/api/infra/negative-cache', 'POST', { enabled }),
 
   getMongoReadPreference: () => request<MongoReadPreferenceStatus>('/api/infra/mongo-read-preference'),
   setMongoReadPreference: (preference: MongoReadPreference) =>

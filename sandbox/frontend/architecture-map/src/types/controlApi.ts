@@ -320,6 +320,13 @@ export interface L1CacheStatus {
   enabled: boolean
 }
 
+// Negative caching (a short-TTL "this id doesn't exist" marker ahead of the DB, see
+// EntityCacheService) - same "own GET/POST pair, not InfraStatus" shape as L1CacheStatus above.
+// See SetNegativeCacheEnabledAsync on the backend.
+export interface NegativeCacheStatus {
+  enabled: boolean
+}
+
 // readPreference on traffic-service's Mongo connection string - see SetMongoReadPreferenceAsync on
 // the backend.
 export type MongoReadPreference = 'primary' | 'secondaryPreferred'
@@ -435,6 +442,7 @@ export interface InfraConfigSnapshot {
   mongoReadPreference?: MongoReadPreference | null
   npgsqlPoolSize?: number | null
   l1CacheEnabled?: boolean | null
+  negativeCacheEnabled?: boolean | null
 }
 
 // A named, reloadable infra config - see Preset on the backend. scenarioName, if set, points at
@@ -470,6 +478,7 @@ export interface RunSnapshot {
   thresholdsUsed?: BottleneckThresholds | null
   baseline?: BaselineComparison | null
   l1CacheEnabled?: boolean | null
+  negativeCacheEnabled?: boolean | null
 }
 
 // Lightweight row for the history list - see RunSummary on the backend for why it's separate from

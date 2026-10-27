@@ -32,7 +32,7 @@ function toReplicaCounts(containers: ManagedContainer[]): ReplicaCount[] {
 // TrafficRunCoordinator.SaveSnapshotAsync's own try/catch reads server-side) - one being
 // unreachable (e.g. Sentinel not running) shouldn't block capturing the rest.
 export async function captureCurrentInfraConfig(): Promise<InfraConfigSnapshot> {
-  const [infra, containers, pgcatPool, sentinel, prefetch, mongoReadPreference, npgsqlPoolSize, l1Cache, replicationLags] = await Promise.all([
+  const [infra, containers, pgcatPool, sentinel, prefetch, mongoReadPreference, npgsqlPoolSize, l1Cache, negativeCache, replicationLags] = await Promise.all([
     controlApi.getInfraStatus(),
     controlApi.listContainers(),
     controlApi.getPgcatPoolSettings().catch(() => null),
@@ -41,6 +41,7 @@ export async function captureCurrentInfraConfig(): Promise<InfraConfigSnapshot> 
     controlApi.getMongoReadPreference().catch(() => null),
     controlApi.getNpgsqlPoolSize().catch(() => null),
     controlApi.getL1CacheEnabled().catch(() => null),
+    controlApi.getNegativeCacheEnabled().catch(() => null),
     Promise.all(
       REPLICATION_LAG_SERVICE_IDS.map(async (serviceId): Promise<ReplicationLagEntry | null> => {
         try {
@@ -63,6 +64,7 @@ export async function captureCurrentInfraConfig(): Promise<InfraConfigSnapshot> 
     mongoReadPreference: mongoReadPreference?.preference ?? null,
     npgsqlPoolSize: npgsqlPoolSize?.poolSize ?? null,
     l1CacheEnabled: l1Cache?.enabled ?? null,
+    negativeCacheEnabled: negativeCache?.enabled ?? null,
   }
 }
 
@@ -136,6 +138,9 @@ export async function applyInfraConfig(config: InfraConfigSnapshot): Promise<App
   if (config.l1CacheEnabled != null) {
     await step('L1 caching', () => controlApi.setL1CacheEnabled(config.l1CacheEnabled!))
   }
+  if (config.negativeCacheEnabled != null) {
+    await step('Negative caching', () => controlApi.setNegativeCacheEnabled(config.negativeCacheEnabled!))
+  }
 
   return { applied, failed }
 }
@@ -190,6 +195,11 @@ export function diffInfraConfig(current: InfraConfigSnapshot, desired: InfraConf
     'L1 caching',
     current.l1CacheEnabled == null ? '—' : current.l1CacheEnabled ? 'ON' : 'OFF',
     desired.l1CacheEnabled == null ? '—' : desired.l1CacheEnabled ? 'ON' : 'OFF',
+  )
+  addIfDiff(
+    'Negative caching',
+    current.negativeCacheEnabled == null ? '—' : current.negativeCacheEnabled ? 'ON' : 'OFF',
+    desired.negativeCacheEnabled == null ? '—' : desired.negativeCacheEnabled ? 'ON' : 'OFF',
   )
 
   const lagServiceIds = new Set([...(current.replicationLags ?? []), ...(desired.replicationLags ?? [])].map((l) => l.serviceId))

@@ -26,6 +26,13 @@ public interface IInfraToggleService
 
     Task<bool> SetL1CacheEnabledAsync(bool enabled, CancellationToken ct);
 
+    // Negative caching (a short-TTL "this id doesn't exist" marker, see EntityCacheService) -
+    // same "own GET/POST pair, not InfraStatus/Topology" shape as L1 above, same recreate scope
+    // (CacheUsingServices). Independent of both CacheEnabled and L1CacheEnabled.
+    bool GetNegativeCacheEnabled();
+
+    Task<bool> SetNegativeCacheEnabledAsync(bool enabled, CancellationToken ct);
+
     Task<InfraStatus> SetMessagingModeAsync(string mode, CancellationToken ct);
 
     // Starts/stops the haproxy container itself, not a connection-string flip on its consumers -

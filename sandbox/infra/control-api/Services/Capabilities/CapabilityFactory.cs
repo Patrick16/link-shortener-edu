@@ -20,6 +20,7 @@ public sealed class CapabilityFactory
         ["pgcat-toggle"] = sp => new PgcatToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<PgcatToggleCapability>>()),
         ["cache-toggle"] = sp => new CacheToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<CacheToggleCapability>>()),
         ["l1-cache-toggle"] = sp => new L1CacheToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<L1CacheToggleCapability>>()),
+        ["negative-cache-toggle"] = sp => new NegativeCacheToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<NegativeCacheToggleCapability>>()),
         ["messaging-mode"] = sp => new MessagingToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<MessagingToggleCapability>>()),
         ["nginx-toggle"] = sp => new NginxToggleCapability(sp.GetRequiredService<IInfraToggleService>()),
         ["sentinel-config"] = sp => new SentinelConfigCapability(sp.GetRequiredService<IRedisInfraService>(), sp.GetRequiredService<ILogger<SentinelConfigCapability>>()),

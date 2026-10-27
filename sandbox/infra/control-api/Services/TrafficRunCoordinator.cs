@@ -204,7 +204,8 @@ public sealed class TrafficRunCoordinator(
                 verdict,
                 thresholds,
                 baseline,
-                infraToggle.GetL1CacheEnabled());
+                infraToggle.GetL1CacheEnabled(),
+                infraToggle.GetNegativeCacheEnabled());
 
             await runHistory.SaveAsync(snapshot, CancellationToken.None);
             await hub.Clients.All.SendAsync("runSaved", new { snapshot.Id });

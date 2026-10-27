@@ -218,8 +218,11 @@ public class EntityCacheServiceTests
     }
 
     [Fact]
-    public async Task GetOrFetch_DbMiss_ReturnsNullAndDoesNotPopulateCache()
+    public async Task GetOrFetch_DbMiss_ReturnsNullAndDoesNotPopulateThePositiveCacheEntry()
     {
+        // Renamed/tightened: a DB miss legitimately DOES write something now - a negative cache
+        // marker (see EntityCacheServiceNegativeCacheTests) - so this only asserts the positive
+        // key itself ("test:abc") is never written, not "nothing was written at all".
         var cache = new Mock<IDistributedCache>();
         cache.Setup(x => x.GetAsync("test:abc", It.IsAny<CancellationToken>())).ReturnsAsync((byte[]?)null);
         var sut = new TestEntityCacheService(cache.Object, ConfigWith());
@@ -228,7 +231,7 @@ public class EntityCacheServiceTests
 
         Assert.Null(result);
         cache.Verify(
-            x => x.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()),
+            x => x.SetAsync("test:abc", It.IsAny<byte[]>(), It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 }

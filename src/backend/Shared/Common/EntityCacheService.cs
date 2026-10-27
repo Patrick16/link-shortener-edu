@@ -37,6 +37,20 @@ public abstract class EntityCacheService<T>(
     // caches anything, L1 included.
     private readonly bool _l1CacheEnabled = !bool.TryParse(configuration["Cache:L1Enabled"], out var l1CacheEnabled) || l1CacheEnabled;
 
+    // Negative caching - without this, a caller scanning random/nonexistent keys (a bot probing
+    // hashes, or any 404-heavy traffic) sends every single miss straight through to the DB, every
+    // time, forever. A short-TTL "this id doesn't exist" marker (both L1 and L2, same TTL - the
+    // whole point is a short, cheap memoization window, not a durable fact) turns a repeat miss
+    // into an in-process or Redis lookup instead. GetOrFetch always checks the POSITIVE cache
+    // before ever checking this negative one (see GetOrFetch/IsNegativelyCachedAsync) - that
+    // ordering, not an explicit eviction on write, is what keeps this correct across the
+    // create-right-after-a-404 race the naive version of this pattern gets wrong: the moment a
+    // real entity is written (CacheAsync), the positive check starts hitting before the negative
+    // check is ever reached, so a stale negative marker left over in Redis/L1 is simply never
+    // consulted again for that key - it ages out on its own, harmlessly.
+    private readonly bool _negativeCacheEnabled = !bool.TryParse(configuration["Cache:NegativeEnabled"], out var negativeCacheEnabled) || negativeCacheEnabled;
+    private static readonly TimeSpan NegativeTtl = TimeSpan.FromSeconds(10);
+
     // A dead Redis still means every call pays ConnectTimeout/SyncTimeout before this class's own
     // try/catch below turns it into a fail-open no-op - the breaker's job is to skip straight to
     // that no-op once Redis is known-dead, instead of re-discovering it on every single request.
@@ -141,6 +155,12 @@ public abstract class EntityCacheService<T>(
             return cached;
         }
 
+        if (await IsNegativelyCachedAsync(id, cancellationToken))
+        {
+            _logger.LogDebug("Negative cache hit for {Key} - known absent, skipping the DB", key);
+            return null;
+        }
+
         // Without this, every concurrent caller that misses the cache for the same key runs its own
         // fetchFromDb() and its own cache write - a burst of requests for a hash that just expired
         // hits the DB once per request instead of once total. GetOrAdd's own factory can itself be
@@ -170,8 +190,64 @@ public abstract class EntityCacheService<T>(
     {
         var entity = await fetchFromDb();
         _logger.LogDebug("Cache miss for {Key}, fetched from DB", Key(id));
-        if (entity is not null) await CacheAsync(entity, id, cancellationToken);
+        if (entity is not null)
+        {
+            await CacheAsync(entity, id, cancellationToken);
+        }
+        else
+        {
+            await CacheNegativeAsync(id, cancellationToken);
+        }
+
         return entity;
+    }
+
+    private string NegativeKey(string id) => $"neg:{Key(id)}";
+
+    private async Task<bool> IsNegativelyCachedAsync(string id, CancellationToken cancellationToken)
+    {
+        // Both flags checked together, same as PopulateL1 - Cache:Enabled=false must mean no
+        // layer caches anything (positive or negative), or the "every read goes to the DB" demo
+        // would be lying for a negatively-cached key.
+        if (!_cacheEnabled || !_negativeCacheEnabled) return false;
+
+        if (_l1Cache.TryGetValue(NegativeKey(id), out bool _)) return true;
+
+        try
+        {
+            var marker = await _resilience.ExecuteAsync(
+                ct => new ValueTask<string?>(_cache.GetStringAsync(NegativeKey(id), ct)), cancellationToken);
+            // Not `marker is not null` - the marker is always written as a non-empty "1" (see
+            // CacheNegativeAsync), so an empty string is never a real negative hit, only ever a
+            // quirk of how the key was read (and exactly what a loose IDistributedCache test mock
+            // defaults an unconfigured byte[] return to, decoded through GetStringAsync).
+            return !string.IsNullOrEmpty(marker);
+        }
+        catch (Exception ex)
+        {
+            // Same fail-open spirit as GetCachedAsync - an unreadable negative cache just means
+            // "assume it might exist, go check the DB", never a reason to error the request.
+            _logger.LogWarning(ex, "Failed to read negative cache for {Key} - assuming not negatively cached", NegativeKey(id));
+            return false;
+        }
+    }
+
+    private async Task CacheNegativeAsync(string id, CancellationToken cancellationToken)
+    {
+        if (!_cacheEnabled || !_negativeCacheEnabled) return;
+
+        _l1Cache.Set(NegativeKey(id), true, NegativeTtl);
+
+        try
+        {
+            var options = new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = NegativeTtl };
+            await _resilience.ExecuteAsync(
+                ct => new ValueTask(_cache.SetStringAsync(NegativeKey(id), "1", options, ct)), cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to populate negative cache for {Key} - continuing without it", NegativeKey(id));
+        }
     }
 
     // Gated on both flags (not just _l1CacheEnabled) - CacheAsync already returns early when

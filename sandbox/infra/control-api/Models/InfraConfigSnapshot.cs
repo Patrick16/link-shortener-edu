@@ -15,4 +15,6 @@ public record InfraConfigSnapshot(
     // Not a field on Infra (InfraStatus) itself - see that record's own comment on why L1 caching
     // is a per-node capability, not a Topology-staged toggle. Captured/restored here the same
     // best-effort way as the three fields above.
-    bool? L1CacheEnabled = null);
+    bool? L1CacheEnabled = null,
+    // Same reasoning as L1CacheEnabled above.
+    bool? NegativeCacheEnabled = null);
