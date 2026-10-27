@@ -5,11 +5,13 @@ using Infrastructure;
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using WebDefaults;
 
 namespace RedirectApi.Controllers;
 
 [ApiController]
 [Route("/")]
+[ServiceFilter(typeof(RedisRateLimitFilter))]
 public class RedirectController(
     DatabaseContext context,
     IEntityCacheService<Link> cache,

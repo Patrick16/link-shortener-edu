@@ -1,155 +1,98 @@
-using System.Net;
-using System.Net.Http.Json;
 using AuthApi;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using WebDefaults;
 
 namespace AuthApi.Tests;
 
-// Regression test for a bug caught during review of item 12 (rate limiting): the suggested snippet
-// used AddFixedWindowLimiter(policyName, ...), which builds ONE shared limiter for every caller
-// combined, not a separate bucket per client. Both shapes compile - AddAuthRateLimiting's AddPolicy +
-// RateLimitPartition shape is the one that actually keys a separate window per client IP, verified
-// live (two simulated RemoteIpAddress values) before AddAuthRateLimiting was written. This drives it
-// through a real TestServer pipeline, not just a unit-level call, since partitioning only exists in
-// how the rate limiter middleware processes requests - nothing about it shows up from calling
-// AddAuthRateLimiting alone.
+// AddAuthRateLimiting now wires the shared RedisRateLimitFilter (WebDefaults) instead of
+// Microsoft.AspNetCore.RateLimiting's own middleware - see that class's own comment for why. What's
+// actually AuthApi-specific here is just the RateLimitPolicy it builds (partition-key selector,
+// numbers, FailClosed) - the Redis-check-and-reject mechanics themselves are shared and tested
+// once, generically, in Integration.Tests/RedisRateLimitFilterTests.cs and
+// Infrastructure.Tests/RedisRateLimiterTests.cs.
 public class AuthRateLimitingTests
 {
-    private static async Task<TestServer> NewServerAsync(int permitLimit, int windowSeconds = 60)
+    private static RateLimitPolicy BuildPolicy(int? permitLimit = null, int? windowSeconds = null)
     {
         var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        // Clear what WebApplication.CreateBuilder() auto-loaded (AuthApi's own real
+        // appsettings.json, env vars, ...) - this test needs full control over exactly what's
+        // configured, not whatever happens to be sitting in this project's own output directory
+        // (AuthApi's real defaults - 100/60s - happen to match RateLimitingOptions' own record
+        // defaults, which would otherwise mask this test actually exercising the fallback path).
+        ((IConfigurationBuilder)builder.Configuration).Sources.Clear();
+        var config = new Dictionary<string, string?>
         {
-            ["RateLimiting:PermitLimit"] = permitLimit.ToString(),
-            ["RateLimiting:WindowSeconds"] = windowSeconds.ToString(),
-        });
-        // AddAuthRateLimiting's OnRejected writes through IProblemDetailsService (see its own
-        // comment) - without this, a rejection throws InvalidOperationException instead of
-        // responding 429, which AddApiExceptionHandling() registers for real in AuthApi's own
-        // Program.cs; this is the minimal piece of that this test actually depends on.
-        builder.Services.AddProblemDetails();
+            // Only here to satisfy ConfigurationOptions.Parse inside AddRedisMultiplexer - nothing
+            // in this test ever resolves IConnectionMultiplexer, so this is never actually
+            // connected to.
+            ["ConnectionStrings:Redis"] = "localhost:6379",
+        };
+        if (permitLimit is { } pl) config["RateLimiting:PermitLimit"] = pl.ToString();
+        if (windowSeconds is { } ws) config["RateLimiting:WindowSeconds"] = ws.ToString();
+        builder.Configuration.AddInMemoryCollection(config);
+
         builder.AddAuthRateLimiting();
 
-        var app = builder.Build();
-
-        // Test-only: a TestServer request has no real socket, so RemoteIpAddress is null unless
-        // something sets it. Standing in for what Kestrel would populate from the real connection.
-        app.Use(async (context, next) =>
-        {
-            if (context.Request.Headers.TryGetValue("X-Test-Ip", out var ip))
-            {
-                context.Connection.RemoteIpAddress = IPAddress.Parse(ip!);
-            }
-
-            await next();
-        });
-
-        app.UseRateLimiter();
-        app.MapGet("/probe", () => Results.Ok()).RequireRateLimiting(AuthApiServiceExtensions.AuthRateLimitPolicy);
-
-        await app.StartAsync();
-        return app.GetTestServer();
-    }
-
-    private static async Task<HttpStatusCode> ProbeAsync(HttpClient client, string ip)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/probe");
-        request.Headers.Add("X-Test-Ip", ip);
-        using var response = await client.SendAsync(request);
-        return response.StatusCode;
+        return builder.Services.BuildServiceProvider().GetRequiredService<RateLimitPolicy>();
     }
 
     [Fact]
-    public async Task DifferentClientIps_EachGetTheirOwnQuota()
+    public void AddAuthRateLimiting_RegistersFailClosedPolicy()
     {
-        using var server = await NewServerAsync(permitLimit: 2);
-        using var client = server.CreateClient();
+        // FailClosed, not FailOpen (RedirectApi's own choice) - see AddAuthRateLimiting's own
+        // comment: an open window during a Redis outage on register/login means unlimited
+        // brute-force attempts, the one place this project's usual "never block the hot path on a
+        // dependency outage" default (e.g. caching, the request budget) is the wrong call.
+        var policy = BuildPolicy();
 
-        // Each IP's own two requests succeed regardless of what the other IP has already used - if
-        // this were the broken shared-limiter shape, "2.2.2.2"'s second call below would already be
-        // the third request against one shared quota of 2, and would fail.
-        Assert.Equal(HttpStatusCode.OK, await ProbeAsync(client, "1.1.1.1"));
-        Assert.Equal(HttpStatusCode.OK, await ProbeAsync(client, "2.2.2.2"));
-        Assert.Equal(HttpStatusCode.OK, await ProbeAsync(client, "1.1.1.1"));
-        Assert.Equal(HttpStatusCode.OK, await ProbeAsync(client, "2.2.2.2"));
-
-        // Each IP's own third request trips its own limit, not the other's.
-        Assert.Equal(HttpStatusCode.TooManyRequests, await ProbeAsync(client, "1.1.1.1"));
-        Assert.Equal(HttpStatusCode.TooManyRequests, await ProbeAsync(client, "2.2.2.2"));
+        Assert.Equal(RateLimitFailureMode.FailClosed, policy.FailureMode);
     }
 
     [Fact]
-    public async Task SameClientIp_ExceedingPermitLimit_Returns429()
+    public void AddAuthRateLimiting_UsesConfiguredPermitLimitAndWindow()
     {
-        using var server = await NewServerAsync(permitLimit: 1);
-        using var client = server.CreateClient();
+        var policy = BuildPolicy(permitLimit: 42, windowSeconds: 7);
 
-        Assert.Equal(HttpStatusCode.OK, await ProbeAsync(client, "9.9.9.9"));
-        Assert.Equal(HttpStatusCode.TooManyRequests, await ProbeAsync(client, "9.9.9.9"));
+        Assert.Equal(42, policy.PermitLimit);
+        Assert.Equal(TimeSpan.FromSeconds(7), policy.Window);
     }
 
     [Fact]
-    public async Task Rejection_ReturnsFullProblemDetailsShape()
+    public void AddAuthRateLimiting_MissingConfigSection_FallsBackToRecordDefaults()
     {
-        // Regression: the rate limiter's own default rejection handling (no OnRejected set) writes
-        // a ProblemDetails body with only {status, traceId} - no Title/Type - once AddProblemDetails()
-        // is registered, unlike every other error path in this API (e.g. a bare 404 gets Title
-        // "Not Found" filled in automatically). Found by live-testing a real rejection against the
-        // running container. AddAuthRateLimiting's explicit OnRejected exists specifically to fix this.
-        using var server = await NewServerAsync(permitLimit: 1);
-        using var client = server.CreateClient();
+        // No RateLimiting:* keys set - must fall back to RateLimitingOptions' own defaults
+        // (100/60s) rather than throwing or binding to 0 (which would reject every request
+        // immediately, same silent-zero trap BottleneckThresholdsConfigBindingTests covers for the
+        // unrelated BottleneckThresholds type).
+        var policy = BuildPolicy();
 
-        using (var first = await ProbeRawAsync(client, "7.7.7.7"))
-        {
-            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        }
-
-        using var rejected = await ProbeRawAsync(client, "7.7.7.7");
-
-        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
-        var problem = await rejected.Content.ReadFromJsonAsync<ProblemDetails>();
-        Assert.NotNull(problem);
-        Assert.Equal(429, problem!.Status);
-        Assert.False(string.IsNullOrEmpty(problem.Title));
-        Assert.False(string.IsNullOrEmpty(problem.Type));
-    }
-
-    private static async Task<HttpResponseMessage> ProbeRawAsync(HttpClient client, string ip)
-    {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/probe");
-        request.Headers.Add("X-Test-Ip", ip);
-        return await client.SendAsync(request);
+        Assert.Equal(100, policy.PermitLimit);
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.Window);
     }
 
     [Fact]
-    public async Task MissingConfigSection_FallsBackToRecordDefaults()
+    public void AddAuthRateLimiting_PartitionKeySelector_KeysByRemoteIpAddress()
     {
-        // No RateLimiting:* keys set - AddAuthRateLimiting must fall back to RateLimitingOptions'
-        // own defaults (100/60s) rather than throwing or binding to 0 (which would reject every
-        // request immediately, same silent-zero trap BottleneckThresholdsConfigBindingTests covers
-        // for the unrelated BottleneckThresholds type).
-        var builder = WebApplication.CreateBuilder();
-        builder.WebHost.UseTestServer();
-        builder.Services.AddProblemDetails();
-        builder.AddAuthRateLimiting();
+        var policy = BuildPolicy();
+        var httpContext = new DefaultHttpContext();
+        httpContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("5.6.7.8");
 
-        var app = builder.Build();
-        app.UseRateLimiter();
-        app.MapGet("/probe", () => Results.Ok()).RequireRateLimiting(AuthApiServiceExtensions.AuthRateLimitPolicy);
+        Assert.Equal("5.6.7.8", policy.PartitionKeySelector(httpContext));
+    }
 
-        await app.StartAsync();
-        using var server = app.GetTestServer();
-        using var client = server.CreateClient();
+    [Fact]
+    public void AddAuthRateLimiting_PartitionKeySelector_NullRemoteIpAddress_FallsBackToUnknownBucket()
+    {
+        // RemoteIpAddress is null only for non-socket transports (e.g. in-process test servers) -
+        // AuthApi is never reached that way outside tests, where this filter isn't registered at
+        // all. This must fail safe (a shared, generous bucket) instead of throwing.
+        var policy = BuildPolicy();
+        var httpContext = new DefaultHttpContext();
 
-        var response = await client.GetAsync("/probe");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("unknown", policy.PartitionKeySelector(httpContext));
     }
 }

@@ -28,10 +28,9 @@ app.MapApiDocumentation();
 app.UseApiExceptionHandling();
 app.UseHttpsRedirection();
 app.UseFrontendCors();
-// AddAuthRateLimiting's own OnRejected writes the 429's ProblemDetails body directly (see its
-// comment), so this doesn't depend on UseApiExceptionHandling's ordering above - placed here simply
-// to match the usual auth-then-rate-limit pipeline order.
-app.UseRateLimiter();
+// No app.UseRateLimiter() - AddAuthRateLimiting now wires a RedisRateLimitFilter via
+// [ServiceFilter] on AuthController itself (an MVC action filter, not global middleware), so
+// there's nothing to add to the pipeline here.
 app.UseAuthorization();
 
 app.MapControllers();

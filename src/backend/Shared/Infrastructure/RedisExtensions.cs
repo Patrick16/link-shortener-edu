@@ -37,15 +37,28 @@ public static class RedisExtensions
         // even on a service (ShortenerService) that wires this up more than once indirectly.
         builder.Services.AddMemoryCache();
 
-        // Shared by EntityCacheService/LinkCacheService (this IDistributedCache) and, in whichever
-        // service also calls AddGeoIpResolution, CachingGeoIpResolver - same registration either
-        // way, since both wrap calls into Redis. Keyed, not a plain singleton: a process can also
-        // register a gRPC/RabbitMQ breaker (see GrpcMessagingExtensions/RabbitMqExtensions) and
-        // ResiliencePipeline has no other way to tell them apart by type alone.
+        builder.AddRedisCircuitBreaker();
+
+        return builder;
+    }
+
+    // Factored out of AddRedisDistributedCache so a caller that needs the breaker but not the
+    // IDistributedCache/MemoryCache/warmup machinery (RedisRateLimiter, via AddRedisRateLimiter
+    // below) doesn't have to pull all of that in just to get it - AuthApi has never used Redis
+    // for caching and shouldn't gain a cache abstraction, a memory cache, and a warmup worker it
+    // has no other use for just to rate-limit.
+    //
+    // Shared by EntityCacheService/LinkCacheService (via AddRedisDistributedCache),
+    // CachingGeoIpResolver (wherever AddGeoIpResolution is called), and now RedisRateLimiter - all
+    // three wrap calls into Redis. Keyed, not a plain singleton: a process can also register a
+    // gRPC/RabbitMQ breaker (see GrpcMessagingExtensions/RabbitMqExtensions) and ResiliencePipeline
+    // has no other way to tell them apart by type alone. TryAdd, not Add - safe to call from more
+    // than one of these extension methods on the same builder.
+    private static IHostApplicationBuilder AddRedisCircuitBreaker(this IHostApplicationBuilder builder)
+    {
         builder.Services.TryAddKeyedSingleton(Constants.RedisCircuitBreakerKey, (sp, key) =>
             ResiliencePipelines.BuildCircuitBreaker(
                 (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!)));
-
         return builder;
     }
 
@@ -83,6 +96,20 @@ public static class RedisExtensions
     {
         builder.AddRedisMultiplexer();
         builder.Services.AddSingleton<IIdempotencyStore, RedisIdempotencyStore>();
+        return builder;
+    }
+
+    // AuthApi and RedirectApi (see WebDefaults.RedisRateLimitFilter for how each wires its own
+    // policy on top of this). Idempotent via AddRedisMultiplexer/AddRedisCircuitBreaker's own
+    // TryAdd* calls - safe to call alongside AddRedisDistributedCache/AddLinkDeletionMarkerStore
+    // on a service (RedirectApi) that already pulls in the multiplexer and breaker for other
+    // reasons, and cheap enough on its own for a service (AuthApi) that previously had no Redis
+    // dependency at all.
+    public static IHostApplicationBuilder AddRedisRateLimiter(this IHostApplicationBuilder builder)
+    {
+        builder.AddRedisMultiplexer();
+        builder.AddRedisCircuitBreaker();
+        builder.Services.AddSingleton<IRedisRateLimiter, RedisRateLimiter>();
         return builder;
     }
 }

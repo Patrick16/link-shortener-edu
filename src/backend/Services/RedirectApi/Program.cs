@@ -1,4 +1,5 @@
 using Infrastructure;
+using Microsoft.AspNetCore.HttpOverrides;
 using RedirectApi;
 using ServiceDefaults;
 using WebDefaults;
@@ -27,6 +28,7 @@ if (!isGrpcMode)
 // resulting asymmetry (ShortenerService/ReportingService's consumers go stale in this mode).
 builder.AddEventDispatcher();
 builder.AddRedirectServices();
+builder.AddRedirectRateLimiting();
 
 // A plain <a href> click to a short link is a top-level navigation, not subject to CORS — this is
 // here for consistency with AuthApi/LinkApi and for any future script-initiated call (link preview,
@@ -51,7 +53,23 @@ var app = builder.Build();
 
 app.MapApiDocumentation();
 
-// First in the pipeline so it can catch exceptions thrown by anything downstream.
+// Must run before anything reads HttpContext.Connection.RemoteIpAddress - RedisRateLimitFilter
+// (via RedirectController's [ServiceFilter], see AddRedirectRateLimiting) is the first and only
+// consumer of that today, so this is placed first in the pipeline per Microsoft's own guidance.
+// ForwardLimit = 1 means only the LAST (nginx-appended) entry in X-Forwarded-For is ever honored -
+// a client that prepends its own fake entries into the header before nginx ever sees it gets
+// ignored, not trusted (see AddRedirectRateLimiting's own comment on why this matters). KnownNetworks/
+// KnownProxies are cleared, not pinned to a specific container IP: RedirectApi has no host port
+// mapping (nginx is the only way in from outside the Docker network - see docker-compose.yml's own
+// comment on this service), and Docker Compose doesn't give nginx's container a fixed, predictable
+// address across runs to pin to instead.
+var forwardedHeadersOptions = new ForwardedHeadersOptions { ForwardedHeaders = ForwardedHeaders.XForwardedFor, ForwardLimit = 1 };
+forwardedHeadersOptions.KnownNetworks.Clear();
+forwardedHeadersOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeadersOptions);
+
+// Still early enough to catch exceptions thrown by anything downstream of it - only
+// UseForwardedHeaders above needs to run earlier than this.
 app.UseApiExceptionHandling();
 app.UseHttpsRedirection();
 app.UseFrontendCors();

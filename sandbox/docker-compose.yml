@@ -834,6 +834,13 @@ services:
       # Constants.PostgresPrimaryConnectionString for why.
       ConnectionStrings__PostgresPrimary: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
       Jwt__SigningKey: *jwt-signing-key
+      # New with the Redis-backed rate limiter (PLAN.md backlog item 9) - AuthApi had no Redis
+      # dependency at all before this. Same Sentinel-aware connection string every other service
+      # already uses. Deliberately no depends_on entry for redis-sentinel-* here, matching
+      # redirect-api's own identical reasoning just below in this file: AddRedisMultiplexer already
+      # tolerates Sentinel being briefly unreachable at startup (AbortOnConnectFail=false), and the
+      # Sentinel toggle needs to recreate this service while Sentinel is intentionally down.
+      ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       # Default OTel batch span processor flush delay is 5000ms - longer than some traffic
       # runs (as short as 1s) even last, which left the bottleneck advisor systematically
@@ -1008,6 +1015,14 @@ services:
       # See link-api's identical comments on these two.
       Cache__L1Enabled: "${L1_CACHE_ENABLED:-true}"
       Cache__NegativeEnabled: "${NEGATIVE_CACHE_ENABLED:-true}"
+      # appsettings.json's own default (600/60s) is sized for a public deploy's real client mix -
+      # see RedirectApiServiceExtensions.AddRedirectRateLimiting. A k6 load test driven through
+      # nginx normally fans out across many simulated client IPs (k6's own VU-per-connection
+      # behavior, unlike AuthApi's single-container-IP case above), so this is less likely to need
+      # overriding than AuthApi's own identical knob - left here anyway for the same reason:
+      # whoever wants to demo a 429 on purpose shouldn't have to edit code to lower it.
+      RateLimiting__PermitLimit: "${REDIRECT_RATE_LIMIT_PERMIT:-600}"
+      RateLimiting__WindowSeconds: "${REDIRECT_RATE_LIMIT_WINDOW_SECONDS:-60}"
       # Messaging transport toggle - rabbitmq (default, async) or grpc (sync). TargetUrl points at
       # nginx's internal gRPC fan-out for traffic-service (port 9091, see nginx.conf) only -
       # ReportingService doesn't host a messaging-mode gRPC endpoint at all (see its Program.cs

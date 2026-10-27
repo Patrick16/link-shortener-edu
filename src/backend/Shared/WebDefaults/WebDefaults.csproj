@@ -34,6 +34,10 @@
 		<!-- InternalApiKeyAuthenticationHandler reads its header name/config key from
 		     Common.Constants, the same convention the Jwt* constants already follow there. -->
 		<ProjectReference Include="..\Common\Common.csproj" />
+		<!-- RedisRateLimitFilter calls IRedisRateLimiter/RateLimitOutcome - the actual Redis check
+		     lives in Infrastructure (shared with non-web workers too), this project only wires it
+		     into an MVC action filter. -->
+		<ProjectReference Include="..\Infrastructure\Infrastructure.csproj" />
 	</ItemGroup>
 
 </Project>
