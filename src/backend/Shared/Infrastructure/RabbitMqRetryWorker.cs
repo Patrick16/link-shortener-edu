@@ -11,7 +11,16 @@ public class RabbitMqRetryWorker(
     IMessagePublisher publisher,
     ILogger<RabbitMqRetryWorker> logger) : BackgroundService
 {
-    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
+    // Full jitter (random(0, base), not base +-10%) - every LinkApi/RedirectApi replica runs its
+    // own instance of this worker against its own local SQLite fallback file, so a +-10% jitter
+    // would still leave every replica's tick within ~3s of every other's if they started around the
+    // same deploy moment - nowhere near enough separation to break a retry storm against RabbitMQ
+    // once it actually comes back after an outage (see this item's own PLAN.md framing). Re-rolled
+    // every tick via NextPollDelay (not generated once at startup) so replicas that happened to
+    // start within the same window keep drifting apart over time instead of staying correlated.
+    // Trades a lower average interval (expected 15s, not 30s - full jitter's accepted cost) for
+    // that decorrelation.
+    private const double PollIntervalSeconds = 30;
 
     private readonly IMessageFallbackStore _fallbackStore = fallbackStore;
     private readonly IMessagePublisher _publisher = publisher;
@@ -19,9 +28,10 @@ public class RabbitMqRetryWorker(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using var timer = new PeriodicTimer(PollInterval);
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+        while (!stoppingToken.IsCancellationRequested)
         {
+            await Task.Delay(NextPollDelay(), stoppingToken);
+
             try
             {
                 await PollOnceAsync(stoppingToken);
@@ -36,6 +46,11 @@ public class RabbitMqRetryWorker(
             }
         }
     }
+
+    // Random.Shared, not a seeded/injected instance - thread-safe and process-wide (.NET 6+); a
+    // fixed seed would defeat the entire point of decorrelating replicas from each other.
+    internal static TimeSpan NextPollDelay() =>
+        TimeSpan.FromSeconds(Random.Shared.NextDouble() * PollIntervalSeconds);
 
     internal async Task PollOnceAsync(CancellationToken cancellationToken)
     {

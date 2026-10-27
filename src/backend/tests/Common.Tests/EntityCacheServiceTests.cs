@@ -115,6 +115,30 @@ public class EntityCacheServiceTests
     }
 
     [Fact]
+    public async Task CacheAsync_AppliesJitterToTtl_StaysWithinPlusMinusTenPercentButVaries()
+    {
+        // Real distribution check, not a mock of the jitter itself - the point being verified is
+        // that repeated calls with the same requested ttlSeconds do NOT all produce the exact same
+        // AbsoluteExpirationRelativeToNow (that would mean the "create a burst, they all expire
+        // together" problem this item exists to fix is still there).
+        var observedTtlSeconds = new List<double>();
+        var cache = new Mock<IDistributedCache>();
+        cache.Setup(x => x.SetAsync(It.IsAny<string>(), It.IsAny<byte[]>(), It.IsAny<DistributedCacheEntryOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<string, byte[], DistributedCacheEntryOptions, CancellationToken>((_, _, options, _) =>
+                observedTtlSeconds.Add(options.AbsoluteExpirationRelativeToNow!.Value.TotalSeconds))
+            .Returns(Task.CompletedTask);
+        var sut = new TestEntityCacheService(cache.Object, ConfigWith());
+
+        for (var i = 0; i < 50; i++)
+        {
+            await sut.CacheAsync(new TestEntity("abc", "hello"), "abc", CancellationToken.None, ttlSeconds: 3600);
+        }
+
+        Assert.All(observedTtlSeconds, ttl => Assert.InRange(ttl, 3600 * 0.9, 3600 * 1.1));
+        Assert.True(observedTtlSeconds.Distinct().Count() > 1, "Expected jitter to vary the TTL across calls");
+    }
+
+    [Fact]
     public async Task InvalidateCacheAsync_CacheDisabled_NeverCallsDistributedCache()
     {
         var cache = new Mock<IDistributedCache>();

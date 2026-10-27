@@ -69,4 +69,23 @@ public class RabbitMqRetryWorkerTests
         fallbackStore.Verify(x => x.DeleteAsync("msg-1", It.IsAny<CancellationToken>()), Times.Once);
         fallbackStore.Verify(x => x.DeleteAsync("msg-2", It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public void NextPollDelay_ReturnsFullJitterWithinZeroToThirtySecondsAndActuallyVaries()
+    {
+        // Full jitter (random(0, base)), not base +-10% - a real distribution check, not a mock,
+        // since the whole point being verified is that this isn't a fixed interval. 200 samples is
+        // comfortably enough to both (a) never see a value outside [0, 30]s and (b) see real spread
+        // rather than a near-constant value (a flaky ±10% implementation masquerading as full
+        // jitter would cluster tightly around 30s instead).
+        var samples = Enumerable.Range(0, 200).Select(_ => RabbitMqRetryWorker.NextPollDelay()).ToList();
+
+        Assert.All(samples, delay =>
+        {
+            Assert.True(delay >= TimeSpan.Zero, $"Expected >= 0s, got {delay}");
+            Assert.True(delay <= TimeSpan.FromSeconds(30), $"Expected <= 30s, got {delay}");
+        });
+        Assert.True(samples.Min() < TimeSpan.FromSeconds(10), "Expected some samples well below the 30s base - full jitter, not a near-fixed interval");
+        Assert.True(samples.Max() > TimeSpan.FromSeconds(20), "Expected some samples close to the 30s base");
+    }
 }

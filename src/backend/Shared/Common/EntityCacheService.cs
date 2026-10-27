@@ -51,6 +51,16 @@ public abstract class EntityCacheService<T>(
     private readonly bool _negativeCacheEnabled = !bool.TryParse(configuration["Cache:NegativeEnabled"], out var negativeCacheEnabled) || negativeCacheEnabled;
     private static readonly TimeSpan NegativeTtl = TimeSpan.FromSeconds(10);
 
+    // +-10%, not AWS-style "full jitter" (random(0, ttl)) - full jitter here would roughly halve
+    // the average cache lifetime (half the jittered values would land below the midpoint), which
+    // defeats the point of caching for the sake of decorrelation. A bounded spread is already
+    // enough to break up a creation burst (every link created in the same minute no longer expires
+    // in the same second - see PLAN.md's own demo for this item) while keeping the EXPECTED
+    // lifetime equal to the requested ttlSeconds. Contrast with RabbitMqRetryWorker's poll delay,
+    // which genuinely needs full jitter because decorrelating retries across replicas matters far
+    // more there than polling at a perfectly predictable cadence.
+    private const double TtlJitterFraction = 0.1;
+
     // A dead Redis still means every call pays ConnectTimeout/SyncTimeout before this class's own
     // try/catch below turns it into a fail-open no-op - the breaker's job is to skip straight to
     // that no-op once Redis is known-dead, instead of re-discovering it on every single request.
@@ -83,7 +93,7 @@ public abstract class EntityCacheService<T>(
             string json = JsonSerializer.Serialize(entity, JsonOptions);
             var options = new DistributedCacheEntryOptions
             {
-                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(ttlSeconds)
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(ApplyTtlJitter(ttlSeconds))
             };
             await _resilience.ExecuteAsync(
                 ct => new ValueTask(_cache.SetStringAsync(Key(id), json, options, ct)), cancellationToken);
@@ -259,4 +269,10 @@ public abstract class EntityCacheService<T>(
 
         _l1Cache.Set(Key(id), entity, L1Ttl);
     }
+
+    // Random.Shared, not a seeded/injected instance - this is a thread-safe, process-wide generator
+    // (.NET 6+) and nothing here needs reproducible output; a fixed seed would defeat the entire
+    // point of decorrelating concurrently-created entries.
+    private static double ApplyTtlJitter(int ttlSeconds) =>
+        ttlSeconds * (1 + ((Random.Shared.NextDouble() * 2) - 1) * TtlJitterFraction);
 }
