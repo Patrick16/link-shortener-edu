@@ -76,4 +76,13 @@ public static class RedisExtensions
         builder.Services.AddSingleton<ILinkDeletionMarkerStore, RedisLinkDeletionMarkerStore>();
         return builder;
     }
+
+    // LinkApi only (POST /Links's Idempotency-Key support) - see IIdempotencyStore's own comment
+    // for the two-tier shape, deliberately mirroring AddLinkDeletionMarkerStore above.
+    public static IHostApplicationBuilder AddIdempotencyStore(this IHostApplicationBuilder builder)
+    {
+        builder.AddRedisMultiplexer();
+        builder.Services.AddSingleton<IIdempotencyStore, RedisIdempotencyStore>();
+        return builder;
+    }
 }

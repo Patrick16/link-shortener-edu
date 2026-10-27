@@ -32,6 +32,7 @@ public class LinksControllerTests
         out Mock<IHashGenerator> hashGenerator,
         out Mock<ICustomAliasCreator> aliasCreator,
         out Mock<ILinkDeletionMarkerStore> deletionMarkers,
+        out Mock<IIdempotencyStore> idempotency,
         ClaimsPrincipal? user = null)
     {
         cache = new Mock<IEntityCacheService<Link>>();
@@ -39,8 +40,9 @@ public class LinksControllerTests
         hashGenerator = new Mock<IHashGenerator>();
         aliasCreator = new Mock<ICustomAliasCreator>();
         deletionMarkers = new Mock<ILinkDeletionMarkerStore>();
+        idempotency = new Mock<IIdempotencyStore>();
 
-        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, aliasCreator.Object, deletionMarkers.Object, NullLogger<LinksController>.Instance)
+        var controller = new LinksController(context, cache.Object, dispatcher.Object, hashGenerator.Object, aliasCreator.Object, deletionMarkers.Object, idempotency.Object, NullLogger<LinksController>.Instance)
         {
             ControllerContext = new ControllerContext
             {
@@ -56,8 +58,18 @@ public class LinksControllerTests
         out Mock<IEventDispatcher> dispatcher,
         out Mock<IHashGenerator> hashGenerator,
         out Mock<ICustomAliasCreator> aliasCreator,
+        out Mock<ILinkDeletionMarkerStore> deletionMarkers,
         ClaimsPrincipal? user = null) =>
-        NewController(context, out cache, out dispatcher, out hashGenerator, out aliasCreator, out _, user);
+        NewController(context, out cache, out dispatcher, out hashGenerator, out aliasCreator, out deletionMarkers, out _, user);
+
+    private static LinksController NewController(
+        DatabaseContext context,
+        out Mock<IEntityCacheService<Link>> cache,
+        out Mock<IEventDispatcher> dispatcher,
+        out Mock<IHashGenerator> hashGenerator,
+        out Mock<ICustomAliasCreator> aliasCreator,
+        ClaimsPrincipal? user = null) =>
+        NewController(context, out cache, out dispatcher, out hashGenerator, out aliasCreator, out _, out _, user);
 
     [Fact]
     public async Task CreateLink_AnonymousCaller_PublishesEventWithNullUserId()

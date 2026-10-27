@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Common;
 using Common.Models;
@@ -23,6 +24,7 @@ public partial class LinksController(
     IHashGenerator hashGenerator,
     ICustomAliasCreator aliasCreator,
     ILinkDeletionMarkerStore deletionMarkers,
+    IIdempotencyStore idempotency,
     ILogger<LinksController> logger) : Controller
 {
     private const int PageSize = 50;
@@ -58,15 +60,116 @@ public partial class LinksController(
     private readonly IHashGenerator _hashGenerator = hashGenerator;
     private readonly ICustomAliasCreator _aliasCreator = aliasCreator;
     private readonly ILinkDeletionMarkerStore _deletionMarkers = deletionMarkers;
+    private readonly IIdempotencyStore _idempotency = idempotency;
     private readonly ILogger<LinksController> _logger = logger;
+
+    // CamelCase explicitly, not just left to System.Text.Json's PascalCase-preserving default -
+    // ASP.NET Core's own MVC JSON formatter serializes every other response in this API as
+    // camelCase (its own built-in default), so a byte-for-byte faithful replay has to match that
+    // convention deliberately, not inherit whatever a bare JsonSerializerOptions happens to do.
+    private static readonly JsonSerializerOptions ReplayJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
 
     [HttpPost]
     public async Task<ActionResult<LinkResponse>> CreateLink(
         [FromBody] LinkCreateRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        // Optional, header-based (same placement convention real idempotency-key APIs use) - no
+        // key means the pre-existing at-least-once behavior (a client retry after a timeout can
+        // still mint a second link). Kept after cancellationToken, not before, same reason GetLinks'
+        // own `deleted` param is - existing positional callers (every test in this file) keep
+        // compiling unchanged.
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey = null)
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            return await CreateLinkIdempotentlyAsync(idempotencyKey, request, cancellationToken);
+        }
+
+        return await CreateLinkCoreAsync(request, cancellationToken);
+    }
+
+    // Wraps CreateLinkCoreAsync (unchanged below) in a claim/replay cycle instead of threading the
+    // idempotency key through every branch of it - see IIdempotencyStore's own comment for the
+    // claim/complete/evict shape this drives. Every outcome CreateLinkCoreAsync can produce (the
+    // success path, or any Problem() - 400/401/409) is treated as a legitimately replayable,
+    // deterministic result for the same key; only an actual unhandled exception evicts the claim,
+    // so a genuine 500 doesn't poison the key for a legitimate retry.
+    private async Task<ActionResult<LinkResponse>> CreateLinkIdempotentlyAsync(
+        string idempotencyKey, LinkCreateRequest request, CancellationToken cancellationToken)
+    {
+        if (!await _idempotency.TryClaimAsync(idempotencyKey, cancellationToken))
+        {
+            var existing = await _idempotency.GetAsync(idempotencyKey, cancellationToken);
+            if (existing is null)
+            {
+                // Lost the race to claim, then the record vanished before this could read it (a
+                // Redis blip between the two calls, or the winner's claim already expired) -
+                // fail open rather than block the caller on a transient read gap.
+                return await CreateLinkCoreAsync(request, cancellationToken);
+            }
+
+            if (existing.Status == IdempotencyStatus.Pending)
+            {
+                return Problem(
+                    detail: "A request with this Idempotency-Key is already being processed - retry shortly.",
+                    statusCode: StatusCodes.Status409Conflict,
+                    title: "Request in progress.");
+            }
+
+            // Replay the first caller's exact prior outcome - no new hash generated, nothing
+            // re-published to the bus.
+            return new ObjectResult(JsonSerializer.Deserialize<JsonElement>(existing.BodyJson!, ReplayJsonOptions))
+            {
+                StatusCode = existing.StatusCode,
+                ContentTypes = { existing.ContentType! },
+            };
+        }
+
+        try
+        {
+            var result = await CreateLinkCoreAsync(request, cancellationToken);
+            var (statusCode, contentType, bodyJson) = ExtractForReplay(result);
+            await _idempotency.CompleteAsync(idempotencyKey, statusCode, contentType, bodyJson, cancellationToken);
+            return result;
+        }
+        catch
+        {
+            await _idempotency.EvictAsync(idempotencyKey, cancellationToken);
+            throw;
+        }
+    }
+
+    // ActionResult<T>'s own duality (a bare value via implicit conversion vs. an explicit
+    // ObjectResult from Problem()) means there's no single property that always holds "the status
+    // code and body" - this normalizes both shapes into the (status, content-type, JSON) triple
+    // CompleteAsync persists and a replay reconstructs from.
+    private static (int StatusCode, string ContentType, string BodyJson) ExtractForReplay(ActionResult<LinkResponse> result)
+    {
+        if (result.Result is ObjectResult objectResult)
+        {
+            var statusCode = objectResult.StatusCode ?? StatusCodes.Status200OK;
+            // Problem()'s ObjectResult doesn't reliably carry "application/problem+json" in
+            // ContentTypes itself (that's usually applied by output-formatter content negotiation
+            // at execution time, which never runs here) - inferred from the CLR type instead.
+            var contentType = objectResult.Value is ProblemDetails ? "application/problem+json" : "application/json";
+            return (statusCode, contentType, JsonSerializer.Serialize(objectResult.Value, ReplayJsonOptions));
+        }
+
+        // The success path returns a bare LinkResponse (implicit ActionResult<T> conversion) -
+        // ASP.NET Core serializes that as 200 OK, application/json.
+        return (StatusCodes.Status200OK, "application/json", JsonSerializer.Serialize(result.Value, ReplayJsonOptions));
+    }
+
+    private async Task<ActionResult<LinkResponse>> CreateLinkCoreAsync(
+        LinkCreateRequest request,
+        CancellationToken cancellationToken)
+    {
         // Rejects empty/malformed input before it reaches the hash generator's own
         // ArgumentException.ThrowIfNullOrEmpty (which would otherwise surface as an opaque 500
         // via GlobalExceptionHandler instead of a 400), and - more importantly - rejects any
