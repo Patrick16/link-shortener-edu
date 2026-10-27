@@ -124,4 +124,31 @@ public sealed class ClickCountFlushWorkerTests : IDisposable
         var stored = await verify.Links.SingleAsync();
         Assert.Equal(3, stored.ClickCount);
     }
+
+    [Fact]
+    public async Task StopAsync_BufferedCountsNeverTicked_AreFlushedOnShutdownInstead()
+    {
+        // F1 regression: a graceful stop (restart, rolling deploy, scale-down - routine, not just a
+        // crash) used to discard whatever was still buffered, because nothing ever called
+        // FlushOnceAsync one last time. The flush interval below is long enough that the real
+        // PeriodicTimer inside ExecuteAsync could not plausibly have ticked on its own before
+        // StopAsync runs - if this test passes, it's StopAsync's own final flush that did it, not a
+        // lucky regular tick.
+        var factory = NewFactory();
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.Links.Add(new Link("abc12345", "https://example.com", "abc12345", DateTime.UtcNow, null));
+            await seed.SaveChangesAsync();
+        }
+        var aggregator = new ClickCountAggregator();
+        var sut = NewSut(aggregator, factory);
+        await sut.StartAsync(CancellationToken.None);
+        aggregator.Add("abc12345", 4);
+
+        await sut.StopAsync(CancellationToken.None);
+
+        await using var verify = await factory.CreateDbContextAsync();
+        var stored = await verify.Links.SingleAsync();
+        Assert.Equal(4, stored.ClickCount);
+    }
 }

@@ -44,6 +44,30 @@ public sealed class ClickCountFlushWorker(
         }
     }
 
+    // Without this, every ordinary graceful stop (restart, rolling deploy, control-api
+    // scale-down - routine operations this project's own control plane drives regularly, not just
+    // a rare crash) would discard up to a full flush interval's worth of buffered counts across
+    // every pending hash, not the much narrower "one crash, one batch" window
+    // ClickCountAggregator's own comment accepts. base.StopAsync cancels the stoppingToken (ending
+    // ExecuteAsync's loop) and awaits that task before returning, so by the time this runs, no
+    // concurrent tick can still be mutating the aggregator - this is the one and only flush left to
+    // do. Uses `cancellationToken` (the host's own shutdown deadline, e.g. HostOptions.
+    // ShutdownTimeout), not the already-cancelled stoppingToken, so this final write still gets a
+    // real chance to complete instead of being cancelled before it starts.
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+
+        try
+        {
+            await FlushOnceAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Final click-count flush on shutdown failed - any still-buffered counts are lost");
+        }
+    }
+
     internal async Task FlushOnceAsync(CancellationToken cancellationToken)
     {
         var pending = _aggregator.DrainPending();

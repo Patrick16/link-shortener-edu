@@ -42,9 +42,9 @@ public sealed class LinkDeletedConsumer(
         var now = DateTime.UtcNow;
 
         // Only rows not already deleted get touched - ExecuteUpdateAsync (the same bulk-update
-        // pattern ClickTrackedConsumer already uses for ClickCount) rather than loading tracked
-        // entities, since Link.DeletedAt is an init-only record property EF can update this way
-        // without the ceremony of a per-entity ChangeTracker.Entry(...).Property(...) call.
+        // pattern ClickCountFlushWorker uses for ClickCount) rather than loading tracked entities,
+        // since Link.DeletedAt is an init-only record property EF can update this way without the
+        // ceremony of a per-entity ChangeTracker.Entry(...).Property(...) call.
         if (existingHashes.Count > 0)
         {
             await context.Links
@@ -72,7 +72,7 @@ public sealed class LinkDeletedConsumer(
             await _cache.InvalidateCacheAsync(hash);
         }
 
-        // Unlike ClickTrackedConsumer's identical-shaped "no row found" case (which just logs and
+        // Unlike ClickCountFlushWorker's identical-shaped "no row found" case (which just logs and
         // moves on - a missed click-count increment is an approximate display number by design, not
         // worth retrying), a missing link here gets a real retry instead of being silently dropped:
         // LinkApi's own optimistic cache write means a delete request can be accepted (and this event
