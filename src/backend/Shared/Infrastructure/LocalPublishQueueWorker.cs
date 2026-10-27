@@ -37,9 +37,13 @@ public sealed class LocalPublishQueueWorker(
     }
 
     // Host shutdown (SIGTERM, docker-compose stop): stop accepting new writes first, then give the
-    // workers up to the host's own shutdown budget (the cancellationToken here is
-    // HostOptions.ShutdownTimeout) to drain whatever was already queued, instead of abandoning it the
-    // instant the signal arrives. Channel.Writer.TryComplete lets Reader.ReadAllAsync finish the
+    // workers whatever is LEFT of the host's own shutdown budget (the cancellationToken here is
+    // HostOptions.ShutdownTimeout) to drain whatever was already queued, instead of abandoning it
+    // the instant the signal arrives. "Left", not "the full budget" - this is one shared, sequential
+    // clock across every IHostedService.StopAsync, and Kestrel's own hosted service stops first
+    // (registered last by Build()), draining in-flight HTTP requests before this StopAsync is even
+    // called - see AddGracefulShutdown's own comment (WebApiDefaultsExtensions.cs) for where this
+    // was confirmed empirically. Channel.Writer.TryComplete lets Reader.ReadAllAsync finish the
     // backlog and return normally on its own - no cancellation needed for the common case where
     // draining finishes well within the budget.
     public async Task StopAsync(CancellationToken cancellationToken)
