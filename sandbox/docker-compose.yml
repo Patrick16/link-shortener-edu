@@ -921,6 +921,9 @@ services:
       # to false so the app skips Redis entirely (see EntityCacheService), a clean "no caching"
       # demo rather than every request eating a failed-connection timeout against a stopped redis.
       Cache__Enabled: "${CACHE_ENABLED:-true}"
+      # L1 (in-process) toggle, independent of Cache__Enabled above - lets the "L1 cache" control
+      # panel toggle compare Redis-only against L1+Redis with Redis left on throughout.
+      Cache__L1Enabled: "${L1_CACHE_ENABLED:-true}"
       # Messaging transport toggle - rabbitmq (default, async) or grpc (sync). TargetUrl points at
       # nginx's internal gRPC fan-out for shortener-service (port 9090, see nginx.conf), not at
       # shortener-service directly - see nginx.conf's own comment for why (replica load-balancing).
@@ -986,6 +989,8 @@ services:
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
       Cache__Enabled: "${CACHE_ENABLED:-true}"
+      # See link-api's identical comment on this one.
+      Cache__L1Enabled: "${L1_CACHE_ENABLED:-true}"
       # Messaging transport toggle - rabbitmq (default, async) or grpc (sync). TargetUrl points at
       # nginx's internal gRPC fan-out for traffic-service (port 9091, see nginx.conf) only -
       # ReportingService doesn't host a messaging-mode gRPC endpoint at all (see its Program.cs

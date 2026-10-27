@@ -1,4 +1,5 @@
 using Common;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -29,6 +30,12 @@ public static class RedisExtensions
             options.InstanceName = builder.Configuration[Constants.RedisInstanceName];
         });
         builder.Services.AddHostedService<RedisWarmupService>();
+
+        // EntityCacheService's L1 (in-process) layer, ahead of this IDistributedCache (L2) - see
+        // EntityCacheService's own class-level comment. AddMemoryCache() is already idempotent
+        // (uses TryAdd internally), so calling this alongside the registration above is harmless
+        // even on a service (ShortenerService) that wires this up more than once indirectly.
+        builder.Services.AddMemoryCache();
 
         // Shared by EntityCacheService/LinkCacheService (this IDistributedCache) and, in whichever
         // service also calls AddGeoIpResolution, CachingGeoIpResolver - same registration either

@@ -98,7 +98,8 @@
       "icon": "🌐",
       "description": "Creates short links (hash generated here), reads them back through a cache",
       "capabilities": [
-        "scalable"
+        "scalable",
+        "l1-cache-toggle"
       ],
       "details": {
         "purpose": "POST /links generates the hash, optionally attaches userId from a Bearer token (no [Authorize] — anonymous still works), and publishes it; GET /links/{hash} is a cached read against links_db; GET /links (paginated) lists a user's own links",
@@ -123,7 +124,8 @@
       "icon": "↪️",
       "description": "Resolves a short link, issues a 302, records the click, and publishes it",
       "capabilities": [
-        "scalable"
+        "scalable",
+        "l1-cache-toggle"
       ],
       "details": {
         "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; publishes ClickTrackedEvent, then records the click in the owner's Redis day bucket (hot path, doesn't wait on Postgres) before redirecting",

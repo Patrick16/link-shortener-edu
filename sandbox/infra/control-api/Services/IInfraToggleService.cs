@@ -16,6 +16,16 @@ public interface IInfraToggleService
 
     Task<InfraStatus> SetCacheEnabledAsync(bool enabled, CancellationToken ct);
 
+    // L1 (in-process) layer ahead of Redis - deliberately NOT part of InfraStatus (see its own
+    // comment on why) - same "own GET/POST pair, not staged in Topology" shape as
+    // GetRabbitMqPrefetch/GetMongoReadPreference/GetNpgsqlPoolSize below. Recreates the same
+    // CacheUsingServices (link-api/redirect-api) SetCacheEnabledAsync does, with a different env
+    // var - the two toggles are independent, so Redis can be compared "with" vs. "without" L1
+    // while staying on throughout.
+    bool GetL1CacheEnabled();
+
+    Task<bool> SetL1CacheEnabledAsync(bool enabled, CancellationToken ct);
+
     Task<InfraStatus> SetMessagingModeAsync(string mode, CancellationToken ct);
 
     // Starts/stops the haproxy container itself, not a connection-string flip on its consumers -

@@ -1,5 +1,6 @@
 using Common.Models;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,8 +24,9 @@ public class LinkCacheService(
     IDistributedCache cache,
     IConfiguration configuration,
     ILogger<EntityCacheService<Link>> logger,
-    [FromKeyedServices(Constants.RedisCircuitBreakerKey)] ResiliencePipeline resiliencePipeline) :
-    EntityCacheService<Link>(cache, configuration, logger, resiliencePipeline)
+    [FromKeyedServices(Constants.RedisCircuitBreakerKey)] ResiliencePipeline resiliencePipeline,
+    IMemoryCache memoryCache) :
+    EntityCacheService<Link>(cache, configuration, logger, resiliencePipeline, memoryCache)
 {
     protected override string Key(string id) => $"link:{id}";
 }

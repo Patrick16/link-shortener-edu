@@ -8,6 +8,7 @@ import { NpgsqlPoolSizeControl } from '../components/NpgsqlPoolSizeControl'
 import { SentinelConfigControl } from '../components/SentinelConfigControl'
 import { RabbitMqPrefetchControl } from '../components/RabbitMqPrefetchControl'
 import { MongoReadPreferenceControl } from '../components/MongoReadPreferenceControl'
+import { L1CacheControl } from '../components/L1CacheControl'
 import { ReplicationLagControl } from '../components/ReplicationLagControl'
 import { PgcatConnectionsPanel } from '../components/PgcatConnectionsPanel'
 import { PostgresConnectionsPanel } from '../components/PostgresConnectionsPanel'
@@ -21,7 +22,10 @@ export type { CapabilityControlProps }
 // control to render per serviceId, it just looks each of a node's capabilities up here.
 // nginx-toggle/pgcat-toggle/cache-toggle/messaging-mode used to live here (one per node) - all 4
 // moved into the global TopologyPanel (see App.tsx), which stages and saves all of them at once
-// instead of applying immediately from a single node's panel.
+// instead of applying immediately from a single node's panel. l1-cache-toggle went the other way
+// (added here directly, never lived in TopologyPanel) - per direct feedback, it doesn't change
+// which nodes are in the active-path graph the way those 4 do, so staging it alongside them would
+// misrepresent what it does and recreate link-api/redirect-api on every unrelated Topology Save.
 const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> = {
   scalable: ScaleCapabilityControl,
   'flush-cache': FlushCacheControl,
@@ -30,6 +34,7 @@ const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> 
   'sentinel-config': SentinelConfigControl,
   'rabbitmq-prefetch': RabbitMqPrefetchControl,
   'mongo-read-preference': MongoReadPreferenceControl,
+  'l1-cache-toggle': L1CacheControl,
   'replication-lag': ReplicationLagControl,
   'pgcat-connections': PgcatConnectionsPanel,
   'postgres-connections': PostgresConnectionsPanel,

@@ -75,6 +75,8 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     private bool _nginxBypassed;
     private bool _pgcatEnabled = true;
     private bool _cacheEnabled = true;
+    // Mirrors EntityCacheService's own default (Cache:L1Enabled, no key set => enabled).
+    private bool _l1CacheEnabled = true;
     private string _messagingMode = "rabbitmq";
 
     // Mirrors RabbitMqConsumer's own hardcoded-turned-configurable default.
@@ -108,6 +110,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         ["DB_HOST"] = _pgcatEnabled ? "haproxy" : "postgres",
         ["DB_PORT"] = _pgcatEnabled ? "6432" : "5432",
         ["CACHE_ENABLED"] = _cacheEnabled ? "true" : "false",
+        ["L1_CACHE_ENABLED"] = _l1CacheEnabled ? "true" : "false",
         ["MESSAGING_MODE"] = _messagingMode,
         ["NPGSQL_MAX_POOL_SIZE"] = _npgsqlPoolSize.ToString(),
         ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString(),
@@ -277,16 +280,32 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             return await GetInfraStatusAsync(ct);
         }, ct);
 
+    public bool GetL1CacheEnabled() => _l1CacheEnabled;
+
+    public Task<bool> SetL1CacheEnabledAsync(bool enabled, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            _l1CacheEnabled = enabled;
+            await RecreateCacheUsingServicesAsync(ct);
+            return _l1CacheEnabled;
+        }, ct);
+
     // Shared by the public SetCacheEnabledAsync and by SetRedisEnabledAsync's ON path (which sets
     // _cacheEnabled directly and calls this instead of the public, gated method, same reasoning as
     // every other un-gated private helper in this class). Always reads _cacheEnabled rather than
     // taking a parameter - the caller sets the field first, this just recreates to match.
+    // Shared by SetCacheEnabledAsync and SetL1CacheEnabledAsync - both recreate the exact same two
+    // services (CacheUsingServices), just with a different one of CurrentStandingEnv's two cache-
+    // related env vars changed first. Also shared by SetRedisEnabledAsync's ON path, same reasoning
+    // as every other un-gated private helper in this class.
     private async Task RecreateCacheUsingServicesAsync(CancellationToken ct)
     {
         var env = CurrentStandingEnv();
         var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(CacheUsingServices, ct);
 
-        logger.LogWarning("Switching Cache__Enabled for {Services} to {Enabled}", string.Join(", ", CacheUsingServices), _cacheEnabled);
+        logger.LogWarning(
+            "Switching Cache__Enabled/Cache__L1Enabled for {Services} to {Enabled}/{L1Enabled}",
+            string.Join(", ", CacheUsingServices), _cacheEnabled, _l1CacheEnabled);
         var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CacheUsingServices], env, ct);
         if (exitCode != 0)
         {

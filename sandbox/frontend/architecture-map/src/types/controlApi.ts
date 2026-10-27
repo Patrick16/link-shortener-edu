@@ -312,6 +312,14 @@ export interface RabbitMqPrefetch {
   prefetchCount: number
 }
 
+// L1 (in-process) cache ahead of Redis, on link-api/redirect-api - deliberately not a field on
+// InfraStatus (doesn't change the active-path graph, unlike every InfraStatus toggle) - own
+// GET/POST pair instead, same shape as RabbitMqPrefetch/MongoReadPreferenceStatus above. See
+// SetL1CacheEnabledAsync on the backend.
+export interface L1CacheStatus {
+  enabled: boolean
+}
+
 // readPreference on traffic-service's Mongo connection string - see SetMongoReadPreferenceAsync on
 // the backend.
 export type MongoReadPreference = 'primary' | 'secondaryPreferred'
@@ -426,6 +434,7 @@ export interface InfraConfigSnapshot {
   rabbitMqPrefetchCount?: number | null
   mongoReadPreference?: MongoReadPreference | null
   npgsqlPoolSize?: number | null
+  l1CacheEnabled?: boolean | null
 }
 
 // A named, reloadable infra config - see Preset on the backend. scenarioName, if set, points at
@@ -460,6 +469,7 @@ export interface RunSnapshot {
   verdict?: BottleneckVerdict | null
   thresholdsUsed?: BottleneckThresholds | null
   baseline?: BaselineComparison | null
+  l1CacheEnabled?: boolean | null
 }
 
 // Lightweight row for the history list - see RunSummary on the backend for why it's separate from

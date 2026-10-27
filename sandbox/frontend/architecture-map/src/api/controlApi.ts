@@ -8,6 +8,7 @@ import type {
   HaproxyStats,
   InfraStatus,
   InfraTopology,
+  L1CacheStatus,
   ManagedContainer,
   MessagingMode,
   PgcatInstanceConnections,
@@ -135,6 +136,9 @@ export const controlApi = {
 
   getRabbitMqPrefetch: () => request<RabbitMqPrefetch>('/api/infra/rabbitmq-prefetch'),
   setRabbitMqPrefetch: (prefetchCount: number) => request<RabbitMqPrefetch>('/api/infra/rabbitmq-prefetch', 'POST', { prefetchCount }),
+
+  getL1CacheEnabled: () => request<L1CacheStatus>('/api/infra/l1-cache'),
+  setL1CacheEnabled: (enabled: boolean) => request<L1CacheStatus>('/api/infra/l1-cache', 'POST', { enabled }),
 
   getMongoReadPreference: () => request<MongoReadPreferenceStatus>('/api/infra/mongo-read-preference'),
   setMongoReadPreference: (preference: MongoReadPreference) =>

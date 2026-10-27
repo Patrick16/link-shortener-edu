@@ -32,7 +32,7 @@ function toReplicaCounts(containers: ManagedContainer[]): ReplicaCount[] {
 // TrafficRunCoordinator.SaveSnapshotAsync's own try/catch reads server-side) - one being
 // unreachable (e.g. Sentinel not running) shouldn't block capturing the rest.
 export async function captureCurrentInfraConfig(): Promise<InfraConfigSnapshot> {
-  const [infra, containers, pgcatPool, sentinel, prefetch, mongoReadPreference, npgsqlPoolSize, replicationLags] = await Promise.all([
+  const [infra, containers, pgcatPool, sentinel, prefetch, mongoReadPreference, npgsqlPoolSize, l1Cache, replicationLags] = await Promise.all([
     controlApi.getInfraStatus(),
     controlApi.listContainers(),
     controlApi.getPgcatPoolSettings().catch(() => null),
@@ -40,6 +40,7 @@ export async function captureCurrentInfraConfig(): Promise<InfraConfigSnapshot> 
     controlApi.getRabbitMqPrefetch().catch(() => null),
     controlApi.getMongoReadPreference().catch(() => null),
     controlApi.getNpgsqlPoolSize().catch(() => null),
+    controlApi.getL1CacheEnabled().catch(() => null),
     Promise.all(
       REPLICATION_LAG_SERVICE_IDS.map(async (serviceId): Promise<ReplicationLagEntry | null> => {
         try {
@@ -61,6 +62,7 @@ export async function captureCurrentInfraConfig(): Promise<InfraConfigSnapshot> 
     rabbitMqPrefetchCount: prefetch?.prefetchCount ?? null,
     mongoReadPreference: mongoReadPreference?.preference ?? null,
     npgsqlPoolSize: npgsqlPoolSize?.poolSize ?? null,
+    l1CacheEnabled: l1Cache?.enabled ?? null,
   }
 }
 
@@ -131,6 +133,9 @@ export async function applyInfraConfig(config: InfraConfigSnapshot): Promise<App
   if (config.npgsqlPoolSize != null) {
     await step('Npgsql pool size', () => controlApi.setNpgsqlPoolSize(config.npgsqlPoolSize!))
   }
+  if (config.l1CacheEnabled != null) {
+    await step('L1 caching', () => controlApi.setL1CacheEnabled(config.l1CacheEnabled!))
+  }
 
   return { applied, failed }
 }
@@ -181,6 +186,11 @@ export function diffInfraConfig(current: InfraConfigSnapshot, desired: InfraConf
   addIfDiff('RabbitMQ prefetch', String(current.rabbitMqPrefetchCount ?? '—'), String(desired.rabbitMqPrefetchCount ?? '—'))
   addIfDiff('Mongo read preference', current.mongoReadPreference ?? '—', desired.mongoReadPreference ?? '—')
   addIfDiff('Npgsql pool size', String(current.npgsqlPoolSize ?? '—'), String(desired.npgsqlPoolSize ?? '—'))
+  addIfDiff(
+    'L1 caching',
+    current.l1CacheEnabled == null ? '—' : current.l1CacheEnabled ? 'ON' : 'OFF',
+    desired.l1CacheEnabled == null ? '—' : desired.l1CacheEnabled ? 'ON' : 'OFF',
+  )
 
   const lagServiceIds = new Set([...(current.replicationLags ?? []), ...(desired.replicationLags ?? [])].map((l) => l.serviceId))
   for (const serviceId of lagServiceIds) {

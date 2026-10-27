@@ -101,6 +101,16 @@ namespace ControlApi.Models;
 // traffic-service gets recreated with is cached state
 // (InfraToggleService._mongoConnectionIncludesReplicas), the same shape as REDIS_CONN above, with the
 // identical generic-bypass caveat.
+//
+// L1 (in-process) caching is deliberately NOT a field here - unlike every toggle above, it doesn't
+// change which nodes are in the active request path (the graph draws the same either way), so it
+// doesn't belong in the Topology panel's "which components are in play" staging/Save flow. It's a
+// per-node runtime knob instead, same category as rabbitmq-prefetch/npgsql-pool-size/mongo-read-
+// preference - its own GetL1CacheEnabled/SetL1CacheEnabledAsync pair, applied immediately from
+// LinkApi's/RedirectApi's own node panels (see L1CacheToggleCapability/L1CacheControl.tsx), not
+// staged. (An earlier version of this toggle lived here and in TopologyPanel - moved out per
+// direct feedback: it was also the one toggle in that panel that would otherwise get silently
+// re-applied, and its services recreated, on every unrelated Save.)
 public record InfraStatus(bool NginxBypassed, bool PgcatEnabled, bool CacheEnabled, string MessagingMode, bool HaproxyEnabled, bool PostgresReplicasEnabled, bool RedisEnabled, bool RedisSentinelEnabled, bool MongoReplicasEnabled);
 
 public record InfraToggleRequest(bool Enabled);

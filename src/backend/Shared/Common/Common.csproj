@@ -8,6 +8,10 @@
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
+		<!-- EntityCacheService's L1 (in-process) layer, ahead of the IDistributedCache (Redis) L2
+		     above - no separate ".Abstractions" package exists for IMemoryCache, this one package
+		     ships both the interface and the implementation. -->
+		<PackageReference Include="Microsoft.Extensions.Caching.Memory" />
 		<PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
 		<!-- FromKeyedServicesAttribute, used on EntityCacheService's/LinkCacheService's circuit-
 		     breaker constructor parameter - abstractions only, no DI container implementation. -->

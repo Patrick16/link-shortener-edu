@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -10,20 +11,25 @@ public record TestEntity(string Id, string Value);
 
 // ResiliencePipeline.Empty is a no-op pipeline (always runs the delegate, never trips) - these
 // tests exercise GetCachedAsync/CacheAsync/InvalidateCacheAsync's own fail-open behavior, not the
-// circuit breaker itself (see ResiliencePipelinesTests for that).
+// circuit breaker itself (see ResiliencePipelinesTests for that). A real MemoryCache, not a mock -
+// L1 behavior itself is covered separately (see EntityCacheServiceL1Tests); every test in this
+// file disables L1 via ConfigWith's default (Cache:L1Enabled=false) specifically so a real,
+// working L1 doesn't change any of these tests' existing Redis/L2-focused assertions (e.g. a
+// fetch-then-refetch test that expects two independent DB calls would otherwise only see one, the
+// second served from L1 instead).
 public class TestEntityCacheService(IDistributedCache cache, IConfiguration configuration)
-    : EntityCacheService<TestEntity>(cache, configuration, NullLogger<EntityCacheService<TestEntity>>.Instance, ResiliencePipeline.Empty)
+    : EntityCacheService<TestEntity>(
+        cache, configuration, NullLogger<EntityCacheService<TestEntity>>.Instance, ResiliencePipeline.Empty, new MemoryCache(new MemoryCacheOptions()))
 {
     protected override string Key(string id) => $"test:{id}";
 }
 
 public class EntityCacheServiceTests
 {
-    private static IConfiguration ConfigWith(bool? cacheEnabled = null)
+    private static IConfiguration ConfigWith(bool? cacheEnabled = null, bool l1CacheEnabled = false)
     {
-        var data = cacheEnabled is null
-            ? new Dictionary<string, string?>()
-            : new Dictionary<string, string?> { ["Cache:Enabled"] = cacheEnabled.Value.ToString() };
+        var data = new Dictionary<string, string?> { ["Cache:L1Enabled"] = l1CacheEnabled.ToString() };
+        if (cacheEnabled is not null) data["Cache:Enabled"] = cacheEnabled.Value.ToString();
 
         return new ConfigurationBuilder().AddInMemoryCollection(data).Build();
     }

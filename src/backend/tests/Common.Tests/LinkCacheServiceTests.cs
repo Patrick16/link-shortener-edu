@@ -1,5 +1,6 @@
 using Common.Models;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -19,7 +20,8 @@ public class LinkCacheServiceTests
         // invisible to the other.
         var cache = new Mock<IDistributedCache>();
         cache.Setup(x => x.GetAsync("link:abc123", It.IsAny<CancellationToken>())).ReturnsAsync((byte[]?)null);
-        var sut = new LinkCacheService(cache.Object, EmptyConfig(), NullLogger<EntityCacheService<Link>>.Instance, ResiliencePipeline.Empty);
+        var sut = new LinkCacheService(
+            cache.Object, EmptyConfig(), NullLogger<EntityCacheService<Link>>.Instance, ResiliencePipeline.Empty, new MemoryCache(new MemoryCacheOptions()));
 
         await sut.GetCachedAsync("abc123", CancellationToken.None);
 

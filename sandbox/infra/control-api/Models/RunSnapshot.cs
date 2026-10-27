@@ -35,7 +35,9 @@ public record RunSnapshot(
     BottleneckThresholds? ThresholdsUsed = null,
     // Comparison against the most recent prior run of this exact scenario, if one exists - see
     // BaselineComparison's own comment for why it's scenario-scoped, not just "the previous run".
-    BaselineComparison? Baseline = null);
+    BaselineComparison? Baseline = null,
+    // Same "not a field on Infra" reasoning as InfraConfigSnapshot's own L1CacheEnabled.
+    bool? L1CacheEnabled = null);
 
 // Lightweight row for the history list - avoids deserializing every run's full report (including
 // its potentially large RawOutput) just to render a list of past runs.
