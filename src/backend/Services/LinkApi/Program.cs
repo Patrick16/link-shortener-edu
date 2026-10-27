@@ -7,6 +7,7 @@ using WebDefaults;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddWebApiDefaults();
+builder.AddGracefulShutdown();
 
 builder.AddPostgresDbContextPool<DatabaseContext>();
 builder.AddRedisDistributedCache();

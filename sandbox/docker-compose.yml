@@ -879,6 +879,15 @@ services:
 
   link-api:
     logging: *default-logging
+    # Explicit, not Compose's own 10s default - must exceed this service's own HostOptions.
+    # ShutdownTimeout (15s, see Program.cs) with a margin for the process to actually exit after
+    # its hosted services finish stopping, or Docker SIGKILLs the container before Kestrel's own
+    # graceful drain (stop accepting new connections, let in-flight ones finish) even has the
+    # budget to run out - the two defaults (10s here, 30s there) collided exactly this way before
+    # either was set explicitly (found during review of backlog item 5 - see PLAN.md). Scoped to
+    # link-api/redirect-api only, the two services this item's own scale-down demo targets - see
+    # redirect-api's identical comment below.
+    stop_grace_period: 20s
     build:
       context: ..
       dockerfile: src/backend/Services/LinkApi/Dockerfile
@@ -970,6 +979,9 @@ services:
 
   redirect-api:
     logging: *default-logging
+    # See link-api's identical comment above - same pairing with this service's own
+    # HostOptions.ShutdownTimeout (15s, see Program.cs), same reasoning.
+    stop_grace_period: 20s
     build:
       context: ..
       dockerfile: src/backend/Services/RedirectApi/Dockerfile
