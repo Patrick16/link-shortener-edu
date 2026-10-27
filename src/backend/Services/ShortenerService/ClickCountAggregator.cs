@@ -11,11 +11,12 @@ namespace ShortenerService;
 // row lock under load). Shared as a singleton between ClickTrackedConsumer (producer) and
 // ClickCountFlushWorker (consumer).
 //
-// Anything still buffered here when the process crashes or is force-killed is simply lost - the
-// same accepted approximate-display-counter tradeoff ClickTrackedConsumer's own comment already
-// documents for Links.ClickCount (TrafficService's Clicks table remains the real audit trail). No
-// flush-on-shutdown mechanism is built for the same reason: it would only narrow, never close, that
-// already-accepted window, for a number that's explicitly allowed to drift.
+// Anything still buffered here when the process crashes or is force-killed (SIGKILL, OOM) is
+// simply lost - the same accepted approximate-display-counter tradeoff ClickTrackedConsumer's own
+// comment already documents for Links.ClickCount (TrafficService's Clicks table remains the real
+// audit trail). A GRACEFUL stop is covered: ClickCountFlushWorker.StopAsync drains and applies
+// whatever's still buffered here one last time before the host finishes shutting it down (found
+// missing, then added, in review - see that class's own comment).
 public sealed class ClickCountAggregator
 {
     private readonly ConcurrentDictionary<string, long> _pendingCounts = new();
