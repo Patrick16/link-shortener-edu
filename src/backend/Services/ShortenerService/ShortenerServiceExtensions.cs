@@ -16,7 +16,12 @@ public static class ShortenerServiceExtensions
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LinkCreatedConsumer>());
         builder.Services.AddSingleton<LinkDeletedConsumer>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LinkDeletedConsumer>());
+        // Shared singleton between the two hosted services below - ClickTrackedConsumer only ever
+        // writes to it, ClickCountFlushWorker only ever drains it (see ClickCountAggregator's own
+        // comment for why this split exists at all).
+        builder.Services.AddSingleton<ClickCountAggregator>();
         builder.Services.AddHostedService<ClickTrackedConsumer>();
+        builder.Services.AddHostedService<ClickCountFlushWorker>();
         builder.Services.AddHostedService<LinkExpiryWorker>();
         return builder;
     }
