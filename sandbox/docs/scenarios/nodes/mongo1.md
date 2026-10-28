@@ -19,7 +19,7 @@ driver discovers and follows whichever one currently holds `PRIMARY`.
 ## How it's implemented here
 
 ```yaml
-# sandbox/docker-compose.yml — mongo-init, a one-shot container
+# sandbox/docker-compose.yml:499 — mongo-init, a one-shot container
 mongosh --host mongo1:27017 --quiet --eval '
   try {
     rs.status();
@@ -83,6 +83,22 @@ This whole sequence runs inside the same exclusive-toggle gate every standing to
 worst-case run (priority bump + stepdown + a full poll) blocks any other toggle call for up to
 ~15-20 seconds — acceptable for this single-operator admin tool, and non-deadlocking either way, but
 worth knowing if a toggle call seems to hang briefly.
+
+The OFF direction (quirks 1-3 above) is the structurally harder one — ON is just `rs.add()` for
+each missing member, run against whichever node answers as primary:
+
+```mermaid
+flowchart TD
+    A["OFF toggle: SetReplicasEnabledAsync(false)"] --> B["find current primary\n(rs.status() against mongo1/2/3)"]
+    B --> C{"mongo1 already primary?"}
+    C -->|yes| F["remove mongo2, then mongo3\n(one rs.reconfig() per member,\nrun from mongo1's own connection)"]
+    C -->|no| D["bump mongo1's priority to 2,\nrs.stepDown() the current primary"]
+    D --> E{"mongo1 reports itself primary\nwithin 15 x 1s polls?"}
+    E -->|yes| F
+    E -->|no| G["reset member priorities,\nthrow - toggle fails,\ncontainers left untouched"]
+    F --> H["reset mongo1's own priority\nback to 1"]
+    H --> I["stop mongo2/mongo3 containers"]
+```
 
 ## Pitfalls
 

@@ -18,7 +18,7 @@ node has no say in that.
 ## How it's implemented here
 
 ```bash
-# sandbox/infra/postgres/replica-entrypoint.sh
+# sandbox/infra/postgres/replica-entrypoint.sh:17
 if [ -z "$(ls -A "$PGDATA" 2>/dev/null)" ]; then
   while true; do
     psql -h postgres -p 5432 -U replicator -d postgres \
@@ -30,6 +30,17 @@ if [ -z "$(ls -A "$PGDATA" 2>/dev/null)" ]; then
     sleep 2
   done
 fi
+```
+
+```mermaid
+flowchart TD
+    A["Container starts"] --> B{"PGDATA empty?"}
+    B -->|no| F["exec postgres -c max_connections=...\n(standby.signal already present\nfrom a prior -R → hot standby)"]
+    B -->|yes| C["drop replication slot if it exists\n(clears a failed previous attempt)"]
+    C --> D["pg_basebackup -C --slot=...\n-R (streams from the primary)"]
+    D --> E{"succeeded?"}
+    E -->|no| G["sleep 2s"] --> C
+    E -->|yes| F
 ```
 
 `-C --slot` creates a **replication slot** on the primary and (combined with `-R`) writes it into

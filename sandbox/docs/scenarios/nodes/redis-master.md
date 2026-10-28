@@ -22,13 +22,16 @@ a second cache population — this sharing is *why* `LinkCacheService` was pulle
 `Shared/Common` rather than living in either service:
 
 ```csharp
-// src/backend/Shared/Common/LinkCacheService.cs:14
+// src/backend/Shared/Common/LinkCacheService.cs:31
 protected override string Key(string id) => $"link:{id}";
 ```
 
 Reads go through `EntityCacheService<T>.GetOrFetch` (`src/backend/Shared/Common/
-EntityCacheService.cs:79`) — check cache, fall back to `fetchFromDb` on a miss, populate the cache
-with what was fetched.
+EntityCacheService.cs:146`) — check cache, fall back to `fetchFromDb` on a miss, populate the cache
+with what was fetched. The `IDistributedCache` plumbing underneath both of these is
+[`Microsoft.Extensions.Caching.StackExchangeRedis`](https://www.nuget.org/packages/Microsoft.Extensions.Caching.StackExchangeRedis)'s
+`AddStackExchangeRedisCache`, wired up once for every Redis-touching service in
+`RedisExtensions.AddRedisDistributedCache` (`src/backend/Shared/Infrastructure/RedisExtensions.cs:25`).
 
 ## Standing toggle
 

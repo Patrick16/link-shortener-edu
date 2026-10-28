@@ -19,31 +19,43 @@ record the click in the owner's Redis day bucket, then a 302. A dead hash - whic
 it - gets an HTML "gone" (`410`) or "not found" (`404`) page instead, not this API's usual JSON
 `ProblemDetails` shape; see below for why that's a deliberately different response type.
 
+```mermaid
+flowchart TD
+    A["GET /hash"] --> B{"Deletion tombstone exists?\n(link:deleted:HASH key)"}
+    B -->|found| Z["410 Gone page"]
+    B -->|none| C["cache-aside GetOrFetch(hash)\n(L1 -> Redis -> Postgres)"]
+    C --> D{"link found?"}
+    D -->|no| Y["404 Not Found page"]
+    D -->|yes| E{"DeletedAt set or\nExpiresAt passed?"}
+    E -->|yes| Z
+    E -->|no| F["publish ClickTrackedEvent"]
+    F --> G["record click in owner's\nRedis day bucket"]
+    G --> H["302 redirect to OriginalLink"]
+```
+
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/RedirectApi/Controllers/RedirectController.cs:26
-public async Task<IActionResult> RedirectToOrigin(string hash, CancellationToken ct)
+// src/backend/Services/RedirectApi/Controllers/RedirectController.cs:46, RedirectToOrigin (trimmed -
+// the request-budget token wrapping this actually runs under is covered separately below)
+var marker = await _deletionMarkers.GetAsync(hash, budgetToken);
+if (marker is not null) return GonePage(marker.Reason, marker.DeletedAt);
+
+var link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, budgetToken);
+if (link is null) return NotFoundPage();
+
+if (link.DeletedAt is not null || (link.ExpiresAt is { } expiresAt && expiresAt <= DateTime.UtcNow))
 {
-    var marker = await _deletionMarkers.GetAsync(hash, ct);
-    if (marker is not null) return GonePage(marker.Reason, marker.DeletedAt);
-
-    var link = await _cache.GetOrFetch(hash, fetchFromDb: Fetch, ct);
-    if (link is null) return NotFoundPage();
-
-    if (link.DeletedAt is not null || link.ExpiresAt <= DateTime.UtcNow)
-    {
-        return GonePage(/* ... */);
-    }
-
-    var clickEvent = new ClickTrackedEvent { Id = Guid.NewGuid(), Hash = hash, /* ... */ };
-    await _dispatcher.DispatchAsync(clickEvent, Topics.ClickTracked, ct);
-
-    // Redis ZINCRBY into the owner's day bucket - no-op for anonymous links, never touches Postgres
-    await _clickCounter.RecordClickAsync(hash, link.UserId, clickEvent.ClickedAt, ct);
-
-    return Redirect(link.OriginalLink); // 302, never permanent - the target can change
+    return GonePage(/* ... */);
 }
+
+var clickEvent = new ClickTrackedEvent { Id = Guid.NewGuid(), Hash = hash, /* ... */ };
+await _dispatcher.DispatchAsync(clickEvent, Topics.ClickTracked, cancellationToken);
+
+// Redis ZINCRBY into the owner's day bucket - no-op for anonymous links, never touches Postgres
+await _clickCounter.RecordClickAsync(hash, link.UserId, clickEvent.ClickedAt, cancellationToken);
+
+return Redirect(link.OriginalLink); // 302, never permanent - the target can change
 ```
 
 The tombstone check (`ILinkDeletionMarkerStore.GetAsync`, Redis key `link:deleted:{hash}` -

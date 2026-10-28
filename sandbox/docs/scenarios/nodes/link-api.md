@@ -23,21 +23,20 @@ in-process L1 tier and negative caching sitting in front of/alongside Redis here
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/LinkApi/Controllers/LinksController.cs:34
-public async Task<ActionResult<LinkResponse>> CreateLink(
-    [FromBody] LinkCreateRequest request, CancellationToken cancellationToken)
-{
-    var hash = _hashGenerator.Generate(request.OriginalLink);
-    var linkCreatedEvent = new LinkCreatedEvent { Hash = hash, OriginalLink = request.OriginalLink, /* ... */ };
-    await _dispatcher.DispatchAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
+// src/backend/Services/LinkApi/Controllers/LinksController.cs:206, CreateLinkCoreAsync (trimmed -
+// reached from the top-level CreateLink action once any Idempotency-Key/custom-alias branching
+// below has been resolved)
+var hash = _hashGenerator.Generate(request.OriginalLink);
+var linkCreatedEvent = new LinkCreatedEvent { Hash = hash, OriginalLink = request.OriginalLink, /* ... */ };
+await _dispatcher.DispatchAsync(linkCreatedEvent, Topics.LinkCreated, cancellationToken);
 
-    // Optimistic cache write, short TTL - closes the PgCat read-your-writes race for an
-    // immediate redirect. See this node's Pitfalls for why.
-    await _service.CacheAsync(new Link(hash, request.OriginalLink, hash, createdAt, userId),
-        hash, cancellationToken, OptimisticCacheTtlSeconds);
+// Optimistic cache write, short TTL - closes the PgCat read-your-writes race for an
+// immediate redirect. See this node's Pitfalls for why. Written only after DispatchAsync
+// succeeds, not before.
+var link = new Link(hash, request.OriginalLink, hash, createdAt, userId, ExpiresAt: expiresAt);
+await _service.CacheAsync(link, hash, cancellationToken, OptimisticCacheTtlSeconds);
 
-    return new LinkResponse(hash, createdAt); // returns before ShortenerService has persisted anything
-}
+return new LinkResponse(hash, createdAt); // returns before ShortenerService has persisted anything
 ```
 
 The hash comes from `IHashGenerator` (`Sha256Base62HashGenerator` — SHA-256 of the original URL,
@@ -87,20 +86,44 @@ second link for one logical user action. An optional `Idempotency-Key` header cl
 without giving up the fast synchronous return described above.
 
 ```csharp
-// src/backend/Services/LinkApi/Controllers/LinksController.cs, CreateLinkIdempotentlyAsync (trimmed)
-if (!await _idempotencyStore.TryClaimAsync(idempotencyKey, cancellationToken))
+// src/backend/Services/LinkApi/Controllers/LinksController.cs:119, CreateLinkIdempotentlyAsync (trimmed)
+if (!await _idempotency.TryClaimAsync(idempotencyKey, cancellationToken))
 {
-    var existing = await _idempotencyStore.GetAsync(idempotencyKey, cancellationToken);
-    if (existing is { Status: IdempotencyStatus.Completed })
-        return BuildReplayResult(existing); // byte-identical response, no new hash, no re-publish
-    if (existing is { Status: IdempotencyStatus.Pending })
+    var existing = await _idempotency.GetAsync(idempotencyKey, cancellationToken);
+    if (existing is null)
+        return await CreateLinkCoreAsync(request, cancellationToken); // fail open on a transient read gap
+    if (existing.Status == IdempotencyStatus.Pending)
         return Problem(detail: "...already being processed...", statusCode: 409);
-    // existing is null: a Redis blip, or the winner's claim already self-expired - fail open
+    return BuildReplayResult(existing); // byte-identical response, no new hash, no re-publish
 }
 
-var result = await CreateLinkCoreAsync(request, cancellationToken);
-await _idempotencyStore.CompleteAsync(idempotencyKey, ExtractForReplay(result), cancellationToken);
-return result;
+try
+{
+    var result = await CreateLinkCoreAsync(request, cancellationToken);
+    var (statusCode, contentType, bodyJson) = ExtractForReplay(result);
+    await _idempotency.CompleteAsync(idempotencyKey, statusCode, contentType, bodyJson, cancellationToken);
+    return result;
+}
+catch
+{
+    await _idempotency.EvictAsync(idempotencyKey, cancellationToken); // releases a claim this caller won but never completed
+    throw;
+}
+```
+
+```mermaid
+flowchart TD
+    A["POST /Links, Idempotency-Key present"] --> B["TryClaimAsync\n(SET NX, 120s TTL)"]
+    B -->|claimed| C["CreateLinkCoreAsync"]
+    C -->|"success or a Problem result"| D["CompleteAsync\n(store outcome, 24h TTL)"]
+    D --> E["return result"]
+    C -->|"unhandled exception"| F["EvictAsync\n(release the claim)"]
+    F --> G["rethrow"]
+    B -->|"not claimed"| H["GetAsync existing record"]
+    H --> I{"record?"}
+    I -->|"null - Redis blip or\nclaim already expired"| C
+    I -->|"Pending"| J["409 - already being processed"]
+    I -->|"Completed"| K["replay stored response\n(traceId re-stamped)"]
 ```
 
 `RedisIdempotencyStore` (`src/backend/Shared/Infrastructure/IdempotencyStore.cs`) holds one record
