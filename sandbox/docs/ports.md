@@ -12,12 +12,15 @@ compose file is right.
 | 8081 | `auth-api` | direct, not behind nginx (login/register is low-traffic, no need to load-balance) |
 | 8082 | `nginx` → `link-api` | round-robins across however many `link-api` replicas exist |
 | 8083 | `nginx` → `redirect-api` | same, for `redirect-api` replicas |
-| 8088 | `reporting-api` | direct, same reasoning as `auth-api` (read-only, low-traffic) |
+| 8088 | `nginx` → `reporting-api` | same, including WebSocket upgrade for `TopLinksHub`'s SignalR connections |
 | 5173 | `src/frontend/app` dev server | not compose-managed — started by `start-stack` scripts, floats if taken |
 
 `link-api`/`redirect-api` themselves publish no ports — only reachable through `nginx` above (or
 directly inside the Docker network, which is what the **nginx bypass** toggle switches traffic
-generation to).
+generation to). `reporting-api` is the same as of backlog item 11 (no own port, reachable through
+`nginx`) - except the **nginx bypass** toggle doesn't apply to it: k6's own traffic generator
+always targets it directly regardless of the toggle (see `ControlApi.Services.TrafficService`'s own
+comment on why).
 
 ## Data stores
 

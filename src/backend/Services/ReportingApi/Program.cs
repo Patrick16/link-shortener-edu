@@ -1,3 +1,4 @@
+using Common;
 using Infrastructure;
 using ReportingApi.Realtime;
 using ServiceDefaults;
@@ -23,7 +24,15 @@ builder.Services.AddSingleton<ITopLinksReader, RedisTopLinksReader>();
 builder.Services.AddSingleton<TopLinksSubscriptions>();
 builder.Services.AddSingleton<TopLinksPushScheduler>();
 builder.Services.AddHostedService<TopLinksPushService>();
-builder.Services.AddSignalR();
+
+// Redis backplane (backlog item 11) - ReportingApi can now run as more than one replica (see
+// nginx.conf's reporting_api_upstream + ContainerLifecycleService.ScalableServices), and
+// TopLinksHub.Clients.Group(...)/IHubContext<TopLinksHub>.Clients.Group(...) (in
+// TopLinksPushService) only ever reach connections known to the SAME process without this - the
+// same connection string every other Redis client in this service already uses
+// (AddRedisMultiplexer below), not a second config entry to keep in sync.
+builder.Services.AddSignalR()
+    .AddStackExchangeRedis(builder.Configuration.GetConnectionString(Constants.RedisConnectionString)!);
 
 builder.Services.AddHealthChecks()
     .AddClickHouseHealthCheck<IClickFactQueryService>()

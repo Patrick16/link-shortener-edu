@@ -224,10 +224,12 @@ public sealed class TrafficService : ITrafficService
         // one VU sticks to whichever replica it first resolved - a fair demonstration of "no real
         // load balancing", not a trick. AuthApi was never behind nginx (see nginx.conf), so its URL
         // doesn't depend on the toggle at all. Reuses the nginxBypassed captured once at the top of
-        // this method, not a fresh read - see that capture's own comment. ReportingApi is likewise
-        // never behind nginx (see nginx.conf and docker-compose.yml's own comment on reporting-api's
-        // port mapping - read-only, low-traffic, direct port like control-api/auth-api), so its URL
-        // doesn't depend on the toggle either.
+        // this method, not a fresh read - see that capture's own comment. ReportingApi IS behind
+        // nginx now (backlog item 11 - nginx.conf's reporting_api_upstream), but k6's own traffic
+        // generator still always goes straight to the compose service name regardless of the
+        // toggle, same as AuthApi - there's no nginxBypassed ternary for either below, since
+        // neither is on this toggle's own scope (link-api/redirect-api's hot-path round-robin
+        // behavior).
         var env = new List<string>
         {
             $"LINK_API_URL=http://{(nginxBypassed ? "link-api:8080" : "nginx:8082")}",

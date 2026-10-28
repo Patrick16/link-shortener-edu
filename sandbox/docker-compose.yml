@@ -1063,12 +1063,15 @@ services:
     ports:
       - "8082:8082" # LinkApi - round-robins across however many link-api replicas exist
       - "8083:8083" # RedirectApi - same, for redirect-api
+      - "8088:8088" # ReportingApi - same (incl. its SignalR hub's WebSocket upgrade), for reporting-api
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       link-api:
         condition: service_healthy
       redirect-api:
+        condition: service_healthy
+      reporting-api:
         condition: service_healthy
       # Deliberately NOT also waiting on shortener-service/traffic-service here - their
       # grpc_pass upstreams below use `resolve`, same as link_api_upstream/
@@ -1265,8 +1268,8 @@ services:
     build:
       context: ..
       dockerfile: src/backend/Services/ReportingApi/Dockerfile
-    ports:
-      - "8088:8080" # No nginx fronting this yet (read-only, low-traffic reporting endpoint) - direct port like control-api's pattern, not load-balanced like link-api/redirect-api.
+    # No host port mapping - see the note on link-api above; nginx exposes this on 8088 instead,
+    # now that reporting-api can be scaled (backlog item 11).
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Database=reports_db"

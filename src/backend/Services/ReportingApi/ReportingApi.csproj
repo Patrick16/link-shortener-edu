@@ -1,6 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
 	<ItemGroup>
+		<!-- SignalR Redis backplane (backlog item 11) - lets TopLinksHub's Clients.Group(...) fan out
+		     across replicas, not just the one that happened to compute a given push. -->
+		<PackageReference Include="Microsoft.AspNetCore.SignalR.StackExchangeRedis" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<ProjectReference Include="..\..\Shared\Contracts\Contracts.csproj" />
 		<ProjectReference Include="..\..\Shared\Infrastructure\Infrastructure.csproj" />
 		<ProjectReference Include="..\..\Shared\Common\Common.csproj" />

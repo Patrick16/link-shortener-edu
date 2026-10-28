@@ -20,7 +20,12 @@ public sealed class ContainerLifecycleService(IContainerRuntime runtime, IInfraT
     // comment). architecture.json already declared reporting-service's "scalable" capability ahead
     // of this list actually including it - the UI's scale control existed but every call failed
     // with "is not a scalable service" until now (found during review).
-    private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service"];
+    // reporting-api added for backlog item 11 - it previously had no nginx upstream at all (a
+    // fixed host port, like auth-api), so scaling it past 1 replica would have conflicted on that
+    // port even before reaching this list's check. Now fronted by nginx (see nginx.conf's
+    // reporting_api_upstream) the same way link-api/redirect-api are, including WebSocket-upgrade
+    // support for TopLinksHub's SignalR connections.
+    private static readonly IReadOnlyList<string> ScalableServices = ["link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service", "reporting-api"];
 
     // The three RabbitMQ consumers - mirrors InfraToggleService's own RabbitMqConsumingServices
     // list (see its own comment on why reporting-service belongs here too - it used to be missing,
