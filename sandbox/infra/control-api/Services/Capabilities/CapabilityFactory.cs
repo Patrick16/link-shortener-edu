@@ -17,6 +17,7 @@ public sealed class CapabilityFactory
     {
         ["pgcat-pool"] = sp => new PgcatPoolCapability(sp.GetRequiredService<IPgcatService>(), sp.GetRequiredService<ILogger<PgcatPoolCapability>>()),
         ["npgsql-pool-size"] = sp => new NpgsqlPoolSizeCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<NpgsqlPoolSizeCapability>>()),
+        ["geoip-bulkhead"] = sp => new GeoIpBulkheadCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<GeoIpBulkheadCapability>>()),
         ["pgcat-toggle"] = sp => new PgcatToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<PgcatToggleCapability>>()),
         ["cache-toggle"] = sp => new CacheToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<CacheToggleCapability>>()),
         ["l1-cache-toggle"] = sp => new L1CacheToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<L1CacheToggleCapability>>()),

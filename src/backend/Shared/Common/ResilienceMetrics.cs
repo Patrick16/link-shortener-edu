@@ -21,4 +21,13 @@ public static class ResilienceMetrics
         "resilience.circuit_breaker.transitions",
         unit: "{transition}",
         description: "Counts each time a circuit breaker opens, closes, or half-opens, tagged by dependency and state.");
+
+    // Tagged by "dependency" only (geo-ip today - see GeoIpExtensions) - a rejection here means the
+    // concurrency limiter shed a call rather than letting it queue behind others, same "a dependency
+    // is currently being protected, not silently degraded" visibility gap CircuitBreakerStateTransitions
+    // exists to close for the circuit breaker.
+    public static readonly Counter<long> BulkheadRejections = Meter.CreateCounter<long>(
+        "resilience.bulkhead.rejections",
+        unit: "{rejection}",
+        description: "Counts each call a concurrency limiter rejected because too many calls to that dependency were already in flight.");
 }

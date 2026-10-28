@@ -204,7 +204,8 @@
       "icon": "📊",
       "description": "Consumes ClickTrackedEvent, persists the click record and its enriched metadata",
       "capabilities": [
-        "scalable"
+        "scalable",
+        "geoip-bulkhead"
       ],
       "details": {
         "purpose": "Owns clicks_db (the only writer, and the only one that migrates it) - Postgres Clicks is the exactly-once audit trail (skips if the event's Id is already stored); also parses the User-Agent and resolves geo-IP, then upserts a ClickMeta document into MongoDB, independently idempotent from the Postgres write",
@@ -602,7 +603,8 @@
       "icon": "📈",
       "description": "CQRS read side: a third, independent consumer of ClickTrackedEvent - builds its own denormalized read model in ClickHouse, straight from the raw event, never from traffic-service's own Postgres/Mongo writes",
       "capabilities": [
-        "scalable"
+        "scalable",
+        "geoip-bulkhead"
       ],
       "details": {
         "purpose": "Owns reports_db in ClickHouse (the only writer) - parses the same raw UserAgent/geo-IP as traffic-service does independently, then does one bulk insert per consumed batch; single-row inserts are a real ClickHouse anti-pattern this service specifically avoids",

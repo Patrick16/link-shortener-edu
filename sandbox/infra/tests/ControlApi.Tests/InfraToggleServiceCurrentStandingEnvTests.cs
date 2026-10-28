@@ -20,7 +20,8 @@ public class InfraToggleServiceCurrentStandingEnvTests
     public void CurrentStandingEnv_DefaultState_MatchesDockerComposeYmlDefaults()
     {
         // This is the merge every toggle handler (SetPgcatEnabledAsync, SetCacheEnabledAsync,
-        // SetNpgsqlPoolSizeAsync, SetRabbitMqPrefetchAsync, SetMongoReadPreferenceAsync) now folds
+        // SetNpgsqlPoolSizeAsync, SetGeoIpBulkheadLimitAsync, SetRabbitMqPrefetchAsync,
+        // SetMongoReadPreferenceAsync) now folds
         // its own new value into before recreating a shared container - without it, recreating for
         // one axis silently reverts every other axis on that container to whatever
         // docker-compose.yml's own ${VAR:-default} falls back to. The keys/defaults here must stay
@@ -35,6 +36,7 @@ public class InfraToggleServiceCurrentStandingEnvTests
         Assert.Equal("6432", env["DB_PORT"]);
         Assert.Equal("true", env["CACHE_ENABLED"]);
         Assert.Equal("100", env["NPGSQL_MAX_POOL_SIZE"]);
+        Assert.Equal("10", env["GEOIP_BULKHEAD_LIMIT"]);
         Assert.Equal("10", env["RABBITMQ_PREFETCH"]);
         Assert.Equal("primary", env["MONGO_READ_PREFERENCE"]);
         Assert.Equal("redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster", env["REDIS_CONN"]);

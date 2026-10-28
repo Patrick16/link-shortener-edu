@@ -348,6 +348,13 @@ export interface NegativeCacheStatus {
   enabled: boolean
 }
 
+// Concurrency limit on traffic-service/reporting-service's shared ip-api.com HttpClient
+// (bulkhead isolation, resilience backlog item 15) - read once at startup, so setting this
+// recreates both containers. See SetGeoIpBulkheadLimitAsync on the backend.
+export interface GeoIpBulkhead {
+  limit: number
+}
+
 // readPreference on traffic-service's Mongo connection string - see SetMongoReadPreferenceAsync on
 // the backend.
 export type MongoReadPreference = 'primary' | 'secondaryPreferred'

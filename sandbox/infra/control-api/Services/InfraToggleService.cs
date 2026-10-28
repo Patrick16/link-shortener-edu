@@ -70,6 +70,9 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     private static readonly IReadOnlyList<string> RabbitMqConsumingServices =
         ["shortener-service", "traffic-service", "reporting-service"];
 
+    // The two services that call GeoIpExtensions.AddGeoIpResolution - see SetGeoIpBulkheadLimitAsync.
+    private static readonly IReadOnlyList<string> GeoIpUsingServices = ["traffic-service", "reporting-service"];
+
     // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
     // tool despite not surviving a control-api restart.
     private bool _nginxBypassed;
@@ -89,6 +92,10 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
 
     // Mirrors Npgsql's own default (and the shipped ${NPGSQL_MAX_POOL_SIZE:-100} fallback).
     private int _npgsqlPoolSize = 100;
+
+    // Mirrors GeoIpExtensions.DefaultMaxConcurrentRequests (and the shipped
+    // ${GEOIP_BULKHEAD_LIMIT:-10} fallback).
+    private int _geoIpBulkheadLimit = 10;
 
     // Drives REDIS_CONN below - same cached, recreate-with-a-different-env-var shape as
     // _pgcatEnabled/_cacheEnabled/_messagingMode, not the live-read shape RedisEnabled/
@@ -116,6 +123,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         ["NEGATIVE_CACHE_ENABLED"] = _negativeCacheEnabled ? "true" : "false",
         ["MESSAGING_MODE"] = _messagingMode,
         ["NPGSQL_MAX_POOL_SIZE"] = _npgsqlPoolSize.ToString(),
+        ["GEOIP_BULKHEAD_LIMIT"] = _geoIpBulkheadLimit.ToString(),
         ["RABBITMQ_PREFETCH"] = _rabbitMqPrefetch.ToString(),
         ["MONGO_READ_PREFERENCE"] = _mongoReadPreference,
         ["REDIS_CONN"] = _redisConnectionViaSentinel ? RedisSentinelConnectionString : RedisDirectConnectionString,
@@ -183,6 +191,27 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
 
             _npgsqlPoolSize = poolSize;
             return poolSize;
+        }, ct);
+
+    public int GetGeoIpBulkheadLimit() => _geoIpBulkheadLimit;
+
+    public Task<int> SetGeoIpBulkheadLimitAsync(int limit, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            var env = CurrentStandingEnv();
+            env["GEOIP_BULKHEAD_LIMIT"] = limit.ToString();
+            var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(GeoIpUsingServices, ct);
+
+            logger.LogWarning("Switching GeoIp__MaxConcurrentRequests for {Services} to {Limit}", string.Join(", ", GeoIpUsingServices), limit);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. GeoIpUsingServices], env, ct);
+            if (exitCode != 0)
+            {
+                logger.LogWarning("Setting geo-IP bulkhead limit failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _geoIpBulkheadLimit = limit;
+            return limit;
         }, ct);
 
     // See InfraStatus's own comment on HaproxyEnabled/PostgresReplicasEnabled/RedisEnabled/

@@ -8,6 +8,7 @@ import type {
   DlqReplayRequest,
   DlqReplayResult,
   EndpointDefinition,
+  GeoIpBulkhead,
   HaproxyStats,
   InfraStatus,
   InfraTopology,
@@ -159,6 +160,9 @@ export const controlApi = {
 
   getNpgsqlPoolSize: () => request<NpgsqlPoolSize>('/api/infra/npgsql-pool-size'),
   setNpgsqlPoolSize: (poolSize: number) => request<NpgsqlPoolSize>('/api/infra/npgsql-pool-size', 'POST', { poolSize }),
+
+  getGeoIpBulkheadLimit: () => request<GeoIpBulkhead>('/api/infra/geoip-bulkhead'),
+  setGeoIpBulkheadLimit: (limit: number) => request<GeoIpBulkhead>('/api/infra/geoip-bulkhead', 'POST', { limit }),
 
   listRuns: () => request<RunSummary[]>('/api/runs'),
   getRun: (id: string) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}`),

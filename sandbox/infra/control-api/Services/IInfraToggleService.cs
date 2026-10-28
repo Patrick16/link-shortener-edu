@@ -81,4 +81,14 @@ public interface IInfraToggleService
     int GetNpgsqlPoolSize();
 
     Task<int> SetNpgsqlPoolSizeAsync(int poolSize, CancellationToken ct);
+
+    // Bulkhead isolation (resilience backlog item 15) - the concurrency limiter's permit limit on
+    // traffic-service/reporting-service's shared ip-api.com HttpClient (see
+    // GeoIpExtensions.AddGeoIpResolution). Read once at startup, same "own GET/POST pair, recreate
+    // with a different env var" shape as RabbitMqPrefetch/NpgsqlPoolSize above - no node in
+    // architecture.json represents ip-api.com itself, so this one attaches directly to the two
+    // consumer-service nodes instead of a shared dependency node.
+    int GetGeoIpBulkheadLimit();
+
+    Task<int> SetGeoIpBulkheadLimitAsync(int limit, CancellationToken ct);
 }

@@ -7,6 +7,7 @@ import { PgcatPoolControl } from '../components/PgcatPoolControl'
 import { NpgsqlPoolSizeControl } from '../components/NpgsqlPoolSizeControl'
 import { SentinelConfigControl } from '../components/SentinelConfigControl'
 import { RabbitMqPrefetchControl } from '../components/RabbitMqPrefetchControl'
+import { GeoIpBulkheadControl } from '../components/GeoIpBulkheadControl'
 import { MongoReadPreferenceControl } from '../components/MongoReadPreferenceControl'
 import { L1CacheControl } from '../components/L1CacheControl'
 import { NegativeCacheControl } from '../components/NegativeCacheControl'
@@ -34,6 +35,7 @@ const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> 
   'npgsql-pool-size': NpgsqlPoolSizeControl,
   'sentinel-config': SentinelConfigControl,
   'rabbitmq-prefetch': RabbitMqPrefetchControl,
+  'geoip-bulkhead': GeoIpBulkheadControl,
   'mongo-read-preference': MongoReadPreferenceControl,
   'l1-cache-toggle': L1CacheControl,
   'negative-cache-toggle': NegativeCacheControl,
