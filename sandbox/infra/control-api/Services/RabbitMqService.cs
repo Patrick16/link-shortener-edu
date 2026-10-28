@@ -150,6 +150,11 @@ public sealed class RabbitMqService(IContainerRuntime runtime) : IRabbitMqServic
         return totalPurged;
     }
 
+    // Only the display preview gets truncated - a human reading a dead message's JSON body never
+    // needs more than this, and it keeps the panel's payload box small. Replay below deliberately
+    // does NOT reuse this limit - see its own comment.
+    private const int SamplePreviewTruncateBytes = 50_000;
+
     public async Task<IReadOnlyList<DeadLetterMessageSample>?> SampleDeadLetterQueueAsync(string deadQueueName, int count, CancellationToken ct)
     {
         var container = await runtime.FindAsync("rabbitmq", ct);
@@ -158,7 +163,7 @@ public sealed class RabbitMqService(IContainerRuntime runtime) : IRabbitMqServic
             return null;
         }
 
-        var messages = await GetMessagesAsync(deadQueueName, count, requeue: true, ct);
+        var messages = await GetMessagesAsync(deadQueueName, count, requeue: true, SamplePreviewTruncateBytes, ct);
         return messages
             .Select(m => new DeadLetterMessageSample(m.Properties?.MessageId, ExtractDeadReason(m.Properties), m.Payload))
             .ToList();
@@ -187,10 +192,24 @@ public sealed class RabbitMqService(IContainerRuntime runtime) : IRabbitMqServic
         // redelivery-safe (checked for each one before this was built - see PLAN.md item 13), so a
         // message that ends up published twice because the removal step below raced a new arrival
         // is an accepted, harmless outcome; losing one outright is not.
-        var messages = await GetMessagesAsync(deadQueueName, count, requeue: true, ct);
+        //
+        // Deliberately does NOT pass SamplePreviewTruncateBytes here (review finding F1): that limit
+        // is fine for a human-readable preview, but this payload gets republished verbatim - the
+        // management API silently truncates "payload" past the given byte count while still
+        // reporting the real size in "payload_bytes", so reusing the preview's 50,000-byte cap would
+        // let replay silently publish a corrupted, truncated body and then permanently delete the
+        // one real copy of the original. int.MaxValue as the truncate limit means "don't truncate" in
+        // practice; VerifyNotTruncated below is a second, explicit guard against the same failure
+        // mode in case some future caller ever does pass a real limit here.
+        var messages = await GetMessagesAsync(deadQueueName, count, requeue: true, int.MaxValue, ct);
         if (messages.Count == 0)
         {
             return new DlqReplayResult(deadQueueName, 0);
+        }
+
+        foreach (var message in messages)
+        {
+            VerifyNotTruncated(deadQueueName, message);
         }
 
         foreach (var message in messages)
@@ -204,19 +223,41 @@ public sealed class RabbitMqService(IContainerRuntime runtime) : IRabbitMqServic
         // else is meant to be touching. If a genuinely new message lands here in that window, this
         // could remove it instead of one just republished - not a loss (it's still redelivery-safe
         // to replay later), just a reordering.
-        await GetMessagesAsync(deadQueueName, messages.Count, requeue: false, ct);
+        await GetMessagesAsync(deadQueueName, messages.Count, requeue: false, int.MaxValue, ct);
 
         return new DlqReplayResult(deadQueueName, messages.Count);
     }
 
-    private async Task<List<ManagementMessage>> GetMessagesAsync(string queueName, int count, bool requeue, CancellationToken ct)
+    // Defense-in-depth against the truncation failure mode described in ReplayDeadLetterQueueAsync's
+    // own comment (review finding F1): compares the management API's reported original size
+    // (payload_bytes) against the actual size of the payload we got back, decoded per its own
+    // encoding. A mismatch means the body was truncated server-side despite the large truncate limit
+    // we pass - republishing it would corrupt the message and the step after this would then delete
+    // the only full copy, so this throws instead (surfaced to the caller as a 500, not a silent
+    // corrupt-then-delete).
+    private static void VerifyNotTruncated(string deadQueueName, ManagementMessage message)
+    {
+        var actualBytes = message.PayloadEncoding == "base64"
+            ? Convert.FromBase64String(message.Payload).LongLength
+            : System.Text.Encoding.UTF8.GetByteCount(message.Payload);
+
+        if (actualBytes != message.PayloadBytes)
+        {
+            throw new InvalidOperationException(
+                $"Refusing to replay a message from '{deadQueueName}': the management API reported " +
+                $"{message.PayloadBytes} original bytes but returned only {actualBytes} - replaying a " +
+                "truncated payload would corrupt it and then permanently delete the only full copy.");
+        }
+    }
+
+    private async Task<List<ManagementMessage>> GetMessagesAsync(string queueName, int count, bool requeue, int truncateBytes, CancellationToken ct)
     {
         if (count <= 0)
         {
             return [];
         }
 
-        var request = new ManagementGetRequest(count, requeue ? "ack_requeue_true" : "ack_requeue_false", "auto", 50_000);
+        var request = new ManagementGetRequest(count, requeue ? "ack_requeue_true" : "ack_requeue_false", "auto", truncateBytes);
         using var response = await _managementClient.PostAsJsonAsync(
             $"/api/queues/{Vhost}/{Uri.EscapeDataString(queueName)}/get", request, ManagementJsonOptions, ct);
 
@@ -282,6 +323,9 @@ public sealed class RabbitMqService(IContainerRuntime runtime) : IRabbitMqServic
     private sealed record ManagementMessage(
         string Payload,
         [property: JsonPropertyName("payload_encoding")] string PayloadEncoding,
+        // The ORIGINAL message size, as stored - unlike Payload, never affected by the request's
+        // own truncate limit. Compared against Payload's actual decoded size in VerifyNotTruncated.
+        [property: JsonPropertyName("payload_bytes")] long PayloadBytes,
         ManagementMessageProperties? Properties,
         [property: JsonPropertyName("routing_key")] string RoutingKey);
 

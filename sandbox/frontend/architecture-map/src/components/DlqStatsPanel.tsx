@@ -26,6 +26,13 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
   const [sampling, setSampling] = useState(false)
   const [sampleResult, setSampleResult] = useState<DeadLetterMessageSample[] | null>(null)
   const [sampleError, setSampleError] = useState<string | null>(null)
+  // Unlike Replay (disabled globally while one is in flight), Sample buttons on OTHER rows stay
+  // clickable while a sample request is pending for one row - so a slow response for queue A can
+  // land after the operator has already clicked Sample on queue B. This ref (not just reading
+  // `expandedQueue` from the closure, which would be stale) lets the async handler check whether
+  // ITS OWN request is still the one the user is looking at before applying the response (review
+  // finding F2 - without this, A's messages could render under B's expanded row).
+  const activeSampleQueueRef = useRef<string | null>(null)
 
   // Replay's cooldown is enforced server-side as ONE lock shared across every queue (see
   // DlqStatsCapability), not per-queue - so a single in-flight flag here (rather than one per row)
@@ -96,20 +103,24 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
 
   async function toggleSample(queueName: string) {
     if (expandedQueue === queueName) {
+      activeSampleQueueRef.current = null
       setExpandedQueue(null)
       return
     }
+    activeSampleQueueRef.current = queueName
     setExpandedQueue(queueName)
     setSampling(true)
     setSampleError(null)
     setSampleResult(null)
     try {
       const res = await controlApi.sampleDlq(queueName, SAMPLE_SIZE)
-      if (mountedRef.current) setSampleResult(res)
+      if (mountedRef.current && activeSampleQueueRef.current === queueName) setSampleResult(res)
     } catch (err) {
-      if (mountedRef.current) setSampleError(err instanceof ControlApiError ? err.message : String(err))
+      if (mountedRef.current && activeSampleQueueRef.current === queueName) {
+        setSampleError(err instanceof ControlApiError ? err.message : String(err))
+      }
     } finally {
-      if (mountedRef.current) setSampling(false)
+      if (mountedRef.current && activeSampleQueueRef.current === queueName) setSampling(false)
     }
   }
 
@@ -129,6 +140,7 @@ export function DlqStatsPanel(_props: CapabilityControlProps) {
         .then((s) => mountedRef.current && setDlqStats(s))
         .catch(() => {})
       if (expandedQueue === queueName) {
+        activeSampleQueueRef.current = null
         setExpandedQueue(null)
         setSampleResult(null)
       }
