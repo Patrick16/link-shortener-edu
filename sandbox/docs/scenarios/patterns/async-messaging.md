@@ -25,6 +25,33 @@ consumer's, for no benefit the caller can see.
    arrive twice; both `LinkCreatedConsumer` and `ClickTrackedConsumer` check whether the row
    already exists before writing, so a redelivery is a no-op rather than a duplicate or an error.
 
+```mermaid
+sequenceDiagram
+    participant P as Producer (LinkApi / RedirectApi)
+    participant Q as RabbitMQ
+    participant F as SQLite fallback queue
+    participant W as RabbitMqRetryWorker
+    participant C as Consumer (ShortenerService / TrafficService)
+
+    P->>P: handle the real request
+    alt broker reachable
+        P->>Q: publish event
+        P-->>P: return HTTP response (doesn't wait for Q)
+        Q->>C: deliver
+        C->>C: already processed? (redelivery-safe check)
+        C-->>Q: ack
+    else broker unreachable
+        P->>F: save message (fallback store)
+        P-->>P: return HTTP response anyway
+        loop every ~15s on average (full jitter, 0-30s)
+            W->>F: get pending messages
+            W->>Q: try republish
+            Q->>C: deliver
+            W->>F: delete on success
+        end
+    end
+```
+
 The trade-off: the producer's response no longer means "this is durably recorded" — only "this
 was accepted, and will be recorded soon, even across a broker outage." Every consumer in this
 project is written to be safe under that weaker guarantee (redelivery-safe, as above); a consumer

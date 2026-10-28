@@ -37,6 +37,31 @@ consumer that writes to it independently — means neither side has to compromis
    [Data retention](pattern:data-retention-partitioning) for what that ordering also buys for TTL
    enforcement). That's the point of CQRS, not an inconsistency to fix.
 
+```mermaid
+sequenceDiagram
+    participant RA as RedirectApi
+    participant Q as RabbitMQ (click.tracked)
+    participant TS as TrafficService
+    participant RS as ReportingService
+    participant PG as Postgres (clicks_db)
+    participant M as Mongo (clicks_meta_db)
+    participant CH as ClickHouse (reports_db)
+
+    RA->>Q: publish ClickTrackedEvent (once)
+    Q->>TS: deliver (traffic-service.click-tracked queue)
+    Q->>RS: deliver (reporting-service.click-tracked queue)
+    par write side (unchanged)
+        TS->>PG: insert normalized Click row
+        TS->>M: upsert ClickMeta document
+    and read side (this pattern)
+        RS->>RS: parse user-agent + resolve geo-IP
+        RS->>CH: bulk-insert denormalized ClickFact row
+    end
+```
+
+Both consumers bind their own queue to the same `click.tracked` routing key — RabbitMQ fans the
+same message out to each, neither consumer waits on or is aware of the other.
+
 **What this isn't.** A textbook CQRS setup usually also means a command bus, a distinct write model
 object graph, and often eventual-consistency tooling (an event store, a projection framework). None
 of that exists here — "the read side" is one extra consumer and one extra table. The segregation

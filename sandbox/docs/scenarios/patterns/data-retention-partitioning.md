@@ -120,6 +120,23 @@ try
 finally { await context.Database.CloseConnectionAsync(); }
 ```
 
+```mermaid
+sequenceDiagram
+    participant R1 as TrafficService replica 1
+    participant R2 as TrafficService replica 2
+    participant PG as Postgres (primary)
+
+    Note over R1,R2: 24h timer fires on every replica independently
+    R1->>PG: pg_try_advisory_lock(hashtext('traffic-service:partition-maintenance'))
+    PG-->>R1: acquired
+    R2->>PG: pg_try_advisory_lock(hashtext('traffic-service:partition-maintenance'))
+    PG-->>R2: not acquired
+    R1->>PG: CREATE TABLE IF NOT EXISTS ... (next 3 months)
+    R1->>PG: DROP TABLE ... (past the 3-month retention window)
+    R1->>PG: pg_advisory_unlock(...)
+    R2->>R2: log "another replica holds the lock, skipping this tick"
+```
+
 The explicit `OpenConnectionAsync`/`CloseConnectionAsync` pinning one physical connection for the
 whole critical section matters here specifically — see this pattern's Pitfalls for what happens
 without it. All create/drop DDL bypasses PgCat entirely, connecting straight to the primary (same

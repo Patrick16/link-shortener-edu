@@ -32,6 +32,29 @@ value. That needs a real uniqueness guarantee the random-hash path never had to 
 4. The caller gets a real answer before the HTTP response returns: success if the alias was free,
    `409 Alias taken` if it lost the race. Never "created, maybe."
 
+```mermaid
+sequenceDiagram
+    participant A as Caller A
+    participant B as Caller B
+    participant L as LinkApi
+    participant S as ShortenerService (gRPC)
+    participant DB as Postgres
+
+    A->>L: POST /Links (alias="foo")
+    B->>L: POST /Links (alias="foo")
+    L->>S: PublishAsync (sync gRPC, batch of one)
+    L->>S: PublishAsync (sync gRPC, batch of one)
+    S->>DB: INSERT Link (Hash="foo")
+    DB-->>S: committed (winner)
+    S-->>L: Created
+    L-->>A: 200 OK
+    S->>DB: INSERT Link (Hash="foo")
+    DB-->>S: unique violation
+    S->>DB: re-query existing row, compare OriginalLink
+    S-->>L: RpcException(AlreadyExists)
+    L-->>B: 409 Alias taken
+```
+
 ### Why a conflict could no longer be silently dropped
 
 `HandleBatchAsync` pre-dates aliases — its redelivery-safety logic (skip an insert if the hash is
@@ -104,7 +127,7 @@ directly.
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/LinkApi/Controllers/LinksController.cs, CreateWithAliasAsync
+// src/backend/Services/LinkApi/Controllers/LinksController.cs:290, CreateWithAliasAsync
 var aliasEvent = new LinkCreatedEvent
 {
     Hash = alias, OriginalLink = originalLink, ShortenLink = alias,
@@ -119,7 +142,7 @@ if (result == AliasCreationResult.AliasTaken)
 ```
 
 ```csharp
-// src/backend/Shared/Infrastructure/CustomAliasCreator.cs
+// src/backend/Shared/Infrastructure/CustomAliasCreator.cs:29
 public async Task<AliasCreationResult> CreateAsync(LinkCreatedEvent linkCreatedEvent, CancellationToken cancellationToken)
 {
     var request = new PublishRequest { MessageId = Guid.NewGuid().ToString(), Topic = Topics.LinkCreated, Payload = JsonSerializer.Serialize(linkCreatedEvent) };
@@ -136,7 +159,7 @@ public async Task<AliasCreationResult> CreateAsync(LinkCreatedEvent linkCreatedE
 ```
 
 ```csharp
-// src/backend/Services/ShortenerService/LinkCreatedConsumer.cs, the content-comparison fix
+// src/backend/Services/ShortenerService/LinkCreatedConsumer.cs:163, the content-comparison fix
 if (existing.OriginalLink == item.Payload.OriginalLink)
 {
     continue; // same link, already persisted - redelivery or a losing racing replica, not an error

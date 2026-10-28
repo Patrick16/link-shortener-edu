@@ -27,11 +27,11 @@ is unchanged.
 ## How it works
 
 One shared builder, `BuildCircuitBreaker(dependencyName, logger)`
-(`src/backend/Shared/Common/ResiliencePipelines.cs`), configures the same tuning for every call
+(`src/backend/Shared/Common/ResiliencePipelines.cs:20`), configures the same tuning for every call
 site that uses it:
 
 ```csharp
-// src/backend/Shared/Common/ResiliencePipelines.cs (shape, trimmed)
+// src/backend/Shared/Common/ResiliencePipelines.cs:20-69 (shape, trimmed)
 new ResiliencePipelineBuilder()
     .AddCircuitBreaker(new CircuitBreakerStrategyOptions
     {
@@ -58,6 +58,19 @@ new ResiliencePipelineBuilder()
   counter tagged by `dependency` and `state`). Without this, an open breaker "silently heals" the
   request path — everything just starts failing fast — with nothing anywhere signaling that a
   dependency is currently being bypassed.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Closed
+    Closed --> Open: failure ratio >= 50% over a 30s window (>= 10 calls)
+    Open --> HalfOpen: after 15s break duration
+    HalfOpen --> Closed: probe call succeeds
+    HalfOpen --> Open: probe call fails
+    Closed --> Closed: call succeeds, or fails under threshold
+```
+
+In `Open`, every call fails immediately with `BrokenCircuitException` — the real dependency is
+never touched until the breaker transitions to `HalfOpen` and lets one probe through.
 
 **Keyed DI, one breaker instance per dependency per process.** Each wrapped dependency gets its own
 `ResiliencePipeline` registered as a *keyed* singleton, keyed by a constant
