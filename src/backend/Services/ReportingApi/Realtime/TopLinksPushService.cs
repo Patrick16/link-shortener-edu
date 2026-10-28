@@ -11,6 +11,18 @@ namespace ReportingApi.Realtime;
 // to their open dashboards. Two limits keep this from becoming a query per click: the scheduler caps
 // it at one push per user per MinPushInterval, and a push is skipped entirely if the list came out
 // identical to the last one sent.
+//
+// Every ReportingApi replica runs its own copy of this service, each independently subscribing to
+// the SAME Redis pub/sub channel (SubscribeWithRetryAsync) and independently tracking its own
+// LOCAL connections (TopLinksSubscriptions/TopLinksPushScheduler are per-process). That's fine for
+// a user whose every connection lands on the same replica (ip_hash's common case - see nginx.conf),
+// since the replica that decides to push is also the only one with a local connection to deliver
+// to. It stops being fine now that the SignalR Redis backplane is wired (backlog item 11): a user
+// connected from two DIFFERENT replicas (two devices on different networks, the exact case the
+// backplane exists for) gets double-pushed without PushAsync's own claim below - both replicas see
+// the same notification, both see the user as locally watched, both independently query ClickHouse
+// and call Clients.Group(...), and the backplane fans out EACH of those to EVERY connection in the
+// group (found in review - see .notes/review-reports for this item).
 public sealed class TopLinksPushService(
     IConnectionMultiplexer connectionMultiplexer,
     TopLinksPushScheduler scheduler,
@@ -81,10 +93,23 @@ public sealed class TopLinksPushService(
         }
     }
 
-    private async Task PushAsync(Guid userId, CancellationToken cancellationToken)
+    internal async Task PushAsync(Guid userId, CancellationToken cancellationToken)
     {
         try
         {
+            // Cluster-wide claim, not just this replica's own IsUnchanged/MinPushInterval throttle
+            // (see this class's own header comment for why that stopped being enough once the
+            // backplane was wired). SET NX PX, same atomic-claim idiom
+            // RedisLinkDeletionMarkerStore already uses elsewhere in this codebase - whichever
+            // replica wins proceeds; the TTL (MinPushInterval, the same number this push would
+            // have been throttled to locally anyway) is what lets a later, genuinely new change
+            // still get through once it expires, rather than permanently locking a user to one
+            // replica's pushes.
+            if (!await TryClaimPushAsync(userId, cancellationToken))
+            {
+                return;
+            }
+
             var top = await _reader.GetTopAsync(userId, DateTime.UtcNow, cancellationToken);
             var payload = JsonSerializer.Serialize(top);
             if (_scheduler.IsUnchanged(userId, payload))
@@ -113,4 +138,25 @@ public sealed class TopLinksPushService(
             _logger.LogWarning(ex, "Failed to push top links to user {UserId}", userId);
         }
     }
+
+    // Fail-OPEN, not closed: if Redis itself is unreachable for the claim call, every replica
+    // proceeding independently (this service's pre-backplane behavior) is still strictly better
+    // than every replica skipping every push - a transient Redis failure here must degrade to "a
+    // dashboard might see one duplicate update" territory, never to "no replica pushes anything
+    // at all" territory.
+    private async Task<bool> TryClaimPushAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var db = _connectionMultiplexer.GetDatabase();
+            return await db.StringSetAsync(PushClaimKey(userId), "1", MinPushInterval, When.NotExists);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to claim push for user {UserId} - proceeding without cluster-wide dedup for this tick", userId);
+            return true;
+        }
+    }
+
+    private static string PushClaimKey(Guid userId) => $"clicks:user:{userId:N}:push-claim";
 }
