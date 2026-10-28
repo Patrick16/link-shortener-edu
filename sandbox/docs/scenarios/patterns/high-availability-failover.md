@@ -34,6 +34,18 @@ a split brain. See Pitfalls for how this bit Redis specifically here, and
 it can't see enough replicas acknowledging them, which is also what keeps a *not-yet-detected*
 split brain from silently diverging too much data before Sentinel finishes failing over).
 
+```mermaid
+stateDiagram-v2
+    [*] --> PrimaryHealthy
+    PrimaryHealthy --> PrimaryUnreachable: Primary stops responding
+    PrimaryUnreachable --> QuorumVote: Watchers vote\n(Sentinels) or members\nrun an election (Mongo)
+    QuorumVote --> PrimaryHealthy: Quorum not reached\n(false alarm)
+    QuorumVote --> Promoting: Quorum reached
+    Promoting --> NewPrimary: Chosen replica promoted\n(REPLICAOF NO ONE / Mongo PRIMARY)
+    NewPrimary --> SplitBrainRisk: Old primary rejoins,\nunaware it was demoted
+    SplitBrainRisk --> NewPrimary: Fenced - old primary refuses\nwrites (min-replicas-to-write)\nor loses quorum (Mongo)
+```
+
 ## How it's implemented here
 
 Redis: [Redis (master)](node:redis-master) + 2 replicas + [Redis Sentinel 1](node:redis-sentinel-1)
@@ -41,7 +53,17 @@ Redis: [Redis (master)](node:redis-master) + 2 replicas + [Redis Sentinel 1](nod
 
 Neither needed app-level code changes — both drivers (`StackExchange.Redis`, `MongoDB.Driver`) take
 an HA-aware connection string as-is and handle re-discovering the current primary themselves after
-a failover.
+a failover. For Redis, that connection string names the Sentinels, not the master directly:
+
+```yaml
+# sandbox/docker-compose.yml:843 (repeated per Redis-touching service)
+ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
+```
+
+`AbortOnConnectFail = false` is set explicitly on the parsed options before connecting
+(`src/backend/Shared/Infrastructure/RedisExtensions.cs:78`, `AddRedisMultiplexer`) — without it,
+`ConnectionMultiplexer.Connect` throws the moment Sentinel can't be reached yet (e.g. at boot),
+taking the whole host down instead of retrying in the background.
 
 **Live demo controls for this pattern.** Both implementations now have a standing toggle in the
 architecture-map UI's Topology panel that stops/starts their real HA containers and re-renders the

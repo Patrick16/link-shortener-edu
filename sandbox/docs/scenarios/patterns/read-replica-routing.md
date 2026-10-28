@@ -25,6 +25,28 @@ capacity — add more replicas, reads get faster, without touching the primary a
    not something PgCat is involved in at all; PgCat only decides where to *route* a query, the
    actual data replication is entirely between Postgres instances.
 
+```mermaid
+sequenceDiagram
+    participant App as LinkApi / RedirectApi
+    participant PgCat
+    participant Primary as Postgres primary
+    participant Replica as Postgres replica (1 of 2)
+
+    App->>PgCat: INSERT INTO links ... (write)
+    PgCat->>PgCat: query_parser_enabled: classify query text
+    PgCat->>Primary: not a SELECT - route to primary
+    Primary-->>PgCat: ack
+    PgCat-->>App: ack
+
+    Note over Primary,Replica: streaming WAL replication runs continuously, independent of PgCat
+
+    App->>PgCat: SELECT * FROM links WHERE hash = ... (read)
+    PgCat->>PgCat: classify as read
+    PgCat->>Replica: load-balance across primary + replicas (primary_reads_enabled)
+    Replica-->>PgCat: rows (may lag the primary slightly)
+    PgCat-->>App: rows
+```
+
 The trade-off this always carries: a replica is, by construction, slightly behind the primary (WAL
 streaming has real but small latency). A read immediately after a write on the *same* logical
 request can land on a replica that hasn't caught up yet — see Pitfalls for where this actually

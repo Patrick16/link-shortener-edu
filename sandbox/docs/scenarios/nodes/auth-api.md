@@ -51,6 +51,20 @@ separate round trips, so a crash between the two can't leave a key incremented b
 Default 100 requests/60s (`RateLimiting` in `appsettings.json`); request 101+ gets a `429` with the
 same `ProblemDetails` shape as every other error here.
 
+```mermaid
+flowchart TD
+    A["POST /register or /login"] --> B["RedisRateLimiter.CheckAsync (EVAL Lua script)"]
+    B --> C{"Redis reachable?"}
+    C -- No --> D["RateLimitOutcome.RedisUnavailable"]
+    D --> E{"FailureMode?"}
+    E -- "FailClosed (AuthApi)" --> F["503 Service Unavailable"]
+    E -- FailOpen --> G["continue to AuthController"]
+    C -- Yes --> H["INCR key; PEXPIRE only on the first hit in a fresh window"]
+    H --> I{"count > PermitLimit (100)?"}
+    I -- Yes --> J["429 Too Many Requests"]
+    I -- No --> G
+```
+
 This replaced AuthApi's prior rate limiting outright — a per-process, in-memory fixed-window
 counter — because AuthApi wasn't in `control-api`'s `ScalableServices` list, so "scale it past one
 replica" would have silently turned the configured limit into `limit × replicas`. Moving the

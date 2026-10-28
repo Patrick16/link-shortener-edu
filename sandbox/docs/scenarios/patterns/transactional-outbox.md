@@ -29,6 +29,28 @@ interface convention (the same shape as `IEventDispatcher` for the messaging-mod
 just the switching mechanism, not the pattern itself, so it's not shown below. The outbox mechanism
 itself is the point: a table in the same database as the first write, and a relay that drains it.
 
+```mermaid
+sequenceDiagram
+    participant Consumer as ClickTrackedConsumer
+    participant PG as Postgres (clicks_db)
+    participant Relay as ClickMetaOutboxRelayWorker
+    participant Mongo as MongoDB (clicks_meta_db)
+
+    Note over Consumer,PG: one SaveChangesAsync - both rows commit together, or neither does
+    Consumer->>PG: INSERT Click row
+    Consumer->>PG: INSERT click_meta_outbox row (payload, published_at = NULL)
+    PG-->>Consumer: commit
+
+    loop every 1s
+        Relay->>PG: BEGIN; SELECT ... WHERE published_at IS NULL FOR UPDATE SKIP LOCKED
+        PG-->>Relay: pending rows (locked, invisible to any other relay replica)
+        Relay->>Mongo: SaveManyAsync(ClickMeta) - upsert by Id, bounded 10s timeout
+        Mongo-->>Relay: ack
+        Relay->>PG: UPDATE click_meta_outbox SET published_at = now()
+        Relay->>PG: COMMIT (releases the row locks)
+    end
+```
+
 The outbox table would live in `clicks_db` (the database `TrafficService` already owns and is the
 only migrator of - see this project's one-owning-service-per-database rule):
 

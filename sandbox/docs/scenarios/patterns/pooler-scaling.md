@@ -27,6 +27,27 @@ Postgres access down with it, and connection load spreads across however many re
 4. **Every DB-touching service connects to `haproxy:6432`**, never to `pgcat` directly — one line
    (`DB_HOST`'s default) is what the pgcat-bypass control actually pivots on.
 
+```mermaid
+sequenceDiagram
+    participant App as DB-touching service
+    participant HAProxy
+    participant P1 as pgcat replica A
+    participant P2 as pgcat replica B
+    participant P3 as pgcat replica C
+
+    loop every 3s (option pgsql-check)
+        HAProxy->>P1: Postgres startup packet
+        HAProxy->>P2: Postgres startup packet
+        HAProxy->>P3: Postgres startup packet
+    end
+
+    App->>HAProxy: connect haproxy:6432
+    HAProxy->>HAProxy: pick backend with fewest active connections (balance leastconn)
+    HAProxy->>P2: forward connection
+    Note over P1,P3: all 3 replicas mount the same pgcat.toml - identical pools, identical pool_size
+    P2-->>App: pooled Postgres connection
+```
+
 ### The connection-count math this pattern exists to demonstrate
 
 Scaling the pooler without touching its configuration is the trap this pattern is built to make

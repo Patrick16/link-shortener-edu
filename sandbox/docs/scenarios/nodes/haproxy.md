@@ -66,6 +66,25 @@ container needs pgcat.toml's bind-mount path resolved against the Docker daemon'
 filesystem, not control-api's own — fixed by resolving that path live via Docker's own
 container-inspect metadata (`GetOwnPgcatConfigHostPathAsync`) rather than a hardcoded relative path.
 
+```mermaid
+stateDiagram-v2
+    state "PgCat on, HAProxy on (3 replicas)" as OnOn
+    state "PgCat on, HAProxy off (1 replica)" as OnOff
+    state "PgCat off" as Off
+
+    [*] --> OnOn
+    OnOn --> OnOff: HAProxy toggle OFF\n(pgcat scales 3→1)
+    OnOff --> OnOn: HAProxy toggle ON\n(pgcat scales 1→3)
+    OnOn --> Off: PgCat toggle OFF\n(force-stops HAProxy too)
+    OnOff --> Off: PgCat toggle OFF
+    Off --> OnOff: PgCat toggle ON\n(HAProxy stays off - never auto-started)
+
+    note right of Off
+        Turning HAProxy on while
+        PgCat is off is rejected
+    end note
+```
+
 ## Pitfalls
 
 - 🐛 [A statically-resolved backend hostname failed on first boot against Docker's embedded DNS](pitfall:haproxy-static-resolve-races-docker-dns)
