@@ -74,3 +74,5 @@ it back ON does **not** auto-restore Sentinel — that stays its own explicit ac
 - [High availability & failover](pattern:high-availability-failover)
 - [Circuit breakers](pattern:circuit-breakers) — a Polly breaker sits in front of every call this
   node's clients make
+- [Distributed locking: Redis claims](pattern:distributed-locking-redis) — the coordinator behind
+  `TopLinksPushService`'s cross-replica push claim

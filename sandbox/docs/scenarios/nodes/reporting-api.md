@@ -154,3 +154,5 @@ bug — see this node's Pitfalls for both it and the nginx keepalive/hashing iss
 ### Patterns
 
 - [CQRS fan-out](pattern:cqrs-fanout)
+- [Distributed locking: Redis claims](pattern:distributed-locking-redis) — the cross-replica push
+  claim `TopLinksPushService` takes before pushing

@@ -86,3 +86,4 @@ same correct result as before the fix. `TrafficService.Tests` 18/18 green.
 ### Patterns
 
 - [Data retention](pattern:data-retention-partitioning) — the feature this lock coordinates replicas for
+- [Distributed locking: Postgres advisory locks](pattern:distributed-locking-postgres-advisory) — the general mechanism this bug is in

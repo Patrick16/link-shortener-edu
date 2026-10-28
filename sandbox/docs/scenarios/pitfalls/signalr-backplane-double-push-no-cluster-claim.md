@@ -131,4 +131,4 @@ signalr-backplane.md`, F1), fixed in commit `335d8a5`.
 
 ### Patterns
 
-- [Caching](pattern:caching) — the same atomic `SET ... NX PX` claim idiom this fix reuses
+- [Distributed locking: Redis claims](pattern:distributed-locking-redis) — the general mechanism this fix uses

@@ -112,3 +112,5 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
 - [Data retention](pattern:data-retention-partitioning) — this node owns `clicks_db`'s partitioning and its maintenance job
 - [Transactional outbox](pattern:transactional-outbox) — considered and deliberately not built for
   this node's dual-write; see that pattern for the design and why
+- [Distributed locking: Postgres advisory locks](pattern:distributed-locking-postgres-advisory) —
+  coordinates the partition-maintenance job across replicas

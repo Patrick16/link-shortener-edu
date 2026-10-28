@@ -102,7 +102,10 @@ coordination, N replicas would all try the same `CREATE`/`DROP` at once on the s
 itself is idempotent (`IF NOT EXISTS`/`IF EXISTS`), so a race wouldn't corrupt anything, just spam
 duplicate log lines and duplicate DDL attempts. A Postgres **advisory lock**
 (`pg_try_advisory_lock(hashtext('traffic-service:partition-maintenance'))`) makes "one replica does
-the work, the rest skip this tick" the normal case:
+the work, the rest skip this tick" the normal case — see
+[Distributed locking: Postgres advisory locks](pattern:distributed-locking-postgres-advisory) for
+the general mechanism (session-scoped release, the pgcat-bypass reasoning, the EF Core connection-
+pinning requirement); this section covers only how it's wired into this specific maintenance job:
 
 ```csharp
 // src/backend/Services/TrafficService/PartitionMaintenanceWorker.cs:84
@@ -184,3 +187,5 @@ this unit-testable at all.
 
 - [CQRS fan-out](pattern:cqrs-fanout) — the ClickHouse table this pattern's TTL clause applies to
 - [Read-replica routing](pattern:read-replica-routing) — why this pattern's DDL bypasses PgCat
+- [Distributed locking: Postgres advisory locks](pattern:distributed-locking-postgres-advisory) —
+  the general mechanism behind the maintenance job's cross-replica coordination
