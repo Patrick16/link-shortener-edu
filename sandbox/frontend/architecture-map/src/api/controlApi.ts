@@ -3,7 +3,10 @@ import type {
   ChaosAction,
   CustomScenario,
   DataSourceDefinition,
+  DeadLetterMessageSample,
   DeadLetterQueueStats,
+  DlqReplayRequest,
+  DlqReplayResult,
   EndpointDefinition,
   HaproxyStats,
   InfraStatus,
@@ -120,6 +123,12 @@ export const controlApi = {
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
   getDlqStats: () => request<DeadLetterQueueStats>('/api/infra/dlq-stats'),
   clearDlq: () => request<{ cleared: number }>('/api/infra/dlq-clear', 'POST'),
+  // GET, not POST - this only peeks (non-destructive on the backend), safe to call repeatedly.
+  sampleDlq: (queueName: string, count: number) =>
+    request<DeadLetterMessageSample[]>(
+      `/api/infra/dlq/${encodeURIComponent(queueName)}/sample?count=${count}`,
+    ),
+  replayDlq: (request_: DlqReplayRequest) => request<DlqReplayResult>('/api/infra/dlq/replay', 'POST', request_),
   getHaproxyStats: () => request<HaproxyStats>('/api/infra/haproxy-stats'),
 
   getRedisTopology: () => request<InfraTopology>('/api/containers/redis/topology'),

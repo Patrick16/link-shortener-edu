@@ -262,6 +262,27 @@ export interface DeadLetterQueueStats {
   totalMessages: number
 }
 
+// A non-destructive peek at one dead-lettered message - mirrors ControlApi's
+// DeadLetterMessageSample. reason is whatever RabbitMqConsumer's own PublishDeadLetterAsync set on
+// the "x-dead-reason" header (e.g. "deserialize-failed"), null if that header is missing.
+export interface DeadLetterMessageSample {
+  messageId: string | null
+  reason: string | null
+  payload: string
+}
+
+// queueName is the dead-letter queue's own full name (e.g. "shortener-service.link-created.dead"),
+// not the live queue it replays back onto - the backend derives that by stripping ".dead".
+export interface DlqReplayRequest {
+  queueName: string
+  count: number
+}
+
+export interface DlqReplayResult {
+  queueName: string
+  replayed: number
+}
+
 // Which physical container is actually playing which role right now - Redis Sentinel and MongoDB's
 // replica set can both re-elect a leader with zero involvement from this app, so architecture.json's
 // static node ids/labels can't be trusted for this the way they can for everything else. role is

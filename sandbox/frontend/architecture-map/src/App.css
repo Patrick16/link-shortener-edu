@@ -1680,6 +1680,65 @@ button:disabled {
   color: #ef4444;
 }
 
+/* DLQ sample/replay (backlog item 13) */
+
+.dlq-row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.dlq-row-actions button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dlq-row-actions button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.dlq-row-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dlq-sample-list {
+  margin: 2px 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--accent-bg);
+}
+
+.dlq-sample-item + .dlq-sample-item {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.dlq-sample-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.dlq-sample-payload {
+  margin: 4px 0 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 80px;
+  overflow-y: auto;
+  color: var(--text-h);
+}
+
 /* Per-replica label (pgcat's 3-instances-in-one-panel view, Pooler Scaling) */
 .connection-stats-instance-label {
   font-size: 11px;
