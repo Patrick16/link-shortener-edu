@@ -63,6 +63,10 @@ exist to solve the same "don't keep click data forever" problem.
   (architecture-bug) — fixed
 - 🐛 [Shared-cache DI wiring copy-pasted across two independently deployed services](pitfall:geoip-cache-wiring-duplicated-across-services)
   (coupling) — fixed
+- 🐛 [A ClickHouse client registered as a singleton still opened a fresh HttpClient on every call](pitfall:clickhouse-unpooled-httpclient-per-call)
+  (connection-pooling) — fixed
+- 🐛 [ClickHouse's healthcheck could pass before its init script finished creating the table](pitfall:clickhouse-healthcheck-passes-before-init-script-completes)
+  (infrastructure-bug) — fixed
 
 ## Relatives
 
@@ -78,3 +82,5 @@ exist to solve the same "don't keep click data forever" problem.
 
 - [CQRS fan-out](pattern:cqrs-fanout)
 - [Async messaging](pattern:async-messaging)
+- [Circuit breakers](pattern:circuit-breakers) — Redis breaker via `CachingGeoIpResolver`, plus the
+  geo-IP bulkhead (concurrency limiter) on the same ip-api.com pipeline

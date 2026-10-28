@@ -149,6 +149,8 @@ at all where `x-max-priority` reordering would have any effect.)
   (connection-pooling) — fixed
 - 🐛 [Shutting down the publisher only disposed idle channels, not ones still in flight](pitfall:rabbitmq-publisher-dispose-misses-in-flight-channels)
   (memory-leak) — fixed
+- 🐛 [A consumer's channel-setup retry loop leaked a channel on every failed declare/bind attempt](pitfall:rabbitmq-consumer-setup-retry-channel-leak)
+  (memory-leak) — fixed
 - ⚠️ [Click counter incremented before the dispatch it should depend on](pitfall:click-counter-incremented-before-dispatch)
   (resilience-gap) — fixed
 - ⚠️ [A deletion tombstone written before the delete event's dispatch is confirmed can outlive a delete that never happened](pitfall:delete-tombstone-written-before-dispatch-confirmed)

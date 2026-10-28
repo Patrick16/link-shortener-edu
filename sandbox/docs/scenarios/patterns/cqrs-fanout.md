@@ -91,6 +91,12 @@ many small transactions.
   (architecture-bug) — fixed
 - 🐛 [Shared-cache DI wiring copy-pasted across two independently deployed services](pitfall:geoip-cache-wiring-duplicated-across-services)
   (coupling) — fixed
+- 🐛 [A ClickHouse client registered as a singleton still opened a fresh HttpClient on every call](pitfall:clickhouse-unpooled-httpclient-per-call)
+  (connection-pooling) — fixed
+- 🐛 [ClickHouse's healthcheck could pass before its init script finished creating the table](pitfall:clickhouse-healthcheck-passes-before-init-script-completes)
+  (infrastructure-bug) — fixed
+- 🐛 [A reporting query ran five independent round trips sequentially, one of them redundant](pitfall:clickhouse-summary-query-sequential-and-redundant)
+  (db-query) — fixed
 
 ## Relatives
 

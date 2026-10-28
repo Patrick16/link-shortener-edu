@@ -119,11 +119,91 @@ public const string GrpcCircuitBreakerKey = "grpc";
 public const string RabbitMqCircuitBreakerKey = "rabbitmq";
 ```
 
+## A related pattern: bulkhead isolation
+
+A circuit breaker only reacts to a **failure ratio** — it does nothing if a dependency is merely
+*slow* rather than down. TrafficService and ReportingService's ip-api.com geo-IP lookups (the fifth
+dependency above, point 5) sit behind a second, independent Polly v8 strategy that covers exactly
+that gap: a concurrency limiter (`AddRateLimiter`) capping how many `ip-api.com` calls either
+service can have in flight at once, rejecting anything over the limit immediately instead of
+letting it queue. It's named "bulkhead" after the shipbuilding term — sealing off one slow
+compartment so it can't flood and starve everything else sharing the same process (HttpClient
+connections, thread-pool work).
+
+```csharp
+// src/backend/Shared/Infrastructure/GeoIpExtensions.cs:49-93 (shape, trimmed)
+.AddResilienceHandler("geo-ip-circuit-breaker", (resilience, context) =>
+{
+    resilience
+        .AddRateLimiter(new RateLimiterStrategyOptions
+        {
+            DefaultRateLimiterOptions = new ConcurrencyLimiterOptions
+            {
+                PermitLimit = maxConcurrentRequests,   // GeoIp:MaxConcurrentRequests, default 10
+                QueueLimit = 0,                         // reject immediately, never queue
+            },
+            OnRejected = args =>
+            {
+                logger.LogWarning("Geo-IP concurrency limit ({Limit} in flight) rejected a call...");
+                ResilienceMetrics.BulkheadRejections.Add(1, new("dependency", "geo-ip"));
+                return default;
+            },
+        })
+        .AddCircuitBreaker(new() { /* unchanged: FailureRatio=0.5, MinimumThroughput=10, ... */ });
+});
+```
+
+```mermaid
+flowchart LR
+    click[Click event] --> resolver[IpApiGeoIpResolver.ResolveAsync]
+    resolver --> limiter{Concurrency limiter<br/>PermitLimit=N, QueueLimit=0}
+    limiter -- permit available --> breaker{Circuit breaker<br/>closed?}
+    limiter -- no permit --> rejected[RateLimiterRejectedException]
+    breaker -- yes --> http[HTTP call to ip-api.com]
+    breaker -- open --> brokenCircuit[BrokenCircuitException]
+    http --> result[GeoLocation or error]
+    rejected --> catchAll[ResolveAsync catch-all]
+    brokenCircuit --> catchAll
+    result -- on throw --> catchAll
+    catchAll --> noGeo["GeoLocation(null, null)<br/>click still recorded"]
+```
+
+- **Ordering is deliberate: the rate limiter is added *before* the circuit breaker in the same
+  pipeline.** A call rejected by the concurrency limiter never reaches the breaker, so a burst of
+  concurrency rejections never counts against the breaker's own `FailureRatio` — the two strategies
+  protect against two independent failure modes (slow vs. down) and shouldn't contaminate each
+  other's statistics. Reversing the order would let pure concurrency pressure trip the breaker open,
+  with nothing enforcing the correct order beyond the sequence of two method calls.
+- **`AddRateLimiter(RateLimiterStrategyOptions)`, not the simpler `AddConcurrencyLimiter` overload** —
+  the simple overload only accepts the BCL's own `ConcurrencyLimiterOptions`, which has no rejection
+  callback; the lower-level overload adds `OnRejected` for logging/metrics while keeping identical
+  limiting behavior.
+- **`QueueLimit = 0`** — reject immediately rather than queue excess calls, mirroring
+  [RedirectApi](node:redirect-api)'s own request-budget load-shedding choice
+  (`Redirect:RequestBudgetMs`): abandoning a call that can't start right now beats queuing it, since
+  queuing risks this consumer's own RabbitMQ batch timeout.
+- **No call-site change needed** — `Polly.RateLimiting.AddRateLimiter` throws
+  `RateLimiterRejectedException` on rejection, just another `Exception` to `IpApiGeoIpResolver.
+  ResolveAsync`'s existing catch-all, which already turns *any* failure (private IP, timeout, HTTP
+  error, now also a rejection) into `GeoLocation(null, null)` rather than throw — a rejection and a
+  genuinely dead dependency look identical downstream; only the OTel counters tell them apart
+  (`resilience.bulkhead.rejections` vs. `resilience.circuit_breaker.transitions{state=opened}`).
+- **Deliberately manual, not self-tuning** — `GeoIp:MaxConcurrentRequests` (default 10) is read once
+  at startup and changed only by recreating both containers (via the `geoip-bulkhead` control-api
+  capability or the `GEOIP_BULKHEAD_LIMIT` env var), not auto-adjusted from observed latency/rejection
+  rate — a dial a human turns and observes, matching this project's visible-cause-and-effect teaching
+  model over hidden automation.
+- **Private/loopback/docker-internal IPs never reach the limiter** — `ResolveAsync` short-circuits to
+  "no geo data" before the `HttpClient` (and the whole resilience pipeline) is even touched for any
+  non-public IP, which matters when trying to reproduce rejections in a local docker-compose run
+  where most client IPs are docker-internal.
+
 ## Pitfalls
 
 No pitfall-docs recorded for this pattern yet — the tuning duplication between the shared builder
 and ip-api.com's hand-copied `HttpClient` values (see "How it works") is a real drift risk worth
-watching, but nothing has actually drifted yet, so there's no before/after to show.
+watching, but nothing has actually drifted yet, so there's no before/after to show. The same applies
+to the rate-limiter-before-breaker ordering rule above: nothing enforces it beyond code review.
 
 ## Relatives
 
@@ -135,8 +215,10 @@ watching, but nothing has actually drifted yet, so there's no before/after to sh
 - [RedirectApi](node:redirect-api) — Redis breaker (cache reads/writes), RabbitMQ breaker (publish)
 - [ShortenerService](node:shortener-service) — gRPC breaker when `Messaging:Mode=grpc`
 - [TrafficService](node:traffic-service) — gRPC breaker when `Messaging:Mode=grpc`; Redis breaker
-  via `CachingGeoIpResolver`
-- [ReportingService](node:reporting-service) — Redis breaker via `CachingGeoIpResolver`
+  via `CachingGeoIpResolver`; geo-IP bulkhead (concurrency limiter) in front of the same ip-api.com
+  calls
+- [ReportingService](node:reporting-service) — Redis breaker via `CachingGeoIpResolver`; geo-IP
+  bulkhead (concurrency limiter) in front of the same ip-api.com calls
 
 ### Patterns
 

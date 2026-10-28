@@ -95,6 +95,8 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
   (coupling) — fixed
 - ⚠️ [A side-effect cache failure took down an entire gRPC request, not just the caching optimization](pitfall:geoip-cache-write-failure-fails-grpc-request)
   (resilience-gap) — fixed
+- 🐛 [A consumer's channel-setup retry loop leaked a channel on every failed declare/bind attempt](pitfall:rabbitmq-consumer-setup-retry-channel-leak)
+  (memory-leak) — fixed
 
 ## Relatives
 
@@ -114,3 +116,6 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
   this node's dual-write; see that pattern for the design and why
 - [Distributed locking: Postgres advisory locks](pattern:distributed-locking-postgres-advisory) —
   coordinates the partition-maintenance job across replicas
+- [Circuit breakers](pattern:circuit-breakers) — Redis breaker via `CachingGeoIpResolver`, gRPC
+  breaker when `Messaging:Mode=grpc`, plus the geo-IP bulkhead (concurrency limiter) on the same
+  ip-api.com pipeline

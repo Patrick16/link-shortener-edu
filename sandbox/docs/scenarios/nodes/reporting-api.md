@@ -141,6 +141,12 @@ bug — see this node's Pitfalls for both it and the nginx keepalive/hashing iss
   (connection-pooling) — fixed
 - ⚠️ [`ip_hash` rehashes modulo the live peer count, not a stable ring — fragile on an upstream meant to be scaled live](pitfall:nginx-ip-hash-rehashes-on-peer-count-change)
   (config-tuning) — fixed
+- 🐛 [A ClickHouse client registered as a singleton still opened a fresh HttpClient on every call](pitfall:clickhouse-unpooled-httpclient-per-call)
+  (connection-pooling) — fixed
+- 🐛 [ClickHouse's healthcheck could pass before its init script finished creating the table](pitfall:clickhouse-healthcheck-passes-before-init-script-completes)
+  (infrastructure-bug) — fixed
+- 🐛 [A reporting query ran five independent round trips sequentially, one of them redundant](pitfall:clickhouse-summary-query-sequential-and-redundant)
+  (db-query) — fixed
 
 ## Relatives
 

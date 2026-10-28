@@ -174,6 +174,8 @@ as before.
 - 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
   (coupling) — fixed; this node's own Redis pre-warm (`LinkCreatedConsumer.cs`, not shown in the
   snippet above) never actually reached RedirectApi's cache before this fix
+- 🐛 [A consumer's channel-setup retry loop leaked a channel on every failed declare/bind attempt](pitfall:rabbitmq-consumer-setup-retry-channel-leak)
+  (memory-leak) — fixed
 - ⚠️ [Intra-batch same-hash dedup silently dropped a genuine conflict, not just a redelivery](pitfall:shortener-batch-dedup-drops-conflicting-duplicate)
   (resilience-gap) — fixed
 - ⚠️ [A fail-open tombstone write is not enough on its own to invalidate an already-cached entity](pitfall:deletion-tombstone-alone-leaves-stale-cache-entry)

@@ -151,6 +151,8 @@ pattern below is already live in the running stack and can be toggled/observed i
 | [Distributed rate limiting](sandbox/docs/scenarios/nodes/auth-api.md) | Redis-backed fixed-window limiter (atomic Lua script), shared by AuthApi and RedirectApi |
 | [SignalR Redis backplane](sandbox/docs/scenarios/nodes/reporting-api.md) | Scaled `ReportingApi` behind sticky routing plus a Redis backplane for the live Top Links hub |
 | [DLQ replay tooling](sandbox/docs/scenarios/02-async.md) | Sample and replay dead-lettered RabbitMQ messages straight from the control plane |
+| [Distributed locking](sandbox/docs/scenarios/patterns/distributed-locking.md) | Two implementations compared live: a Postgres session-scoped advisory lock (partition maintenance) and a Redis TTL-scoped claim (cross-replica push dedup) |
+| [Bulkhead isolation](sandbox/docs/scenarios/patterns/circuit-breakers.md#a-related-pattern-bulkhead-isolation) | Concurrency limiter on the shared geo-IP `HttpClient`, so a merely *slow* ip-api.com can't starve the rest of the process the way a *down* one is already protected against |
 | [Transactional outbox](sandbox/docs/scenarios/patterns/transactional-outbox.md) | Documented in full (schema, relay worker) but **not built** — the obvious failure demo turns out not to apply to this consumer |
 | [Priority queues (RabbitMQ)](sandbox/docs/scenarios/patterns/async-messaging.md) | Documented why `x-max-priority` **wouldn't help** this topology, instead of building it (every event type already has its own queue) |
 
