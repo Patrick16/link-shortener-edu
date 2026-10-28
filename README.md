@@ -131,22 +131,33 @@ from LinkApi to ShortenerService.
 The stand is one complete, configurable system, not a staircase of numbered scenarios — every
 pattern below is already live in the running stack and can be toggled/observed independently.
 
-| Pattern | What it is | Status |
-|---|---|---|
-| Caching | Redis, read-through on link lookups | Built |
-| Async processing | RabbitMQ between the APIs and their workers | Built |
-| Read replicas | Postgres primary + 2 streaming replicas, PgCat routes reads vs writes | Built |
-| High availability / failover | Postgres + Mongo replica sets, Redis Sentinel | Built |
-| CQRS reporting | ClickHouse as a third, independent read model off the same click events | Built |
-| Sync ⇄ async messaging toggle | Swap RabbitMQ for direct gRPC calls, live, to feel the coupling cost | Built |
-| Data retention (partitioning) | Postgres native partitioning + Mongo/ClickHouse TTLs for `clicks` | Built — maintenance job still open |
-| Pooler scaling | 3 PgCat instances behind an HAProxy TCP load balancer | Built |
+| Pattern | What it is |
+|---|---|
+| [Caching](sandbox/docs/scenarios/patterns/caching.md) | Redis, read-through on link lookups |
+| [Async processing](sandbox/docs/scenarios/patterns/async-messaging.md) | RabbitMQ between the APIs and their workers |
+| [Read replicas](sandbox/docs/scenarios/patterns/read-replica-routing.md) | Postgres primary + 2 streaming replicas, PgCat routes reads vs writes |
+| [High availability / failover](sandbox/docs/scenarios/patterns/high-availability-failover.md) | Postgres + Mongo replica sets, Redis Sentinel |
+| [CQRS reporting](sandbox/docs/scenarios/patterns/cqrs-fanout.md) | ClickHouse as a third, independent read model off the same click events |
+| [Sync ⇄ async messaging toggle](sandbox/docs/scenarios/patterns/async-messaging.md) | Swap RabbitMQ for direct gRPC calls, live, to feel the coupling cost |
+| [Data retention (partitioning)](sandbox/docs/scenarios/patterns/data-retention-partitioning.md) | Postgres native partitioning + Mongo/ClickHouse TTLs for `clicks`, including the partition-maintenance job |
+| [Pooler scaling](sandbox/docs/scenarios/patterns/pooler-scaling.md) | 3 PgCat instances behind an HAProxy TCP load balancer |
+| [Circuit breakers](sandbox/docs/scenarios/patterns/circuit-breakers.md) | Polly-wrapped breakers around Redis, geo-IP lookups, the gRPC sync-messaging transport and RabbitMQ publishing |
+| [Multi-tier caching](sandbox/docs/scenarios/patterns/caching.md) | In-process L1 cache ahead of Redis, negative caching on misses, TTL jitter against a synchronized expiry wave |
+| [Idempotency keys](sandbox/docs/scenarios/nodes/link-api.md) | `Idempotency-Key` header on `POST /links`, Redis-backed claim-then-replay |
+| [Graceful shutdown](sandbox/docs/scenarios/nodes/redirect-api.md) | Paired container stop-grace-period + Kestrel shutdown timeout, draining in-flight requests instead of killing them on scale-down |
+| [Deadline budgets / load shedding](sandbox/docs/scenarios/nodes/redirect-api.md) | Per-request cancellation budget on RedirectApi's hot path; sheds with `503` past budget instead of queuing on a degraded dependency |
+| [Retry jitter](sandbox/docs/scenarios/patterns/async-messaging.md) | Full jitter on the RabbitMQ fallback-queue retry worker, decorrelating replicas that started together |
+| [Hot-key mitigation](sandbox/docs/scenarios/nodes/shortener-service.md) | In-memory click-count aggregation + periodic flush, easing Postgres row-lock contention on a viral link |
+| [Distributed rate limiting](sandbox/docs/scenarios/nodes/auth-api.md) | Redis-backed fixed-window limiter (atomic Lua script), shared by AuthApi and RedirectApi |
+| [SignalR Redis backplane](sandbox/docs/scenarios/nodes/reporting-api.md) | Scaled `ReportingApi` behind sticky routing plus a Redis backplane for the live Top Links hub |
+| [DLQ replay tooling](sandbox/docs/scenarios/02-async.md) | Sample and replay dead-lettered RabbitMQ messages straight from the control plane |
+| [Transactional outbox](sandbox/docs/scenarios/patterns/transactional-outbox.md) | Documented in full (schema, relay worker) but **not built** — the obvious failure demo turns out not to apply to this consumer |
+| [Priority queues (RabbitMQ)](sandbox/docs/scenarios/patterns/async-messaging.md) | Documented why `x-max-priority` **wouldn't help** this topology, instead of building it (every event type already has its own queue) |
 
-Pattern write-ups (what it is, what it solves, how it works) are in
-[`sandbox/docs/scenarios/patterns/`](sandbox/docs/scenarios/patterns/), per-component notes in
-[`sandbox/docs/scenarios/nodes/`](sandbox/docs/scenarios/nodes/), and real bugs found while
-building these in [`sandbox/docs/scenarios/pitfalls/`](sandbox/docs/scenarios/pitfalls/); the
-target architecture and current implementation status are in
+Per-component notes live in [`sandbox/docs/scenarios/nodes/`](sandbox/docs/scenarios/nodes/), and
+real bugs found while building all of the above are in
+[`sandbox/docs/scenarios/pitfalls/`](sandbox/docs/scenarios/pitfalls/); the target architecture and
+current implementation status are in
 [`sandbox/docs/architecture.md`](sandbox/docs/architecture.md).
 
 ## Tech stack
@@ -156,6 +167,7 @@ target architecture and current implementation status are in
 | Backend | .NET 10, ASP.NET Core, EF Core, xUnit |
 | Product frontend | React 19, TypeScript, Vite, React Router |
 | Sandbox frontend | React 19, TypeScript, Vite, React Flow (`@xyflow/react`), SignalR |
+| Resilience | Polly (circuit breakers), Redis-backed rate limiting/idempotency/locking |
 | Data | PostgreSQL 16 (partitioned), MongoDB 7 (replica set), ClickHouse, Redis 7 (+ Sentinel), SQLite (fallback queue) |
 | Messaging | RabbitMQ (⇄ gRPC, toggleable) |
 | Infrastructure | Docker Compose, nginx, pgcat (connection pooling) |
