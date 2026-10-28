@@ -45,6 +45,12 @@ rare, and not meaningfully improved by adding an outbox either, since that scena
 outbox relay just as easily. Net: here, ordering + idempotency + broker redelivery already buy what
 an outbox buys, without the extra table, relay worker, and latency.
 
+A later backlog pass considered building this as a live, DI-swapped toggle specifically to demo
+dual-write vs. outbox side by side with a deterministic fault hook — see
+[Transactional outbox](pattern:transactional-outbox) for the design and, honestly, why the obvious
+version of that demo (kill the process, expect drift) doesn't actually show anything against *this*
+consumer.
+
 This is a **separate consumer** from [ShortenerService](node:shortener-service)'s own
 `ClickTrackedEvent` consumer, which only maintains `Links.ClickCount` as a fast display counter —
 two consumers on the same event, for two different, deliberately independent reasons (a display
@@ -104,3 +110,5 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
 
 - [Async messaging](pattern:async-messaging)
 - [Data retention](pattern:data-retention-partitioning) — this node owns `clicks_db`'s partitioning and its maintenance job
+- [Transactional outbox](pattern:transactional-outbox) — considered and deliberately not built for
+  this node's dual-write; see that pattern for the design and why
