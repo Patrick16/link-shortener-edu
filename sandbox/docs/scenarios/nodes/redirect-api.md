@@ -106,6 +106,34 @@ This isn't wired into `control-api`/`architecture-map` — it's a correctness/re
 the hot path, not a live on/off pattern meant for A/B comparison in the UI. See this node's
 Pitfalls for two subtle bugs this budget's first version got wrong around cancellation.
 
+### Rate limiting
+
+The same shared `RedisRateLimitFilter` [AuthApi](node:auth-api) uses also guards
+`RedirectToOrigin`, keyed purely by client IP — **not** `userId`, even though a link has a known
+owner: `RedirectToOrigin` never authenticates its caller (a short-link click is an anonymous
+browser navigation), and the `userId` a `ClickTrackedEvent` carries is the *link's owner*, set when
+the link was created, not whoever is clicking it now. There was never a caller `userId` available
+on this path to key on. Default 600 requests/60s, overridable without a rebuild via
+`REDIRECT_RATE_LIMIT_PERMIT`/`REDIRECT_RATE_LIMIT_WINDOW_SECONDS` in `docker-compose.yml` — useful
+for demoing a live `429` on purpose, since the default is sized high enough that normal load-test
+traffic through nginx rarely trips it on its own.
+
+Unlike AuthApi, **RedirectApi fails open on a Redis outage** — Redis is already a critical
+dependency on this exact path (the link cache, the deletion-marker lookup above), and this
+project's established rule for this hot path is that a Redis outage degrades gracefully rather
+than blocking it; adding a third reason for Redis to block redirects would contradict that
+existing pattern.
+
+This feature is also what added `app.UseForwardedHeaders(...)` to this service for the first time
+(`ForwardedHeaders.XForwardedFor`, `ForwardLimit = 1`, placed first in the pipeline, before
+anything reads `RemoteIpAddress`) — needed because every request here already arrives via `nginx`,
+so the real client address is in `X-Forwarded-For`, not the socket peer. `ForwardLimit = 1` trusts
+only the *last* entry in that header; since nginx's own `$proxy_add_x_forwarded_for` always appends
+the real socket peer to whatever a client sent, trusting only the last hop means a client that
+prepends fake entries before nginx ever sees them gets ignored, not trusted. Safe specifically
+because this service has no host port mapping — nginx is the only way in, so there's no second,
+unproxied entry point a spoofed header could abuse.
+
 ## Pitfalls
 
 - 🐛 [Every publish opened and declared a brand-new AMQP channel](pitfall:rabbitmq-publisher-unpooled-channel-hot-path)
@@ -138,8 +166,10 @@ Pitfalls for two subtle bugs this budget's first version got wrong around cancel
 - [LinkApi](node:link-api) — the hashes this node resolves come from there
 - [ShortenerService](node:shortener-service) — see the click-tracking split note above
 - [TrafficService](node:traffic-service) — see the click-tracking split note above
-- [Redis](node:redis-master) — cache and per-user click day buckets
+- [Redis](node:redis-master) — cache, per-user click day buckets, and the rate limiter above
 - [RabbitMQ](node:rabbitmq) — carries `ClickTrackedEvent`
+- [AuthApi](node:auth-api) — shares the same `RedisRateLimitFilter` mechanics, opposite
+  fail-open/fail-closed choice
 
 ### Patterns
 

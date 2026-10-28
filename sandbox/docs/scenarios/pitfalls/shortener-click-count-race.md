@@ -51,6 +51,14 @@ connection instead.
 
 (fixed in `86c760c`)
 
+**Note this fix is still current, but no longer the whole story:** a later follow-up added
+in-process batching on top of this exact `ExecuteUpdateAsync` call, to reduce how *often* it runs
+against a hot row under multiple replicas — the lost-update race above stays fixed either way, but
+a reader shouldn't assume one `ExecuteUpdateAsync` per consumed batch is still literally what
+happens today. See [ShortenerService](node:shortener-service)'s "Click-count aggregation"
+subsection and [this pitfall](pitfall:clickcount-flush-worker-no-flush-on-shutdown) for what that
+follow-up changed and the new tradeoff it introduced.
+
 ## Relatives
 
 ### Nodes

@@ -132,6 +132,12 @@ at all where `x-max-priority` reordering would have any effect.)
   (performance) — fixed
 - ⚠️ [Two independent event consumers doubled load on a shared rate-limited external API](pitfall:geoip-dual-consumer-rate-limit-doubling)
   (architecture-bug) — fixed
+- 🐛 [A `PropertyNameCaseInsensitive` option only relaxes deserializing, not what gets written on serialize](pitfall:rabbitmq-management-api-request-casing)
+  (infrastructure-bug) — fixed
+- 🐛 [A "preview" truncation limit reused on a "republish verbatim" path can corrupt the one copy left](pitfall:rabbitmq-dlq-replay-truncation-corrupts-message)
+  (resilience-gap) — fixed
+- 🐛 [A React unmount guard has to re-arm itself every run, and an in-flight request needs to know if it's still the one being shown](pitfall:dlq-stats-panel-stale-async-response)
+  (concurrency) — fixed
 
 ## Relatives
 

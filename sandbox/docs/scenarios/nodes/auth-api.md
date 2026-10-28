@@ -39,6 +39,36 @@ key/issuer/audience live in `Common.Constants` so AuthApi (issuer) and `LinkApi`
 drift onto different values, enforced in `docker-compose.yml` via one shared YAML anchor both
 services reference.
 
+### Rate limiting
+
+`register`/`login`/`refresh`/`logout` sit behind a shared `RedisRateLimitFilter`
+(`[ServiceFilter(typeof(RedisRateLimitFilter))]` on `AuthController`), keyed purely by
+`RemoteIpAddress` — these endpoints are unauthenticated, so there's no logged-in caller to key on.
+The counter itself (`RedisRateLimiter`, see [Async messaging](pattern:async-messaging)'s neighbor,
+[Redis](node:redis-master)) is a fixed window, not sliding: `INCR` a per-key counter and, only on
+the very first hit in a fresh window, `PEXPIRE` it — both inside one Lua script (`EVAL`), not two
+separate round trips, so a crash between the two can't leave a key incremented but never expiring.
+Default 100 requests/60s (`RateLimiting` in `appsettings.json`); request 101+ gets a `429` with the
+same `ProblemDetails` shape as every other error here.
+
+This replaced AuthApi's prior rate limiting outright — a per-process, in-memory fixed-window
+counter — because AuthApi wasn't in `control-api`'s `ScalableServices` list, so "scale it past one
+replica" would have silently turned the configured limit into `limit × replicas`. Moving the
+counter into Redis (which AuthApi didn't depend on at all before this) fixes that, at the cost of a
+new dependency on the hot auth path — which is why **AuthApi fails closed on a Redis outage**
+(`503 Service Unavailable`, not a silently-open gate): these endpoints guard against
+brute-forcing, so an open window during an outage would mean unlimited login attempts. This is a
+deliberate exception to this project's usual "never block on a dependency outage" default used
+elsewhere (caching, the request budget) — the right call here specifically because the thing being
+protected is login, not a read.
+
+AuthApi sits on a direct host port (8081), not behind `nginx` like `LinkApi`/`RedirectApi` — so
+unlike `RedirectApi`'s rate limiter (see [RedirectApi](node:redirect-api)), it has no
+`UseForwardedHeaders` call and doesn't need one; `RemoteIpAddress` is already the real client
+address here. Its limit also has no docker-compose override knob (unlike `RedirectApi`'s) — the
+100/60s default was already easy to trip in a demo, so there was no equivalent need to lower it
+live.
+
 ## Pitfalls
 
 - 🐛 [Duplicate-email race could crash Register with an unhandled exception](pitfall:auth-duplicate-email-race)
@@ -52,6 +82,7 @@ services reference.
 
 - [LinkApi](node:link-api) — optionally validates the tokens this node issues
 - [users_db](node:users-db)
+- [Redis](node:redis-master) — backs the rate limiter above
 
 ### Patterns
 

@@ -131,6 +131,38 @@ tombstone confirm specifically fails. The two writes stay independent, not trans
 other - either one succeeding alone is now enough to close the gap it closes. See this node's
 Pitfalls.
 
+### Click-count aggregation: buffering writes to ease hot-key row-lock contention
+
+`ClickTrackedConsumer`'s `ClickCount` maintenance (above) used to run one atomic
+`ExecuteUpdateAsync` per consumed batch, straight against Postgres — correct (no lost-update race),
+but every `ShortenerService` replica still issued its own `UPDATE` against the same row whenever a
+link goes viral, and more replicas meant *more* lock contention on that one hot row, not less
+(measured live: throughput went **down**, 190 → 76 msg/s, going from 1 to 4 replicas on a single
+hot key).
+
+`ClickCountAggregator` (a singleton `ConcurrentDictionary<string, long>`) and
+`ClickCountFlushWorker` (a `BackgroundService` on a flat, deliberately non-jittered 500ms
+`PeriodicTimer` — see [Async messaging](pattern:async-messaging)'s retry-jitter note for why this
+one doesn't need it: each replica only ever flushes hashes *it itself* buffered, no cross-replica
+correlation to decorrelate) decouple the two: `ClickTrackedConsumer.HandleBatchAsync` now just
+calls `aggregator.Add(hash, count)` per distinct hash in the batch and acks immediately, with no DB
+round trip at all. The flush worker drains the aggregator every tick and issues one `UPDATE` per
+distinct hash *per tick*, not per batch — collapsing however many batches land for one hot hash
+within a ~500ms window into a single write. **This reduces lock *frequency*, it does not eliminate
+cross-replica contention** — with N replicas each on their own unsynchronized timer, a sustained
+hot key can still see up to N competing `UPDATE`s roughly every 500ms; describe this as reducing
+write frequency, not as "fixing" hot-key contention.
+
+The tradeoff this buffering introduces: `ClickCount` is explicitly an approximate display number
+(the real audit trail is [TrafficService](node:traffic-service)'s `Clicks` table), but acking a
+batch as soon as its counts are buffered — instead of after a durable write — widens the loss
+window on termination from "one batch, on an abrupt crash" to "up to one flush interval's worth of
+increments, across every hash touched in that window, on *any* termination before the next flush."
+See this node's Pitfalls for why that widened window had to be closed for the *ordinary, routine*
+graceful-stop case specifically (restart, rolling deploy, a control-api scale-down) — an abrupt
+kill (SIGKILL, OOM) still loses whatever was buffered and not yet flushed, same accepted tradeoff
+as before.
+
 ## Pitfalls
 
 - 🐛 [AddDbContextPool registered as a scoped service inside a Worker Service](pitfall:shortener-dbcontext-pool-scoped-in-worker)
@@ -145,6 +177,8 @@ Pitfalls.
 - ⚠️ [Intra-batch same-hash dedup silently dropped a genuine conflict, not just a redelivery](pitfall:shortener-batch-dedup-drops-conflicting-duplicate)
   (resilience-gap) — fixed
 - ⚠️ [A fail-open tombstone write is not enough on its own to invalidate an already-cached entity](pitfall:deletion-tombstone-alone-leaves-stale-cache-entry)
+  (resilience-gap) — fixed
+- ⚠️ [A buffered-write worker needs a flush on graceful stop, not just a documented "lost on crash" tradeoff](pitfall:clickcount-flush-worker-no-flush-on-shutdown)
   (resilience-gap) — fixed
 
 ## Relatives

@@ -89,6 +89,48 @@ Or open the Aspire Dashboard (`http://localhost:18888/traces`) right after visit
 for `RedirectApi: GET {hash}`; it spans into `TrafficService` the same way `LinkApi: POST Links`
 spans into `ShortenerService` (see `docs/scenarios/01-minimal.md#observability`).
 
+## Inspecting and recovering dead-lettered messages
+
+(PLAN.md backlog item 13.) Up to this point, a message that landed in one of RabbitMQ's
+`{queue}.dead` queues (deserialize failure, an explicit business rejection, or exhausting its 5
+redelivery attempts — see the dead-letter bullet below) was visible only as a live count on the
+architecture-map RabbitMQ node panel, with no way to see *what* was actually in there or get it
+back onto the live queue short of the RabbitMQ management UI itself. Two endpoints on
+`control-api`'s `DlqStatsCapability` close that gap:
+
+- `GET /api/infra/dlq/{queue}/sample?count=N` — a non-destructive peek (default 5 messages,
+  clamped 1–20), safe to call repeatedly since nothing is removed.
+- `POST /api/infra/dlq/replay` — republishes up to `count` messages from `{queue}.dead` back onto
+  the live queue it dead-lettered from, then removes them from the dead queue. Peek-then-publish-
+  then-remove, in that order, so a failure midway just leaves the message where it already was
+  (safe to retry) instead of losing it. Guarded by a single process-wide 5-second cooldown against
+  button-mashing (or scripting) a still-broken consumer into a retry storm.
+
+Both talk to the RabbitMQ Management HTTP API directly (the `rabbitmqctl`-via-`docker-exec`
+mechanism the rest of `control-api`'s RabbitMQ tooling uses has no way to read or write a message
+body). Replay leans on every current dead-letter producer already being confirmed redelivery-safe
+(checked per-consumer before this was built — see `IRabbitMqService.cs`'s own comment) — a
+duplicate publish from the narrow peek-then-remove race window is an accepted, harmless outcome on
+that basis, not something actively prevented; a future consumer added without that same guarantee
+would need re-checking before trusting replay against its dead queue.
+
+**Via the UI:** open architecture-map, click the `rabbitmq` node, and use the "Sample"/"Replay"
+buttons next to each dead-letter queue's row (next to the pre-existing "Clear DLQ", which still
+just discards instead of recovering). **Via the raw API:**
+
+```bash
+curl "http://localhost:<control-api-port>/api/infra/dlq/shortener-service.link-created.dead/sample?count=5"
+curl -X POST "http://localhost:<control-api-port>/api/infra/dlq/replay" \
+  -H "Content-Type: application/json" \
+  -d '{"queueName":"shortener-service.link-created.dead","count":10}'
+```
+
+See [this pitfall](pitfall:rabbitmq-dlq-replay-truncation-corrupts-message) for a subtlety this
+tooling's replay path had to get right: the Management API silently truncates an oversized
+payload while still reporting its true size separately, and reusing a "preview" truncation limit
+on the republish path would have corrupted large messages before permanently deleting their only
+full copy.
+
 ## What's still missing from the target design
 
 - **Dead-letter handling** — built, partially: `RabbitMqConsumer` dead-letters a message to
@@ -99,9 +141,10 @@ spans into `ShortenerService` (see `docs/scenarios/01-minimal.md#observability`)
   per-queue counter (architecture-map's RabbitMQ node panel, 2026-10-06) can be any of the three —
   check the message's own `x-dead-reason` header (`deserialize-failed`/`business-rejected`/exhausted
   retries, see `RabbitMqConsumer.PublishDeadLetterAsync`) before assuming it survived 5 attempts.
-  What's still missing is anything *reading* those
-  queues otherwise — no consumer, no alerting, and no way to inspect or re-publish a dead-lettered
-  message short of the RabbitMQ management UI itself.
+  Inspecting and re-publishing a dead-lettered message no longer needs the RabbitMQ management UI
+  directly — see "Inspecting and recovering dead-lettered messages" below. Still missing: any
+  automated alerting on a non-zero dead-letter count (it's still a manually-checked panel, not a
+  Prometheus alert like the queue-backlog ones already wired up).
 - **Frontend** — no UI shows click counts yet (`DashboardPage` is still a stub).
 - **Geo accuracy in local dev** — the client IP `RedirectApi` sees is whatever's on the connection
   (docker-internal address behind `nginx`, not a real `X-Forwarded-For` chain), so it's almost

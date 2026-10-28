@@ -70,9 +70,14 @@ endpoint has to special-case.
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/ReportingApi/Realtime/TopLinksPushService.cs:84
-private async Task PushAsync(Guid userId, CancellationToken cancellationToken)
+// src/backend/Services/ReportingApi/Realtime/TopLinksPushService.cs:95
+internal async Task PushAsync(Guid userId, CancellationToken cancellationToken)
 {
+    // Cluster-wide claim, not just this replica's own IsUnchanged/MinPushInterval throttle - see
+    // "Scaling and the SignalR backplane" below for why a per-process throttle alone isn't enough
+    // once more than one replica exists.
+    if (!await TryClaimPushAsync(userId, cancellationToken)) return;
+
     var top = await _reader.GetTopAsync(userId, DateTime.UtcNow, cancellationToken);
     var payload = JsonSerializer.Serialize(top);
     if (_scheduler.IsUnchanged(userId, payload)) return;
@@ -96,6 +101,28 @@ ClickHouse connection pool each, but are otherwise independent — a ClickHouse 
 the live push path, and (since the resilience fixes below) a Redis outage doesn't take down the
 report endpoints either.
 
+### Scaling and the SignalR backplane
+
+This is the one HTTP-facing service that could never be scaled past one replica for a while — not
+because of anything SignalR-specific at first, but because it published a fixed host port (like
+`AuthApi` still does) instead of sitting behind nginx, so Compose would simply refuse a second
+replica. Fronting it with nginx (a `reporting_api_upstream`, same shape as
+`link_api_upstream`/`redirect_api_upstream`) made scaling mechanically possible, and immediately
+exposed the real SignalR-specific problem: a hub connection negotiates over *two* separate HTTP
+requests (`POST .../negotiate` allocates a `connectionId` server-side, then the actual
+WebSocket/SSE/long-polling upgrade has to reach that *same* replica) — plain round-robin has no
+reason to send both to the same backend, so every connection failed with SignalR's own
+"No Connection with that ID" error. Sticky-by-client routing (`hash $remote_addr consistent;` — not
+plain `ip_hash`, which rehashes on every peer-count change; see this node's Pitfalls) fixes that.
+
+Sticky-by-IP alone already self-heals the common case (one user, one source IP, always routed to
+the same replica). The remaining gap — one user open on two devices on genuinely different
+networks, where each device's connection can land on a *different* replica — is what the SignalR
+Redis backplane (`AddSignalR().AddStackExchangeRedis(...)`, reusing the same Redis connection
+string every other client in this service already depends on) actually closes: it lets a push
+decided on one replica reach a connection living on another. Wiring that in exposed a second real
+bug — see this node's Pitfalls for both it and the nginx keepalive/hashing issues scaling surfaced.
+
 ## Pitfalls
 
 - 🐛 [A CORS/credentials mismatch silently blocked the SignalR negotiate request](pitfall:signalr-cors-credentials-mismatch-blocks-negotiate)
@@ -108,6 +135,12 @@ report endpoints either.
   (resilience-gap) — fixed
 - 🐛 [A real-time connection hook gave up permanently after one bad start](pitfall:top-links-hook-gives-up-after-failed-connect)
   (resilience-gap) — fixed
+- 🐛 [Per-process push state plus a cross-replica fan-out backplane means every watching replica fires independently](pitfall:signalr-backplane-double-push-no-cluster-claim)
+  (architecture-bug) — fixed
+- 🐛 [A WebSocket-upgrade header pattern applied to a whole location also closes every plain REST connection on it](pitfall:nginx-websocket-upgrade-headers-kill-rest-keepalive)
+  (connection-pooling) — fixed
+- ⚠️ [`ip_hash` rehashes modulo the live peer count, not a stable ring — fragile on an upstream meant to be scaled live](pitfall:nginx-ip-hash-rehashes-on-peer-count-change)
+  (config-tuning) — fixed
 
 ## Relatives
 
