@@ -22,6 +22,24 @@ routing every read through Postgres wastes capacity on work whose answer almost 
 4. On a write that changes the underlying data, invalidate (or update) the corresponding cache
    entry — otherwise readers keep seeing the stale cached value until its TTL expires.
 
+```mermaid
+sequenceDiagram
+    participant C as Caller
+    participant R as Redis (cache)
+    participant DB as Postgres
+
+    C->>R: GET link:{hash}
+    alt cache hit
+        R-->>C: cached value
+    else cache miss
+        R-->>C: nil
+        C->>DB: SELECT ... WHERE hash = ...
+        DB-->>C: row
+        C->>R: SET link:{hash} (TTL)
+        Note over C,R: next read for this key is now a hit
+    end
+```
+
 The trade-off this pattern always carries: the cache can now be wrong for a window (write landed
 in the DB, cache invalidation hasn't happened or hasn't propagated yet) — see the Pitfalls below
 for where that shows up concretely in this codebase, and step 4 above for the mechanism that's

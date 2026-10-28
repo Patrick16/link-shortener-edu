@@ -994,6 +994,16 @@ button:disabled {
   color: var(--text-h);
 }
 
+.mermaid-diagram {
+  margin: 8px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+}
+
 /* Sparkline */
 
 .sparkline {

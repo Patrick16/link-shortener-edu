@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { getNodeDoc, getPatternDoc, getPitfallDoc } from '../utils/docsRegistry'
+import { MermaidDiagram } from './MermaidDiagram'
 
 interface Props {
   title: string
@@ -67,6 +68,14 @@ export function LearnModal({ title, nodeId, onClose, onSelectNode }: Props) {
           {children}
         </a>
       )
+    },
+    // A fenced ```mermaid block renders as a diagram instead of plain code - inline code and
+    // every other fenced language fall through to react-markdown's own default rendering.
+    code: ({ className, children }) => {
+      if (className === 'language-mermaid' && typeof children === 'string') {
+        return <MermaidDiagram source={children} />
+      }
+      return <code className={className}>{children}</code>
     },
   }
 
