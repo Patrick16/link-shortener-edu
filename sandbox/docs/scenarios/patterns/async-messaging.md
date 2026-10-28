@@ -72,6 +72,36 @@ than 30s, never later than the 30s base. Anything that assumed "the retry worker
 seconds" (docs, mental models, manual-testing wait times) is now only an upper bound, not a
 typical value.
 
+### Why a priority queue (`x-max-priority`) wouldn't help here
+
+A later backlog pass considered RabbitMQ's `x-max-priority` queue feature to protect
+`link.created` processing (user-facing) from a `click.tracked` backlog (not) — worked through in
+detail against this project's actual queue topology instead of built, because the premise doesn't
+hold here.
+
+`x-max-priority` only reorders messages **within one queue** - a higher-priority message jumps the
+line ahead of lower-priority ones already waiting in that same queue, nothing more. For that to
+help, `link.created` and `click.tracked` would need to compete for position in a *shared* queue.
+They don't: every consumer in this project declares and binds its own separately-named queue to
+one specific routing key (see "How it's implemented here" above) -
+`link.created` only ever reaches `shortener-service.link-created`; `click.tracked` only ever
+reaches `shortener-service.click-tracked`, `traffic-service.click-tracked`, and
+`reporting-service.click-tracked` - none of which is `shortener-service.link-created`. The two
+event types have never shared a queue, not even within `ShortenerService`, which runs separate
+consumers (and separate `BasicQos` prefetch) for each. A backlog on any `click.tracked` queue has
+no RabbitMQ-level ordering effect on `shortener-service.link-created` at all, so reordering within
+a queue - which is all `x-max-priority` does - cannot be what's delaying link creation behind
+click processing, because there's no queue where the two are ever waiting together to reorder.
+
+If a real slowdown like that shows up, the actual mechanism would be **process-level resource
+contention** - `ShortenerService` runs its `LinkCreatedConsumer` and `ClickTrackedConsumer` as two
+separate `BackgroundService`s in the *same* .NET process, sharing CPU and the thread pool. A large
+`click.tracked` backlog driving sustained CPU/GC pressure in that process could slow down
+`link.created` processing too, but that's contention for a shared process resource, not queue
+ordering - a RabbitMQ queue-level feature has no way to express or fix it. (Nothing in this
+codebase today binds more than one routing key to a single queue, so there's currently no scenario
+at all where `x-max-priority` reordering would have any effect.)
+
 ## Pitfalls
 
 - 🐛 [A failed RabbitMQ connection attempt was cached forever](pitfall:rabbitmq-client-connection-never-retried)
