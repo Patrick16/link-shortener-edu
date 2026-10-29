@@ -128,6 +128,70 @@ public sealed class RedisInfraService(IContainerRuntime runtime, ILogger<RedisIn
         }
     }
 
+    // Same key LinkExpiryWorker itself claims/renews - see that worker's own LeaderKey constant.
+    // Duplicated here rather than shared via a referenced constant: control-api and the product
+    // backend are two entirely separate solutions/deployments (see docs/repository-map.md), with no
+    // existing shared-constants channel between them, and introducing one just for a single string
+    // literal would be a bigger change than the string staying in sync by inspection.
+    private const string LinkExpiryLeaderKey = "leader:shortener-service:link-expiry";
+
+    // Found LIVE, not by inspection: an earlier version of this method read straight off the
+    // "redis-master" container by name and silently reported "no leader" the moment that container
+    // wasn't actually the one LinkExpiryWorker's Sentinel-resolved client was writing to - the same
+    // "redis-master is only a label" caveat GetRedisTopologyAsync's own comment already covers,
+    // just missed here on the first pass. Re-derives the real master the identical way
+    // GetRedisTopologyAsync does (ROLE asked of each of the three data nodes, SelectSoleMaster) and
+    // reads the lease off THAT container - including reporting "unknown" rather than guessing
+    // during the exact ambiguous window (zero or more than one node self-reporting master) this
+    // class's own SelfHealSentinelAsync exists to correct.
+    public async Task<LinkExpiryLeaderStatus> GetLinkExpiryLeaderAsync(CancellationToken ct)
+    {
+        var observations = new List<RedisRoleObservation>();
+        var containersByServiceId = new Dictionary<string, ContainerListResponse>();
+        foreach (var serviceId in RedisDataNodes)
+        {
+            var node = await runtime.FindAsync(serviceId, ct);
+            if (node is null)
+            {
+                continue;
+            }
+
+            containersByServiceId[serviceId] = node;
+            try
+            {
+                var output = await runtime.ExecAsync(node.ID, ["redis-cli", "-p", "6379", "ROLE"], ct);
+                var role = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                observations.Add(new RedisRoleObservation(serviceId, role switch { "master" => "master", "slave" => "replica", _ => "unreachable" }));
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "GetLinkExpiryLeaderAsync: failed to read ROLE from {ServiceId} - skipping this node", serviceId);
+            }
+        }
+
+        var masterServiceId = SelectSoleMaster(observations);
+        if (masterServiceId is null)
+        {
+            return new LinkExpiryLeaderStatus(null, null);
+        }
+
+        var container = containersByServiceId[masterServiceId];
+
+        // redis-cli's non-interactive (non-tty) output is raw - no "(nil)"/"(integer)" decoration,
+        // same assumption GetSentinelConfigAsync's own comment already confirmed live for this
+        // codebase's docker-exec setup. A free key's GET comes back as an empty line.
+        var leaderOutput = await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "GET", LinkExpiryLeaderKey], ct);
+        var leader = leaderOutput.Trim();
+        if (leader.Length == 0)
+        {
+            return new LinkExpiryLeaderStatus(null, null);
+        }
+
+        var ttlOutput = await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "PTTL", LinkExpiryLeaderKey], ct);
+        var ttlMs = long.TryParse(ttlOutput.Trim(), out var parsed) && parsed >= 0 ? parsed : (long?)null;
+        return new LinkExpiryLeaderStatus(leader, ttlMs);
+    }
+
     internal readonly record struct RedisRoleObservation(string ServiceId, string Role);
 
     // Picks the one node reporting ROLE=master among the observations, or null if zero or more than

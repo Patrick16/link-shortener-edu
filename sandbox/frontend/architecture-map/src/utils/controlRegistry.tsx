@@ -16,6 +16,7 @@ import { PgcatConnectionsPanel } from '../components/PgcatConnectionsPanel'
 import { PostgresConnectionsPanel } from '../components/PostgresConnectionsPanel'
 import { DlqStatsPanel } from '../components/DlqStatsPanel'
 import { HaproxyStatsPanel } from '../components/HaproxyStatsPanel'
+import { LinkExpiryLeaderPanel } from '../components/LinkExpiryLeaderPanel'
 import type { CapabilityControlProps } from './capabilityControlProps'
 
 export type { CapabilityControlProps }
@@ -44,6 +45,7 @@ const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> 
   'postgres-connections': PostgresConnectionsPanel,
   'dlq-stats': DlqStatsPanel,
   'haproxy-stats': HaproxyStatsPanel,
+  'link-expiry-leader': LinkExpiryLeaderPanel,
 }
 
 export function renderCapabilityControls(component: ArchComponent, serviceId: string, instances: ManagedContainer[]) {

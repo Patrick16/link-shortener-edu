@@ -36,6 +36,7 @@ public sealed class CapabilityFactory
         ["redis-toggle"] = sp => new RedisEnabledToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<RedisEnabledToggleCapability>>()),
         ["redis-sentinel-toggle"] = sp => new RedisSentinelToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<RedisSentinelToggleCapability>>()),
         ["mongo-replicas-toggle"] = sp => new MongoReplicasToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<MongoReplicasToggleCapability>>()),
+        ["link-expiry-leader"] = sp => new LinkExpiryLeaderCapability(sp.GetRequiredService<IRedisInfraService>(), sp.GetRequiredService<ILogger<LinkExpiryLeaderCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

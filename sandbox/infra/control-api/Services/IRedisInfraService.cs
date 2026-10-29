@@ -24,4 +24,9 @@ public interface IRedisInfraService
     // cold-cache behavior on demand. Returns the command's own output, or null if redis isn't
     // running.
     Task<string?> FlushRedisAsync(CancellationToken ct);
+
+    // Who currently holds ShortenerService's link-expiry sustained lease, and how much longer -
+    // see LinkExpiryWorker's own leader-election comment. Live GET+PTTL on the lease key, same
+    // "ask the real thing, don't assume" principle as GetRedisTopologyAsync's own ROLE check.
+    Task<LinkExpiryLeaderStatus> GetLinkExpiryLeaderAsync(CancellationToken ct);
 }

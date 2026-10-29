@@ -283,6 +283,14 @@ export interface DlqReplayResult {
   replayed: number
 }
 
+// Who currently holds ShortenerService's link-expiry sustained Redis lease, and how much longer -
+// see ControlApi's LinkExpiryLeaderStatus. Both fields are null when nothing currently holds it
+// (e.g. every ShortenerService replica is stopped).
+export interface LinkExpiryLeaderStatus {
+  leader: string | null
+  leaseTtlMs: number | null
+}
+
 // Which physical container is actually playing which role right now - Redis Sentinel and MongoDB's
 // replica set can both re-elect a leader with zero involvement from this app, so architecture.json's
 // static node ids/labels can't be trusted for this the way they can for everything else. role is

@@ -181,7 +181,8 @@
       "icon": "⚙️",
       "description": "Consumes LinkCreatedEvent (persists the link) and ClickTrackedEvent (bumps its click count)",
       "capabilities": [
-        "scalable"
+        "scalable",
+        "link-expiry-leader"
       ],
       "details": {
         "purpose": "Owns links_db (the only writer, and the only one that migrates it); both consumers are redelivery-safe - LinkCreated skips if the hash is already stored, ClickTracked just re-increments (an approximate display counter, not the audit trail - that's TrafficService's Clicks table)",

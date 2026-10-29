@@ -13,6 +13,7 @@ import type {
   InfraStatus,
   InfraTopology,
   L1CacheStatus,
+  LinkExpiryLeaderStatus,
   NegativeCacheStatus,
   ManagedContainer,
   MessagingMode,
@@ -123,6 +124,7 @@ export const controlApi = {
   getPgcatConnections: () => request<PgcatInstanceConnections[]>('/api/containers/pgcat/connections'),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
   getDlqStats: () => request<DeadLetterQueueStats>('/api/infra/dlq-stats'),
+  getLinkExpiryLeader: () => request<LinkExpiryLeaderStatus>('/api/infra/link-expiry-leader'),
   clearDlq: () => request<{ cleared: number }>('/api/infra/dlq-clear', 'POST'),
   // GET, not POST - this only peeks (non-destructive on the backend), safe to call repeatedly.
   sampleDlq: (queueName: string, count: number) =>
