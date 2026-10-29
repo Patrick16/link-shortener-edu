@@ -58,3 +58,6 @@ redis-replica1:
   — the sibling half of this same split-brain-on-rejoin problem: this one is about a demoted node
   still accepting writes it shouldn't, that one is about a promoted node not knowing it should stay
   master at all
+- [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
+  — the control-plane counterpart: this fencing stops an isolated node from writing once split, that
+  fix stops the sandbox's own Sentinel toggle from manufacturing a second master in the first place

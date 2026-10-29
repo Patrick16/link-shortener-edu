@@ -34,6 +34,13 @@ a split brain. See Pitfalls for how this bit Redis specifically here, and
 it can't see enough replicas acknowledging them, which is also what keeps a *not-yet-detected*
 split brain from silently diverging too much data before Sentinel finishes failing over).
 
+A rejoining old primary isn't the only way to reach that same two-masters state, for Redis
+specifically — a plain restart onto volumes that survived from an earlier session can resurrect two
+*independently persisted* memories (this node's own last-confirmed role, Sentinel's own learned
+`mymaster` address) that each come back believing something different, with neither side doing
+anything wrong by its own lights. See [Redis Sentinel 1](node:redis-sentinel-1)'s "Known trade-off"
+section for the full mechanism and why hostname-based monitoring isn't the fix here.
+
 ```mermaid
 stateDiagram-v2
     [*] --> PrimaryHealthy
@@ -92,6 +99,8 @@ reach a voting majority, unlike either other store).
 - ⚠️ [A CLI flag baked in on every container start can quietly undo a runtime CONFIG SET](pitfall:redis-min-replicas-to-write-not-resynced-on-restart)
   (resilience-gap) — fixed
 - ⚠️ [A failed "temporarily change state, then undo it" sequence can throw before the undo ever runs](pitfall:mongo-reconfig-timeout-leaves-priorities-skewed)
+  (resilience-gap) — fixed
+- ⚠️ [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
   (resilience-gap) — fixed
 
 ## Relatives

@@ -66,6 +66,49 @@ all-zero `200`. An anonymous link still has no reporting view for anyone, not a 
 either — it's just one more case that quietly falls out of the same filter instead of a case this
 endpoint has to special-case.
 
+**Raw click detail (`GET /reports/{hash}/clicks`) — the "flexible document" counterpart to the
+ClickHouse aggregate.** `/summary` answers "how many clicks, bucketed by day/country/device/
+browser" but can't answer "show me the actual rows" — a link owner debugging "why does my summary
+say 40 clicks from Germany" has no way to see the individual clicks (browser, referrer, exact city)
+behind that number from `/summary` alone. [TrafficService](node:traffic-service) already wrote
+exactly that detail into `clicks_meta_db` (Mongo) on every click, but nothing ever read it back
+until this endpoint — Mongo was write-only in this project before it. The project already had a
+precedent for "one database, two interfaces, one per direction" with ClickHouse
+(`IClickFactStore`/`IClickFactQueryService`); this endpoint applies the identical shape to Mongo:
+`IClickMetaStore` (TrafficService, write side) keeps `SaveManyAsync`, and the new
+`IClickMetaQueryService` (ReportingApi only, via `MongoClickMetaQueryService`) adds
+`GetRecentAsync(hash, callerUserId, limit, ct)`. The two stores are genuinely independent Mongo/
+ClickHouse writers fed from the same `ClickTrackedEvent` — they can drift apart transiently (one
+consumer down, the other up), the same CQRS-fan-out caveat that already applies to the rest of this
+pipeline.
+
+Owner scoping follows the exact same posture as `/summary`: the query filters on `Hash == hash AND
+UserId == callerUserId` (`ClickTrackedEvent.UserId` now flows into Mongo's `ClickMeta` too, not
+just ClickHouse's `ClickFact`), backed by a compound index `(Hash asc, UserId asc, ClickedAt desc)`
+— equality fields before the sort field, so the filter+sort the query actually runs doesn't fall
+back to a full collection scan. A hash that doesn't exist, belongs to someone else, or just has zero
+clicks all return the same `200` with an empty/partial array; there's no `404` branch, for the same
+reason `/summary` has none. `limit` is optional (default `20`, clamped into `[1, 100]`, never
+rejected with a `400`). The returned `ClickDetail` DTO deliberately omits `IpAddress` — the
+underlying Mongo document keeps the raw IP (TrafficService needs it for geo-IP resolution), but
+handing a visitor's IP to the link owner through this API is a PII exposure this feature has no need
+to take on. Pre-existing Mongo documents from before this endpoint shipped have no `UserId` (the
+field didn't exist yet) and so can never show up here for any real caller — invisible, not errored,
+the same backward-compatible shape `ClickFact.UserId` already has on the ClickHouse side. There is
+currently no frontend consumer of this endpoint — backend-only as of this writing.
+
+```mermaid
+flowchart LR
+    RA["RedirectApi"] -- "ClickTrackedEvent (incl. UserId)" --> RMQ[(RabbitMQ)]
+    RMQ --> TS["TrafficService\nClickTrackedConsumer"]
+    TS -- "Postgres insert" --> PG[(clicks_db)]
+    TS -- "Mongo upsert\n(ClickMeta incl. UserId)" --> MG[(clicks_meta_db)]
+    Caller["Link owner (JWT)"] -- "GET /reports/hash/clicks?limit=" --> RepAPI["ReportingApi\nReportsController"]
+    RepAPI -- "GetRecentAsync(hash, callerUserId, limit)" --> MCQS["MongoClickMetaQueryService"]
+    MCQS -- "filter Hash+UserId, sort ClickedAt desc,\nlimit (compound index)" --> MG
+    MCQS -- "ClickDetail[] (no IpAddress)" --> RepAPI
+```
+
 **Live top links**, three pieces working together:
 
 1. **`TopLinksHub`** (`/hub/top-links`, SignalR) — on connect, adds the caller to a per-user group
@@ -204,6 +247,8 @@ bug — see this node's Pitfalls for both it and the nginx keepalive/hashing iss
 
 - [ReportingService](node:reporting-service) — writes what the reports endpoints read
 - [ClickHouse](node:clickhouse)
+- [TrafficService](node:traffic-service) — writes the Mongo `ClickMeta` documents the `/clicks` endpoint reads
+- [Mongo](node:mongo1)
 - [RedirectApi](node:redirect-api) — writes the Redis buckets this node's push path reads
 - [Redis (master)](node:redis-master)
 

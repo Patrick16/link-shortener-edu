@@ -77,6 +77,10 @@ accepts an optional `TtlSeconds`, converted once to an absolute `ExpiresAt` and 
 `LinkCreatedEvent` for both the plain-hash and custom-alias paths - see ShortenerService's
 `LinkExpiryWorker` for what actually acts on it. `GetLinks` filters out deleted and expired links
 by default; there's no "show them anyway" toggle, since nothing in this feature calls for one.
+`GetLink` (the single-hash lookup) applies the identical live check and returns `410 Gone` for a
+deleted/expired hash instead of its stale metadata — it didn't always; see this node's Pitfalls for
+the review-caught inconsistency that left it disagreeing with `GetLinks` about whether a gone link
+still existed.
 
 ### `Idempotency-Key`: replaying a retry instead of minting a second link
 
@@ -167,6 +171,8 @@ non-obvious part: that 15s is one shared, sequential clock Kestrel's own connect
   (race-condition) — fixed; this node writes the optimistic cache entry that closes it
 - 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
   (coupling) — fixed; found while verifying the fix above
+- 🐛 [A soft-delete/expiry check duplicated across two read endpoints only got written into one of them](pitfall:link-api-getlink-missing-live-check)
+  (architecture-bug) — fixed
 
 ## Relatives
 

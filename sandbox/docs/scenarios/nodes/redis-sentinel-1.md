@@ -90,6 +90,38 @@ flowchart TD
     On5 --> On6["SetRedisMinReplicasToWriteAsync(1)\n(restore write-fencing LAST,\nafter replicas had time to reconnect)"]
 ```
 
+## Known trade-off, not a bug: a plain restart can resurrect stale topology memory
+
+Not specific to the Sentinel toggle above - any `docker compose up` can hit this, including the
+very first one after opening Docker Desktop with no containers running yet. Three Sentinel
+instances only protect against *Sentinel itself* disagreeing with *Sentinel itself* (the quorum
+vote in "How it works" above); they do nothing to stop two completely separate memories - this
+node's own `sentinel.conf` (rewritten on every failover, persisted in a named volume, never
+overwritten again once it carries a `CONFIG REWRITE` marker) and a Redis data node's own
+`STATE_FILE` (its last Sentinel-confirmed role, persisted the same way) - from each independently
+resurrecting on a restart and pointing at two different, no-longer-accurate pictures of who's
+master, if either volume survived from an earlier session. `redis-master.md`'s own split-brain
+fencing (`min-replicas-to-write`) limits the damage (an isolated node refuses writes) but doesn't
+prevent the two-masters state itself; [this toggle's own reclaim-ordering
+fix](pitfall:sentinel-toggle-reclaim-causes-two-masters) prevents one specific trigger (the ON path
+manufacturing a second master) but not this one, since this one isn't triggered by the toggle at
+all - it's any restart, the toggle included only incidentally.
+
+Hostname-based monitoring (`resolve-hostnames`/`announce-hostnames`, so Sentinel re-resolves
+`redis-master` by DNS instead of caching a frozen IP) looks like the obvious textbook fix and was
+tried - and reverted, live-verified: Docker's embedded DNS doesn't return a fresh IP when a
+container dies, it stops resolving the name at all, and Sentinel's hostname-resolution path
+blocking on that kept re-triggering its own self-protective "tilt mode" every cycle, so failover
+never completed. IP-based monitoring (what's actually running - see `sentinel.conf`'s own comment)
+hits a clean, fast "connection refused" instead, which is why it was kept despite the staleness
+risk above.
+
+The only thing that actually guarantees a blank slate for both memories together is
+`sandbox/scripts/stop-stack.ps1 -Wipe` (`docker compose down -v`) - it drops every Sentinel and
+data-node volume along with Postgres's, not just Postgres's. A plain restart's own "no Sentinel
+container reachable yet" log line (`redis-node-entrypoint.sh`) only promises that no Sentinel
+answered DNS just now, never that either side's persisted memory is actually empty.
+
 ## Pitfalls
 
 - 🐛 [Sentinel's own hostname resolver failed even though every other tool on the same container could resolve it](pitfall:redis-sentinel-resolver-fails-despite-dns-working)
@@ -97,6 +129,8 @@ flowchart TD
 - 🐛 [Only the Redis master asked Sentinel who's in charge before rejoining - the replicas didn't](pitfall:redis-replica-ignores-sentinel-on-rejoin)
   (architecture-bug) — fixed
 - ⚠️ [A CLI flag baked in on every container start can quietly undo a runtime CONFIG SET](pitfall:redis-min-replicas-to-write-not-resynced-on-restart)
+  (resilience-gap) — fixed
+- ⚠️ [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
   (resilience-gap) — fixed
 
 ## Relatives

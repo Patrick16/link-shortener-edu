@@ -109,7 +109,8 @@ flowchart TD
 
 ### Nodes
 
-- [TrafficService](node:traffic-service)
+- [TrafficService](node:traffic-service) — the only writer
+- [ReportingApi](node:reporting-api) — reads it back via `GET /reports/{hash}/clicks`, the first read path Mongo ever got in this project
 
 ### Patterns
 

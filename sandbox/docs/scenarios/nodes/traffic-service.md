@@ -31,7 +31,10 @@ from the request that triggered the click: raw `UserAgent`/`Referrer`, parsed br
 endpoint — best-effort, private/loopback addresses and any failure just leave geo fields `null`
 rather than failing the click). Mongo is schema-less on purpose: this data grows independently of
 the core record, and neither store is transactional with the other — see this node's Pitfalls for
-what that non-transactionality cost before it was handled correctly.
+what that non-transactionality cost before it was handled correctly. This service is the only
+writer of `ClickMeta` — but no longer the only thing that touches it: see
+[ReportingApi](node:reporting-api)'s `GET /reports/{hash}/clicks` for the owner-scoped read path
+added on top of it.
 
 ```mermaid
 flowchart TD
@@ -115,6 +118,7 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
 - [RedirectApi](node:redirect-api) — publishes what this node consumes
 - [ShortenerService](node:shortener-service) — the other, independent `ClickTrackedEvent` consumer
 - [ReportingService](node:reporting-service) — a third, independent `ClickTrackedEvent` consumer (CQRS fan-out)
+- [ReportingApi](node:reporting-api) — reads the `ClickMeta` documents this node writes
 - [RabbitMQ](node:rabbitmq)
 - [clicks_db](node:clicks-db)
 
