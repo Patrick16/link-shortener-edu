@@ -37,6 +37,7 @@ public sealed class CapabilityFactory
         ["redis-sentinel-toggle"] = sp => new RedisSentinelToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<RedisSentinelToggleCapability>>()),
         ["mongo-replicas-toggle"] = sp => new MongoReplicasToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<MongoReplicasToggleCapability>>()),
         ["link-expiry-leader"] = sp => new LinkExpiryLeaderCapability(sp.GetRequiredService<IRedisInfraService>(), sp.GetRequiredService<ILogger<LinkExpiryLeaderCapability>>()),
+        ["mongo-hedge-delay"] = sp => new MongoHedgeDelayCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<MongoHedgeDelayCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

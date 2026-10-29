@@ -19,6 +19,7 @@ import type {
   MessagingMode,
   PgcatInstanceConnections,
   PgcatPoolSettings,
+  MongoHedgeDelay,
   MongoReadPreference,
   MongoReadPreferenceStatus,
   NpgsqlPoolSize,
@@ -165,6 +166,8 @@ export const controlApi = {
 
   getGeoIpBulkheadLimit: () => request<GeoIpBulkhead>('/api/infra/geoip-bulkhead'),
   setGeoIpBulkheadLimit: (limit: number) => request<GeoIpBulkhead>('/api/infra/geoip-bulkhead', 'POST', { limit }),
+  getMongoHedgeDelay: () => request<MongoHedgeDelay>('/api/infra/mongo-hedge-delay'),
+  setMongoHedgeDelay: (delayMs: number) => request<MongoHedgeDelay>('/api/infra/mongo-hedge-delay', 'POST', { delayMs }),
 
   listRuns: () => request<RunSummary[]>('/api/runs'),
   getRun: (id: string) => request<RunSnapshot>(`/api/runs/${encodeURIComponent(id)}`),

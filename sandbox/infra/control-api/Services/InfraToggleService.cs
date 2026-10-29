@@ -73,6 +73,9 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // The two services that call GeoIpExtensions.AddGeoIpResolution - see SetGeoIpBulkheadLimitAsync.
     private static readonly IReadOnlyList<string> GeoIpUsingServices = ["traffic-service", "reporting-service"];
 
+    // The only service that ever queries clicks_meta_db for reads - see SetMongoHedgeDelayMsAsync.
+    private static readonly IReadOnlyList<string> MongoReadingServices = ["reporting-api"];
+
     // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
     // tool despite not surviving a control-api restart.
     private bool _nginxBypassed;
@@ -96,6 +99,10 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // Mirrors GeoIpExtensions.DefaultMaxConcurrentRequests (and the shipped
     // ${GEOIP_BULKHEAD_LIMIT:-10} fallback).
     private int _geoIpBulkheadLimit = 10;
+
+    // Mirrors MongoExtensions.DefaultHedgeDelayMs (and the shipped ${MONGO_HEDGE_DELAY_MS:-15}
+    // fallback).
+    private int _mongoHedgeDelayMs = 15;
 
     // Drives REDIS_CONN below - same cached, recreate-with-a-different-env-var shape as
     // _pgcatEnabled/_cacheEnabled/_messagingMode, not the live-read shape RedisEnabled/
@@ -128,6 +135,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         ["MONGO_READ_PREFERENCE"] = _mongoReadPreference,
         ["REDIS_CONN"] = _redisConnectionViaSentinel ? RedisSentinelConnectionString : RedisDirectConnectionString,
         ["MONGO_HOSTS"] = _mongoConnectionIncludesReplicas ? MongoAllHosts : MongoPrimaryOnlyHost,
+        ["MONGO_HEDGE_DELAY_MS"] = _mongoHedgeDelayMs.ToString(),
     };
 
     public int GetRabbitMqPrefetch() => _rabbitMqPrefetch;
@@ -212,6 +220,27 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
 
             _geoIpBulkheadLimit = limit;
             return limit;
+        }, ct);
+
+    public int GetMongoHedgeDelayMs() => _mongoHedgeDelayMs;
+
+    public Task<int> SetMongoHedgeDelayMsAsync(int delayMs, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            var env = CurrentStandingEnv();
+            env["MONGO_HEDGE_DELAY_MS"] = delayMs.ToString();
+            var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(MongoReadingServices, ct);
+
+            logger.LogWarning("Switching Mongo__HedgeDelayMs for {Services} to {DelayMs}", string.Join(", ", MongoReadingServices), delayMs);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. MongoReadingServices], env, ct);
+            if (exitCode != 0)
+            {
+                logger.LogWarning("Setting Mongo hedge delay failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _mongoHedgeDelayMs = delayMs;
+            return delayMs;
         }, ct);
 
     // See InfraStatus's own comment on HaproxyEnabled/PostgresReplicasEnabled/RedisEnabled/

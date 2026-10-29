@@ -367,6 +367,12 @@ export interface GeoIpBulkhead {
 // the backend.
 export type MongoReadPreference = 'primary' | 'secondaryPreferred'
 
+// HedgedClickMetaQueryService's hedge-delay, applied to reporting-api alone - see
+// SetMongoHedgeDelayMsAsync on the backend.
+export interface MongoHedgeDelay {
+  delayMs: number
+}
+
 export interface MongoReadPreferenceStatus {
   preference: MongoReadPreference
 }

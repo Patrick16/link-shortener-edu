@@ -8,6 +8,7 @@ import { NpgsqlPoolSizeControl } from '../components/NpgsqlPoolSizeControl'
 import { SentinelConfigControl } from '../components/SentinelConfigControl'
 import { RabbitMqPrefetchControl } from '../components/RabbitMqPrefetchControl'
 import { GeoIpBulkheadControl } from '../components/GeoIpBulkheadControl'
+import { MongoHedgeDelayControl } from '../components/MongoHedgeDelayControl'
 import { MongoReadPreferenceControl } from '../components/MongoReadPreferenceControl'
 import { L1CacheControl } from '../components/L1CacheControl'
 import { NegativeCacheControl } from '../components/NegativeCacheControl'
@@ -46,6 +47,7 @@ const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> 
   'dlq-stats': DlqStatsPanel,
   'haproxy-stats': HaproxyStatsPanel,
   'link-expiry-leader': LinkExpiryLeaderPanel,
+  'mongo-hedge-delay': MongoHedgeDelayControl,
 }
 
 export function renderCapabilityControls(component: ArchComponent, serviceId: string, instances: ManagedContainer[]) {

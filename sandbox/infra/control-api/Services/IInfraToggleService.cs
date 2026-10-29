@@ -91,4 +91,13 @@ public interface IInfraToggleService
     int GetGeoIpBulkheadLimit();
 
     Task<int> SetGeoIpBulkheadLimitAsync(int limit, CancellationToken ct);
+
+    // Hedged reads (resilience backlog follow-up) - the delay HedgedClickMetaQueryService waits
+    // before firing its second, redundant query against clicks_meta_db's other replica (see
+    // MongoExtensions.AddMongoClickMetaReader). Same "own GET/POST pair, recreate with a different
+    // env var" shape as GeoIpBulkheadLimit above, attached to reporting-api alone - it's the only
+    // service that ever queries clicks_meta_db for reads.
+    int GetMongoHedgeDelayMs();
+
+    Task<int> SetMongoHedgeDelayMsAsync(int delayMs, CancellationToken ct);
 }

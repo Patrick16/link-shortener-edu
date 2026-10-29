@@ -627,7 +627,8 @@
       "icon": "📑",
       "description": "Read-only query side of the CQRS split - queries ClickHouse directly for the frontend's per-link stats panel, never touches the write path",
       "capabilities": [
-        "scalable"
+        "scalable",
+        "mongo-hedge-delay"
       ],
       "details": {
         "purpose": "GET /reports/{hash}/summary aggregates total clicks plus by-day/country/device/browser breakdowns via raw parameterized SQL against ClickHouse - no ORM, since this is the one place meant to show what a columnar OLAP query actually looks like",
