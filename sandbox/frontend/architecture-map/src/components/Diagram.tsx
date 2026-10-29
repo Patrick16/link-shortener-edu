@@ -7,9 +7,10 @@ import { OrthogonalEdge, type OrthogonalEdgeData } from './OrthogonalEdge'
 import { PinnedMetrics } from './PinnedMetrics'
 import { resolveServiceId } from '../utils/resolveServiceId'
 import { isTrafficFlowEdge } from '../utils/trafficFlow'
-import { computeLayout, edgeKey, NODE_HEIGHT, NODE_WIDTH } from '../utils/layoutGraph'
+import { computeLayout, edgeKey, nodeWidthFor, NODE_HEIGHT } from '../utils/layoutGraph'
 import { filterArchitecture, type VisibleConnection } from '../utils/topologyFilter'
 import { getRoleBadges } from '../utils/roleBadges'
+import type { EdgeLabelsApi } from '../hooks/useEdgeLabels'
 import type { ArchComponent, ArchitectureData } from '../types/architecture'
 import type { InfraStatus, ManagedContainer, ResourceSample } from '../types/controlApi'
 
@@ -26,6 +27,7 @@ interface Props {
   pinnedIds: string[]
   resourceHistoryByContainer: Record<string, ResourceSample[]>
   onUnpinMetric: (componentId: string) => void
+  edgeLabels: EdgeLabelsApi
 }
 
 const nodeTypes = { service: ServiceNode, region: RegionNode }
@@ -73,6 +75,7 @@ function DiagramInner({
   pinnedIds,
   resourceHistoryByContainer,
   onUnpinMetric,
+  edgeLabels,
 }: Props) {
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
   const { fitView } = useReactFlow()
@@ -135,9 +138,10 @@ function DiagramInner({
           position: layout.positions[component.id] ?? { x: 0, y: 0 },
           // Explicit dimensions skip React Flow's async ResizeObserver-based measurement step -
           // a reasonable perf win regardless, and edges need a node's size to compute a path.
-          // Shared with layoutGraph.ts's own NODE_WIDTH/NODE_HEIGHT, not duplicated - dagre lays
-          // out using the exact same size React Flow renders each node at.
-          width: NODE_WIDTH,
+          // Computed by the same nodeWidthFor layoutGraph.ts's own dagre pass used for this
+          // component, not duplicated - dagre lays out using the exact same size React Flow
+          // renders each node at (see nodeWidthFor's own comment for why this is per-node now).
+          width: nodeWidthFor(component),
           height: NODE_HEIGHT,
           data: {
             label: component.name,
@@ -199,7 +203,7 @@ function DiagramInner({
     () =>
       visible.connections.map((connection) => {
         const index = connection.originalIndex
-        const isFlowing = trafficActive && isTrafficFlowEdge(connection.from, connection.to, roles)
+        const isFlowing = trafficActive && isTrafficFlowEdge(connection.from, connection.to, roles, infraStatus)
         const isSelected = selectedConnectionIndex === index
         const isHighlighted = isFlowing || isSelected
         // Which of the node's several Handles (see edgesByNode above) this specific edge attaches
@@ -235,13 +239,12 @@ function DiagramInner({
           data: { wayPoints: layout.edgePaths[edgeKey(connection.from, connection.to)], laneOffset } satisfies OrthogonalEdgeData,
           label: connection.label,
           animated: isFlowing,
-          // Drives the CSS `.selected` class react-flow adds to the edge's own <g> (not used for
-          // react-flow's built-in multi-select, which this app doesn't use) - that class plus
-          // `.animated` (already set via `animated` above) are what the edge-label CSS in App.css
-          // hooks into to reveal a label on hover/selection/traffic-flow. See that CSS for why:
-          // with ~40 edges, every label visible all the time buried the lines themselves under a
-          // wall of overlapping text pills - far more readable to show a label only for the one
-          // edge you're actually looking at.
+          // `label-visible` (not react-flow's own `.selected`/`.animated`) is what the edge-label
+          // CSS in App.css hooks into to reveal a label - see useEdgeLabels/onEdgeClick below. With
+          // ~40 edges, every label visible all the time buried the lines themselves under a wall of
+          // overlapping text pills, so a label only shows once a user deliberately clicks that edge
+          // (or the Topology panel's "Show all" bulk action), not on mere hover/selection/flow.
+          className: edgeLabels.isVisible(index) ? 'label-visible' : undefined,
           selected: isSelected,
           // A selected edge always renders above every other edge (including a flowing one it may
           // overlap with) so clicking it in a dense tangle actually brings it forward, not just
@@ -268,7 +271,7 @@ function DiagramInner({
           labelBgBorderRadius: 4,
         }
       }),
-    [visible.connections, trafficActive, selectedConnectionIndex, roles, edgesByNode, layout],
+    [visible.connections, trafficActive, selectedConnectionIndex, roles, edgesByNode, layout, infraStatus, edgeLabels],
   )
 
   return (
@@ -288,7 +291,10 @@ function DiagramInner({
         }}
         onEdgeClick={(_, edge) => {
           const index = data.connections.findIndex((c, i) => `${c.from}-${c.to}-${i}` === edge.id)
-          if (index >= 0) onSelectConnection(index)
+          if (index >= 0) {
+            onSelectConnection(index)
+            edgeLabels.toggle(index)
+          }
         }}
         fitView
       >

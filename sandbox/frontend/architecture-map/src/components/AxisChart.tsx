@@ -11,6 +11,11 @@ interface Props {
   color?: string
 }
 
+function currentLabel(points: Point[], formatY: (v: number) => string): string {
+  if (points.length === 0) return ''
+  return formatY(points[points.length - 1].y)
+}
+
 const WIDTH = 260
 const HEIGHT = 110
 const PAD_LEFT = 34
@@ -32,10 +37,15 @@ export function AxisChart({ title, points, totalSeconds, formatY, color = 'var(-
   const path = points.map((p) => `${toX(p.x).toFixed(1)},${toY(p.y).toFixed(1)}`).join(' ')
   const xTicks = [0, Math.round(totalSeconds / 2), totalSeconds]
 
+  const current = currentLabel(points, formatY)
+
   return (
     <div className="axis-chart">
-      <div className="axis-chart-title">{title}</div>
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width={WIDTH} height={HEIGHT} role="img" aria-label={title}>
+      <div className="axis-chart-header">
+        <span className="axis-chart-title">{title}</span>
+        {current && <span className="axis-chart-current">{current}</span>}
+      </div>
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width={WIDTH} height={HEIGHT} role="img" aria-label={`${title}: ${current}`}>
         {/* Y axis: just the max label - the baseline (0) is implied by the X axis line */}
         <text x={PAD_LEFT - 6} y={PAD_TOP + 4} textAnchor="end" className="axis-chart-label">
           {formatY(maxY)}

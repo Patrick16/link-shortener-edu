@@ -8,6 +8,7 @@ import { useResizableWidth } from './hooks/useResizableWidth'
 import { useInfraTopology } from './hooks/useInfraTopology'
 import { useInfraStatus } from './hooks/useInfraStatus'
 import { usePinnedMetrics } from './hooks/usePinnedMetrics'
+import { useEdgeLabels } from './hooks/useEdgeLabels'
 import { Diagram } from './components/Diagram'
 import { NodePanel } from './components/NodePanel'
 import { ConnectionDetail } from './components/ConnectionDetail'
@@ -29,11 +30,13 @@ const metaById = new Map(data.components.map((c) => [c.id, c]))
 type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index: number } | null
 
 // Layout: the header shows whichever run is live or just finished, the graph owns the center, and
-// the (single, left) sidebar is a selection detail panel - a clicked node's own controls, a clicked
-// connection's info, or every past run when nothing's selected, since only one of those is ever
-// useful at a time. There's no permanently-visible config sidebar any more: k6 has no live
-// status/controls of its own (see K6ConfigPanel), so selecting it is how you configure the next
-// run instead - the same "click the node" pattern every other control here already uses.
+// the (single, left) sidebar is a selection detail panel - a clicked node's own controls, or a
+// clicked connection's info, nothing else. There's no permanently-visible config sidebar any more:
+// k6 has no live status/controls of its own (see K6ConfigPanel), so selecting it is how you
+// configure the next run instead - the same "click the node" pattern every other control here
+// already uses. Run history used to live here too when nothing was selected; it's a global modal
+// now (opened from the header, next to Topology/Presets - see RunHistoryPanel) so this sidebar is
+// node-settings only.
 //
 // Collapsed by default on a fresh visit (the graph itself is the point on first load, not a panel
 // with nothing selected yet) - but selecting anything on the graph force-expands it via
@@ -46,9 +49,11 @@ function App() {
   const trafficRun = useTrafficRun()
   const trafficConfig = useTrafficConfig()
   const pins = usePinnedMetrics()
+  const edgeLabels = useEdgeLabels(data.connections.length)
   const [selection, setSelection] = useState<Selection>(null)
   const [presetsOpen, setPresetsOpen] = useState(false)
   const [topologyOpen, setTopologyOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1, true)
 
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
@@ -86,6 +91,7 @@ function App() {
     })
     setSelection({ kind: 'component', id: 'k6' })
     sidebar.expand()
+    setHistoryOpen(false)
   }
 
   // A preset's linked load profile is loaded (not auto-started) the same way a past run's
@@ -113,6 +119,9 @@ function App() {
         <button className="app-header-presets-btn" onClick={() => setPresetsOpen(true)}>
           Presets
         </button>
+        <button className="app-header-presets-btn" onClick={() => setHistoryOpen(true)}>
+          History
+        </button>
         <div className="app-header-observability">
           <span className="app-header-observability-label">Observability</span>
           {observabilityLinks.map((link) => (
@@ -135,8 +144,15 @@ function App() {
         <PresetsModal onClose={() => setPresetsOpen(false)} onLoadScenario={loadScenarioFromPreset} onInfraChanged={infraStatus.refresh} />
       )}
       {topologyOpen && (
-        <TopologyPanel status={infraStatus.status} onClose={() => setTopologyOpen(false)} onApplied={infraStatus.refresh} />
+        <TopologyPanel
+          status={infraStatus.status}
+          onClose={() => setTopologyOpen(false)}
+          onApplied={infraStatus.refresh}
+          onShowAllLabels={edgeLabels.showAll}
+          onHideAllLabels={edgeLabels.hideAll}
+        />
       )}
+      {historyOpen && <RunHistoryPanel lastSavedRunId={trafficRun.lastSavedRunId} onReuseRun={reuseRun} onClose={() => setHistoryOpen(false)} />}
 
       <div className="app-body">
         <aside className="app-sidebar-left" style={{ width: sidebar.width, padding: sidebar.collapsed ? 0 : undefined }}>
@@ -177,7 +193,9 @@ function App() {
                 />
               )}
               {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}
-              {!selectedComponent && !selectedConnection && <RunHistoryPanel lastSavedRunId={trafficRun.lastSavedRunId} onReuseRun={reuseRun} />}
+              {!selectedComponent && !selectedConnection && (
+                <p className="sidebar-empty-note">Select a node or connection on the graph to see its controls and status.</p>
+              )}
             </>
           )}
         </aside>
@@ -217,6 +235,7 @@ function App() {
             pinnedIds={pins.pinnedIds}
             resourceHistoryByContainer={resourceHistory}
             onUnpinMetric={pins.togglePin}
+            edgeLabels={edgeLabels}
           />
         </main>
       </div>

@@ -16,7 +16,7 @@ function summary(id: string, scenario = id): RunSummary {
 async function renderWithRuns(runs: RunSummary[]) {
   vi.mocked(controlApi.listRuns).mockResolvedValue(runs)
   const user = userEvent.setup()
-  render(<RunHistoryPanel lastSavedRunId={null} onReuseRun={() => {}} />)
+  render(<RunHistoryPanel lastSavedRunId={null} onReuseRun={() => {}} onClose={() => {}} />)
   await waitFor(() => expect(screen.getByLabelText(`Select run ${runs[0].scenario}`)).toBeInTheDocument())
   return user
 }
@@ -128,7 +128,7 @@ describe('RunHistoryPanel clear history', () => {
     // resolved, silently undoing the clear.
     const runs = [summary('run-a')]
     vi.mocked(controlApi.listRuns).mockResolvedValueOnce(runs)
-    const { rerender } = render(<RunHistoryPanel lastSavedRunId={null} onReuseRun={() => {}} />)
+    const { rerender } = render(<RunHistoryPanel lastSavedRunId={null} onReuseRun={() => {}} onClose={() => {}} />)
     await waitFor(() => expect(screen.getByLabelText('Select run run-a')).toBeInTheDocument())
 
     let resolveStaleRefresh!: (value: RunSummary[]) => void
@@ -139,7 +139,7 @@ describe('RunHistoryPanel clear history', () => {
         }),
     )
     // Simulates a run finishing while the stale GET above is still in flight.
-    rerender(<RunHistoryPanel lastSavedRunId="run-b" onReuseRun={() => {}} />)
+    rerender(<RunHistoryPanel lastSavedRunId="run-b" onReuseRun={() => {}} onClose={() => {}} />)
 
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     vi.mocked(controlApi.clearRuns).mockResolvedValue({ failedCount: 0 })

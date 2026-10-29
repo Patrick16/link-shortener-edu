@@ -8,6 +8,8 @@ interface Props {
   status: InfraStatus | null
   onClose: () => void
   onApplied: () => void
+  onShowAllLabels: () => void
+  onHideAllLabels: () => void
 }
 
 const MESSAGING_MODE_OPTIONS: { value: MessagingMode; label: string }[] = [
@@ -38,7 +40,7 @@ function sameStatus(a: InfraStatus, b: InfraStatus): boolean {
 // state-less InfraToggleControl/EnumToggleControl those retired wrappers already built on - no
 // reason to split this into 4 files when the fetch/busy/error state they used to own individually
 // is lifted to this one panel instead.
-export function TopologyPanel({ status, onClose, onApplied }: Props) {
+export function TopologyPanel({ status, onClose, onApplied, onShowAllLabels, onHideAllLabels }: Props) {
   const [draft, setDraft] = useState<InfraStatus | null>(status)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -110,6 +112,22 @@ export function TopologyPanel({ status, onClose, onApplied }: Props) {
         <p className="presets-modal-note">
           Pick which infra components are in the active path, then Save to apply - the graph only draws participants that are actually in play right now.
         </p>
+
+        <div className="topology-panel-labels">
+          <span className="topology-panel-labels-label">Edge labels</span>
+          <span className="infra-toggle-description">
+            Labels default to hidden (click an edge to reveal just that one, click again to hide it) - these two apply to every edge at once, right away,
+            independent of Save below.
+          </span>
+          <div className="topology-panel-labels-actions">
+            <button type="button" onClick={onShowAllLabels}>
+              Show all labels
+            </button>
+            <button type="button" onClick={onHideAllLabels}>
+              Hide all labels
+            </button>
+          </div>
+        </div>
 
         <InfraToggleControl
           label="Load balancing (nginx)"

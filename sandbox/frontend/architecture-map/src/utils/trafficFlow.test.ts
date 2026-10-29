@@ -38,4 +38,44 @@ describe('isTrafficFlowEdge', () => {
     expect(isTrafficFlowEdge('redirect-api', 'redis-master', {})).toBe(true)
     expect(isTrafficFlowEdge('traffic-service', 'mongo1', {})).toBe(true)
   })
+
+  it('follows the nginx-bypassed topology - k6 hits link-api/redirect-api directly, not through nginx', () => {
+    const status = { nginxBypassed: true, messagingMode: 'rabbitmq' as const, pgcatEnabled: true, haproxyEnabled: true }
+
+    expect(isTrafficFlowEdge('k6', 'link-api', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('k6', 'redirect-api', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('k6', 'nginx', {}, status)).toBe(false)
+    expect(isTrafficFlowEdge('nginx', 'link-api', {}, status)).toBe(false)
+  })
+
+  it('follows the sync-gRPC messaging topology instead of RabbitMQ', () => {
+    const status = { nginxBypassed: false, messagingMode: 'grpc' as const, pgcatEnabled: true, haproxyEnabled: true }
+
+    expect(isTrafficFlowEdge('link-api', 'nginx', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('nginx', 'shortener-service', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('redirect-api', 'nginx', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('nginx', 'traffic-service', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('link-api', 'rabbitmq', {}, status)).toBe(false)
+    expect(isTrafficFlowEdge('rabbitmq', 'shortener-service', {}, status)).toBe(false)
+  })
+
+  it('follows the haproxy-bypassed topology - DB-facing hops go straight to pgcat', () => {
+    const status = { nginxBypassed: false, messagingMode: 'rabbitmq' as const, pgcatEnabled: true, haproxyEnabled: false }
+
+    expect(isTrafficFlowEdge('shortener-service', 'pgcat', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('redirect-api', 'pgcat', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('traffic-service', 'pgcat', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('shortener-service', 'haproxy', {}, status)).toBe(false)
+    expect(isTrafficFlowEdge('haproxy', 'pgcat', {}, status)).toBe(false)
+  })
+
+  it('follows the pgcat-bypassed topology - DB-facing hops go straight to the database', () => {
+    const status = { nginxBypassed: false, messagingMode: 'rabbitmq' as const, pgcatEnabled: false, haproxyEnabled: true }
+
+    expect(isTrafficFlowEdge('shortener-service', 'links-db', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('redirect-api', 'links-db', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('traffic-service', 'clicks-db', {}, status)).toBe(true)
+    expect(isTrafficFlowEdge('shortener-service', 'haproxy', {}, status)).toBe(false)
+    expect(isTrafficFlowEdge('pgcat', 'links-db', {}, status)).toBe(false)
+  })
 })

@@ -11,6 +11,55 @@ import { REGIONS, getRegionId } from './regions'
 export const NODE_WIDTH = 200
 export const NODE_HEIGHT = 72
 
+// A few long component names ("Postgres Replica 1", "ShortenerService") plus their live badges
+// (the "xN" scale badge, a Redis/Mongo cluster-role badge, nginx's capability badges) don't fit the
+// old one-size-fits-all NODE_WIDTH - content either got clipped or spilled past the node's visible
+// border. Width is computed per node instead, from the label text plus a reserve for whichever
+// badges *that node's id* could ever show - never from live data (instanceCount/role/badges
+// themselves), so a node's width (and therefore the dagre layout computed from it) stays constant
+// across a live poll tick, a scale, or a failover. Only a structural change (a different set of
+// visible components - the only thing computeLayout's own memoization key already reacts to -
+// see Diagram.tsx) can change it.
+const MIN_NODE_WIDTH = NODE_WIDTH
+const HORIZONTAL_PADDING = 20 // .service-node's 10px left + 10px right padding
+const ICON_SLOT = 24 // 18px icon + 6px gap
+const STATUS_DOT_SLOT = 14 // 8px dot + 6px gap
+// Every scalable service can show a "xN" badge (e.g. "×12") - reserve for it on every node rather
+// than tracking which ids are actually scalable, since under-reserving silently clips the one badge
+// this whole exercise is about not clipping.
+const SCALE_BADGE_RESERVE = 40
+// Redis Sentinel/replica-set members can show a live cluster-role badge up to "unreachable" wide -
+// see useInfraTopology/liveRole.ts. Mirrors the REDIS_NODES/MONGO_NODES id lists in trafficFlow.ts.
+const CLUSTER_ROLE_NODE_IDS = new Set(['redis-master', 'redis-replica1', 'redis-replica2', 'mongo1', 'mongo2', 'mongo3'])
+const CLUSTER_ROLE_BADGE_RESERVE = 85
+// nginx is the only node with capability badges today (getRoleBadges in roleBadges.ts) - up to two,
+// "LB" + "gRPC".
+const CAPABILITY_BADGE_NODE_IDS = new Set(['nginx'])
+const CAPABILITY_BADGE_RESERVE = 90
+
+let measureCtx: CanvasRenderingContext2D | null | undefined
+
+// canvas measureText when available (an actual browser) for an accurate label width; a flat
+// per-character estimate otherwise (vitest's jsdom has no canvas 2D context) - either way this only
+// ever widens the reserve-padded result below, never narrows it enough to clip.
+function measureLabelWidth(label: string): number {
+  if (typeof document === 'undefined') return label.length * 7.5
+  if (measureCtx === undefined) {
+    measureCtx = document.createElement('canvas').getContext('2d')
+  }
+  if (!measureCtx) return label.length * 7.5
+  measureCtx.font = '500 14px system-ui, "Segoe UI", Roboto, sans-serif'
+  return measureCtx.measureText(label).width
+}
+
+export function nodeWidthFor(component: Pick<ArchComponent, 'id' | 'name'>): number {
+  let reserve = SCALE_BADGE_RESERVE
+  if (CLUSTER_ROLE_NODE_IDS.has(component.id)) reserve += CLUSTER_ROLE_BADGE_RESERVE
+  if (CAPABILITY_BADGE_NODE_IDS.has(component.id)) reserve += CAPABILITY_BADGE_RESERVE
+  const content = HORIZONTAL_PADDING + ICON_SLOT + measureLabelWidth(component.name) + STATUS_DOT_SLOT + reserve
+  return Math.max(MIN_NODE_WIDTH, Math.ceil(content / 4) * 4)
+}
+
 export interface RegionBox {
   id: string
   label: string
@@ -62,7 +111,7 @@ function layoutSubgraph(members: ArchComponent[], internalConnections: ArchConne
   graph.setDefaultEdgeLabel(() => ({}))
 
   for (const member of members) {
-    graph.setNode(member.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
+    graph.setNode(member.id, { width: nodeWidthFor(member), height: NODE_HEIGHT })
   }
   for (const connection of internalConnections) {
     graph.setEdge(connection.from, connection.to)
@@ -72,16 +121,18 @@ function layoutSubgraph(members: ArchComponent[], internalConnections: ArchConne
 
   // dagre centers the whole layout around (marginx, marginy) regardless of what those are, so
   // normalize to this sub-layout's own top-left being (0, 0) - the caller adds back whatever
-  // absolute offset this group ends up at.
+  // absolute offset this group ends up at. Reads each node's own width back off the laid-out graph
+  // (dagre preserves whatever was passed to setNode) rather than assuming NODE_WIDTH, since nodes
+  // are no longer all the same width - see nodeWidthFor above.
   let minX = Infinity
   let minY = Infinity
   let maxX = -Infinity
   let maxY = -Infinity
   for (const member of members) {
     const node = graph.node(member.id)
-    minX = Math.min(minX, node.x - NODE_WIDTH / 2)
+    minX = Math.min(minX, node.x - node.width / 2)
     minY = Math.min(minY, node.y - NODE_HEIGHT / 2)
-    maxX = Math.max(maxX, node.x + NODE_WIDTH / 2)
+    maxX = Math.max(maxX, node.x + node.width / 2)
     maxY = Math.max(maxY, node.y + NODE_HEIGHT / 2)
   }
   if (members.length === 0) {
@@ -91,7 +142,7 @@ function layoutSubgraph(members: ArchComponent[], internalConnections: ArchConne
   const positions: Record<string, { x: number; y: number }> = {}
   for (const member of members) {
     const node = graph.node(member.id)
-    positions[member.id] = { x: node.x - NODE_WIDTH / 2 - minX, y: node.y - NODE_HEIGHT / 2 - minY }
+    positions[member.id] = { x: node.x - node.width / 2 - minX, y: node.y - NODE_HEIGHT / 2 - minY }
   }
 
   const edgePaths: Record<string, { x: number; y: number }[]> = {}

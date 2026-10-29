@@ -81,6 +81,14 @@
   padding: 16px;
 }
 
+/* Placeholder for the left sidebar's idle state (nothing selected on the graph) - this sidebar is
+   node/connection selection detail only now, see App.tsx's own comment (run history moved to its
+   own header-opened modal, RunHistoryPanel). */
+.sidebar-empty-note {
+  font-size: 13px;
+  color: var(--text);
+}
+
 .app-center {
   flex: 1;
   min-width: 0;
@@ -406,13 +414,12 @@ button:disabled {
 
 /* Edge labels (e.g. "Streaming replication (WAL)") default to invisible - with ~40 edges in the
    full graph, every label on at once buried the lines themselves under a wall of overlapping text
-   pills, which was the actual complaint (not the label styling itself). A label reveals on hover
-   (quick peek without clicking), on `.selected` (react-flow's own class, driven by the `selected`
-   field Diagram.tsx now sets per edge), and on `.animated` (a live traffic run highlights the
-   edges it's actually flowing through - worth labeling those without an extra click). `:hover`
-   targets the edge's own <g>, not the text itself, so the label's own `pointer-events: none`
-   below doesn't prevent the hover from triggering - the edge's invisible wider interaction stroke
-   (react-flow's own hit-test path, unaffected by any of this) is what's actually under the cursor. */
+   pills, which was the actual complaint (not the label styling itself). A label reveals only once
+   a user deliberately clicks that edge (toggled via useEdgeLabels, see Diagram.tsx's onEdgeClick -
+   `.label-visible` is a plain per-edge class, not react-flow's own `.selected`/`.animated`), and
+   hides again on a second click - the Topology panel's "Show all / Hide all" labels buttons are
+   bulk versions of the same toggle. `pointer-events: none` keeps a hidden label from stealing the
+   click meant for the edge underneath it.*/
 .react-flow__edge .react-flow__edge-text,
 .react-flow__edge .react-flow__edge-textbg {
   opacity: 0;
@@ -420,12 +427,8 @@ button:disabled {
   transition: opacity 0.12s ease;
 }
 
-.react-flow__edge:hover .react-flow__edge-text,
-.react-flow__edge:hover .react-flow__edge-textbg,
-.react-flow__edge.selected .react-flow__edge-text,
-.react-flow__edge.selected .react-flow__edge-textbg,
-.react-flow__edge.animated .react-flow__edge-text,
-.react-flow__edge.animated .react-flow__edge-textbg {
+.react-flow__edge.label-visible .react-flow__edge-text,
+.react-flow__edge.label-visible .react-flow__edge-textbg {
   opacity: 1;
 }
 
@@ -1033,8 +1036,13 @@ button:disabled {
 }
 
 .traffic-result-panel {
-  flex: 1;
+  /* Capped and pushed to the header's right edge via margin-left: auto, instead of flex: 1 eating
+     every px of remaining header width - that stretched the progress bar edge-to-edge and left the
+     two fixed-size charts below it looking stranded in a mostly-empty row, worse every time another
+     button (Topology, Presets, ...) got added to the header and shrank what was "remaining". */
+  flex: 0 1 640px;
   min-width: 0;
+  margin-left: auto;
 }
 
 .traffic-result-empty {
@@ -1120,10 +1128,26 @@ button:disabled {
   margin-top: 10px;
 }
 
+.axis-chart-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
 .axis-chart-title {
   font-size: 12px;
   color: var(--text);
-  margin-bottom: 2px;
+}
+
+/* The live current value (last data point), not just the axis's static max label - a reader
+   watching a run in progress wants "what's it doing right now", the same thing Sparkline's own
+   current-value readout already gives CPU/RAM. */
+.axis-chart-current {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-h);
 }
 
 .axis-chart-label {
@@ -1621,6 +1645,43 @@ button:disabled {
   font-size: 11px;
   color: var(--text);
   margin: 6px 0 0;
+}
+
+/* The Topology panel's edge-label bulk toggle - unlike every InfraToggleControl row below it, this
+   applies immediately (no Save/draft involved, see useEdgeLabels) since it's a pure display
+   preference, not an infra change. */
+.topology-panel-labels {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+
+.topology-panel-labels-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.topology-panel-labels-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.topology-panel-labels-actions button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.topology-panel-labels-actions button:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
 }
 
 .infra-toggle-control-disabled .infra-toggle-label,
@@ -2302,6 +2363,12 @@ button:disabled {
 
 /* Run history (right sidebar) */
 
+/* Wider than the default .presets-modal (640px) - a run's step list + infra snapshot + the report
+   embedded inside TrafficReportModal need more breathing room than a Topology/Presets form does. */
+.run-history-modal {
+  max-width: 820px;
+}
+
 .run-history-panel {
   min-width: 0;
 }
@@ -2315,6 +2382,21 @@ button:disabled {
 
 .run-history-header .traffic-panel-subheading {
   margin: 0;
+}
+
+.run-history-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.run-history-close {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .run-history-clear {
