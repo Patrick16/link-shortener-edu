@@ -62,6 +62,8 @@ it back ON does **not** auto-restore Sentinel — that stays its own explicit ac
   (resilience-gap) — fixed
 - ⚠️ [A CLI flag baked in on every container start can quietly undo a runtime CONFIG SET](pitfall:redis-min-replicas-to-write-not-resynced-on-restart)
   (resilience-gap) — fixed
+- ⚠️ [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
+  (resilience-gap) — fixed
 
 ## Relatives
 
@@ -70,6 +72,8 @@ it back ON does **not** auto-restore Sentinel — that stays its own explicit ac
 - [LinkApi](node:link-api) — writes/reads through the same `link:{hash}` key
 - [RedirectApi](node:redirect-api) — writes/reads through the same `link:{hash}` key
 - [Redis Sentinel 1](node:redis-sentinel-1) — monitors this node, promotes a replica if it dies
+- [ShortenerService](node:shortener-service) — `LinkExpiryWorker`'s leader-election lease is
+  claimed/renewed here
 
 ### Patterns
 
@@ -78,4 +82,5 @@ it back ON does **not** auto-restore Sentinel — that stays its own explicit ac
 - [Circuit breakers](pattern:circuit-breakers) — a Polly breaker sits in front of every call this
   node's clients make
 - [Distributed locking: Redis claims](pattern:distributed-locking-redis) — the coordinator behind
-  `TopLinksPushService`'s cross-replica push claim
+  both `TopLinksPushService`'s one-shot push claim and `LinkExpiryWorker`'s sustained leader-election
+  lease

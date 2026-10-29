@@ -64,7 +64,7 @@ This project demonstrates two different, genuinely opposite answers to that ques
 | Recovers from a crashed holder | Yes, but only once the TTL elapses — a window where *no one* may proceed | Yes, immediately — Postgres notices the dropped connection |
 | Needs a dedicated open connection? | No — works through any pooled client | Yes — must stay pinned to one physical connection for the whole critical section |
 | Works through a transaction-mode pooler (pgcat)? | Yes, unaffected | No — breaks outright, see that implementation's Pitfalls |
-| Used in this project for | `TopLinksPushService`'s cross-replica push claim | `PartitionMaintenanceWorker`'s create/drop DDL tick |
+| Used in this project for | `TopLinksPushService`'s cross-replica push claim (one-shot) **and** `LinkExpiryWorker`'s singleton-sweep leadership (sustained lease — see below) | `PartitionMaintenanceWorker`'s create/drop DDL tick |
 | Right fit when | the critical section is short and an occasional early-release double-fire is an acceptable, bounded cost | you already hold (or can hold) a direct, non-pooled Postgres connection, and want to avoid guessing a TTL at all |
 
 A TTL-based lock trades "no dedicated connection, works anywhere" for "you have to pick a number
@@ -72,6 +72,17 @@ and live with being wrong about it" — too short and a still-working holder get
 someone who thinks it died; too long and a genuinely dead holder blocks everyone for that whole
 window. A session-scoped lock sidesteps the guessing entirely, at the cost of needing a live,
 pinned connection for as long as the lock is held.
+
+**The Redis side has two different sub-flavors of the same primitive, not one.**
+`TopLinksPushService` takes a **one-shot claim**: acquire, do a short bit of work, let the TTL
+expire, done — the TTL is both "how long I hold it" and "how long until the next attempt can
+succeed" in one number. `LinkExpiryWorker` takes a **sustained lease**: claim once, then keep
+renewing the same key indefinitely for as long as this replica wants to stay leader, via a
+separate, much-more-frequent renewal loop that runs independently of the work loop it's gating.
+The "Yes, but only once the TTL elapses" failure-recovery row above applies to both the same way —
+a dead leader's lease still has to expire before anyone else can take over — but the *renewal*
+machinery (a conditional-extend script, not just "set it again") only exists for the lease variant.
+See [Distributed locking: Redis claims](pattern:distributed-locking-redis) for both, side by side.
 
 ## How it's implemented here
 
@@ -98,7 +109,8 @@ a shortcut.
 ### Nodes
 
 - [TrafficService](node:traffic-service) — the Postgres advisory-lock call site
-- [ReportingApi](node:reporting-api) — the Redis claim call site
+- [ReportingApi](node:reporting-api) — the Redis one-shot claim call site
+- [ShortenerService](node:shortener-service) — the Redis sustained-lease call site
 - [Redis (master)](node:redis-master) — the coordinator behind the Redis implementation
 
 ### Patterns

@@ -112,14 +112,40 @@ just logs and moves on, since a missed click-count increment is an approximate d
 design), a dropped delete would leave the link alive forever despite its owner asking for it to be
 deleted, with nobody ever finding out.
 
-`LinkExpiryWorker` follows `PartitionMaintenanceWorker`'s exact shape (see
-[TrafficService](node:traffic-service)): same session-scoped Postgres advisory lock pattern
-(`"shortener-service:link-expiry"`), same direct-not-through-pgcat connection, same
-`OpenConnectionAsync`/`CloseConnectionAsync` pinning around the lock's acquire/release. Its
+`LinkExpiryWorker` solves the same "exactly one replica should do this" problem that
+`PartitionMaintenanceWorker` (see [TrafficService](node:traffic-service)) solves, but with a
+deliberately different mechanism: a **sustained Redis lease** instead of a Postgres advisory lock.
+`ExecuteAsync` runs two loops concurrently via `Task.WhenAll`, coordinated only by one `volatile
+bool _isLeader` field:
+
+- **Leader-election loop** (`RunLeaderElectionLoopAsync`/`LeaderElectionTickAsync`) — every
+  `RenewInterval` (5s): if not leader, tries `SET leader:shortener-service:link-expiry <hostname>
+  NX PX 15000`; if leader, runs a Lua script that only extends the TTL if the stored value still
+  names this replica (a plain client-side `GET`-then-`PEXPIRE` would race: a leader whose lease
+  just expired could blindly re-extend a key a new leader has since legitimately claimed). On any
+  Redis error, fails **safe** (`_isLeader = false`) — the opposite default from
+  `TopLinksPushService`'s fail-open claim, since an uncoordinated sweep means every replica racing
+  the same `UPDATE` the moment Redis recovers.
+- **Expiry-sweep loop** (`RunExpirySweepLoopAsync`/`TickAsync`/`RunOnceAsync`) — unchanged 1-minute
+  `PeriodicTimer` cadence; the only change from before is that `RunOnceAsync` now checks `_isLeader`
+  at the top and returns early (not leader this tick) instead of acquiring a fresh Postgres
+  advisory lock.
+
+Full mechanism, Lua renew script, and a live kill-and-watch failover walkthrough:
+[Distributed locking: Redis claims](pattern:distributed-locking-redis). **Side effect of the
+switch**: because the lock no longer needs session-scoping, `RunOnceAsync` no longer needs a
+direct-to-primary, pgcat-bypassing connection at all (that requirement was only ever about the
+Postgres advisory lock being pinned to one physical session) — it now goes through the normal
+pooled `IDbContextFactory<DatabaseContext>`, the same as `ClickCountFlushWorker` below. Its
 `UPDATE ... RETURNING "Hash"` both flips `DeletedAt` and tells the worker exactly which hashes it
 just touched, so it can confirm a `DeletedReason.Expired` tombstone for each - the `DeletedAt IS
 NULL` guard in its `WHERE` clause means a hash a manual delete reached first simply isn't among the
 rows returned, so the two triggers can never double-process the same row.
+
+A read-only control-api capability (`GET /api/infra/link-expiry-leader`, `link-expiry-leader` on
+this node's panel in architecture-map) surfaces the current leader hostname and remaining lease TTL
+live, polled every 2s — useful for watching a kill-and-watch failover demo in real time rather than
+only reading about it.
 
 **Both triggers also invalidate the main `link:{hash}` cache-aside entry** (`IEntityCacheService<Link>
 .InvalidateCacheAsync`), alongside - not instead of - confirming the tombstone above. Found in
@@ -134,7 +160,7 @@ Pitfalls.
 ```mermaid
 flowchart TD
     LA["LinkApi DELETE endpoint"] -->|publishes LinkDeletedEvent| MC["LinkDeletedConsumer.HandleBatchAsync"]
-    PT["PeriodicTimer, once a minute"] --> TW["LinkExpiryWorker.RunOnceAsync\n(advisory lock, direct-to-Postgres,\nbypassing pgcat)"]
+    PT["PeriodicTimer, once a minute"] --> TW["LinkExpiryWorker.RunOnceAsync\n(gated on _isLeader -\nRedis sustained-lease election,\npooled connection via pgcat)"]
 
     MC --> MU["ExecuteUpdateAsync:\nDeletedAt = now()\nWHERE Hash IN batch AND DeletedAt IS NULL"]
     TW --> TU["UPDATE ... RETURNING Hash\nWHERE ExpiresAt <= now() AND DeletedAt IS NULL"]
@@ -213,9 +239,13 @@ as before.
   consumer/sweep worker invalidate
 - [RabbitMQ](node:rabbitmq)
 - [links_db](node:links-db)
+- [Redis (master)](node:redis-master) — coordinator for `LinkExpiryWorker`'s leader-election lease,
+  alongside the cache-aside entries this node invalidates on delete/expiry
 
 ### Patterns
 
 - [Async messaging](pattern:async-messaging)
 - [Custom aliases](pattern:custom-aliases)
 - [Caching](pattern:caching) — invalidates the main cache-aside entry on delete/expiry
+- [Distributed locking: Redis claims](pattern:distributed-locking-redis) — `LinkExpiryWorker`'s
+  sustained-lease leader election
