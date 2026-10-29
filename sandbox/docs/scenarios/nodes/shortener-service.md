@@ -22,7 +22,7 @@ with.
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/ShortenerService/LinkCreatedConsumer.cs, HandleBatchAsync (trimmed)
+// src/backend/Services/ShortenerService/LinkCreatedConsumer.cs:33, HandleBatchAsync (trimmed)
 await using var context = await _dbContextFactory.CreateDbContextAsync(cancellationToken);
 var poisonMessages = new List<PoisonMessage>();
 
@@ -84,7 +84,7 @@ transport here, unlike custom aliases). `LinkExpiryWorker` runs *in this same pr
 so routing it through RabbitMQ would only make it slower and more failure-prone for no benefit.
 
 ```csharp
-// src/backend/Services/ShortenerService/LinkDeletedConsumer.cs, HandleBatchAsync (trimmed)
+// src/backend/Services/ShortenerService/LinkDeletedConsumer.cs:31, HandleBatchAsync (trimmed)
 var existingHashes = await context.Links.Where(x => hashes.Contains(x.Hash)).Select(x => x.Hash).ToHashSetAsync(ct);
 
 await context.Links
@@ -130,6 +130,27 @@ successfully for up to the cache entry's full remaining TTL (up to an hour by de
 tombstone confirm specifically fails. The two writes stay independent, not transactional with each
 other - either one succeeding alone is now enough to close the gap it closes. See this node's
 Pitfalls.
+
+```mermaid
+flowchart TD
+    LA["LinkApi DELETE endpoint"] -->|publishes LinkDeletedEvent| MC["LinkDeletedConsumer.HandleBatchAsync"]
+    PT["PeriodicTimer, once a minute"] --> TW["LinkExpiryWorker.RunOnceAsync\n(advisory lock, direct-to-Postgres,\nbypassing pgcat)"]
+
+    MC --> MU["ExecuteUpdateAsync:\nDeletedAt = now()\nWHERE Hash IN batch AND DeletedAt IS NULL"]
+    TW --> TU["UPDATE ... RETURNING Hash\nWHERE ExpiresAt <= now() AND DeletedAt IS NULL"]
+
+    MU --> MCheck{"hash already existed\nin links_db?"}
+    MCheck -->|yes| MConfirm["ConfirmAsync(DeletedReason.Manual) +\nInvalidateCacheAsync(hash)"]
+    MCheck -->|"no - LinkCreatedEvent\nnot consumed yet"| MThrow["throw -> RabbitMqConsumer's\nbounded retry-with-backoff"]
+
+    TU --> TEach["for each returned hash:\nConfirmAsync(DeletedReason.Expired) +\nInvalidateCacheAsync(hash)"]
+
+    MConfirm --> Done(["Redis tombstone confirmed +\nlink:{hash} cache entry invalidated"])
+    TEach --> Done
+```
+
+The `DeletedAt IS NULL` guard on both `UPDATE`s is what keeps the two triggers from ever
+double-processing the same row — whichever one gets there first is the only one that finds it.
 
 ### Click-count aggregation: buffering writes to ease hot-key row-lock contention
 

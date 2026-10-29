@@ -35,6 +35,23 @@ holds `link.UserId` when it publishes `ClickTrackedEvent`; `ClickTrackedConsumer
 `ClickFact.UserId` — no extra lookup anywhere in the chain), so this is additive, not a new network
 hop.
 
+```csharp
+// src/backend/Shared/Infrastructure/ClickHouseClickFactQueryService.cs:28, GetSummaryAsync (trimmed)
+var byDayTask = RunBucketsAsync(
+    "SELECT toString(toDate(clicked_at)) AS k, count() AS c FROM clicks " +
+    "WHERE hash = {hash:String} AND user_id = toUUID({userId:String}) GROUP BY k ORDER BY k",
+    hash, callerUserId, cancellationToken);
+var byCountryTask = RunTopBucketsAsync("country", hash, callerUserId, cancellationToken);
+var byDeviceTask = RunTopBucketsAsync("device_type", hash, callerUserId, cancellationToken);
+var byBrowserTask = RunTopBucketsAsync("browser", hash, callerUserId, cancellationToken);
+await Task.WhenAll(byDayTask, byCountryTask, byDeviceTask, byBrowserTask);
+```
+
+4 bucket queries run concurrently via `Task.WhenAll`, not sequentially — see this node's Pitfalls
+for the fix that made that true (it used to be 5 queries, sequential). `{hash:String}`/
+`{userId:String}` are the `ClickHouse.Driver` NuGet package's own server-side parameter
+placeholders, resolved by ClickHouse itself — never string-interpolated.
+
 **Always `200`, never a leak oracle — found in review, not designed in from the start.** An earlier
 version ran a 5th scalar query (`count() WHERE hash = ? AND user_id IS NOT NULL AND user_id !=
 callerId`) to tell "owned by someone else" apart from "doesn't exist", turning the former into a
@@ -67,10 +84,43 @@ endpoint has to special-case.
    scratch key, reads the top 10 by score, and deletes the scratch key. A true sliding window,
    recomputed from the buckets on every read — not a snapshot that resets at midnight.
 
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Hub as TopLinksHub
+    participant Redis
+    participant Push as TopLinksPushService
+    participant Reader as RedisTopLinksReader
+
+    Browser->>Hub: connect (?access_token=)
+    Hub->>Hub: Groups.AddToGroupAsync(top-links:{userId})
+    Hub->>Reader: GetTopAsync(userId)
+    Reader->>Redis: ZUNIONSTORE last 7 daily buckets -> scratch key, ZREVRANGE top 10, DEL scratch key
+    Hub->>Browser: topLinks (initial list, Clients.Caller)
+
+    Note over Redis,Push: RedirectApi publishes to clicks:user:changed on every owned click
+    Redis-->>Push: pub/sub message (userId)
+    Push->>Push: MarkDirty(userId) - only if IsWatched(userId)
+
+    loop every 500ms (PeriodicTimer)
+        Push->>Push: TakeDue() - at most once per 2s per user
+        Push->>Redis: SET push-claim NX PX (cluster-wide claim, SignalR backplane means >1 replica can see the same pub/sub message)
+        alt claim won
+            Push->>Reader: GetTopAsync(userId)
+            Reader->>Redis: ZUNIONSTORE + ZREVRANGE + DEL (same read as on connect)
+            Push->>Push: skip if payload identical to last sent
+            Push->>Hub: Clients.Group(top-links:{userId}).SendAsync(topLinks, top)
+            Hub->>Browser: topLinks (via Redis SignalR backplane if the watching connection is on another replica)
+        else claim lost
+            Push->>Push: another replica already pushed this user this interval - skip
+        end
+    end
+```
+
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/ReportingApi/Realtime/TopLinksPushService.cs:95
+// src/backend/Services/ReportingApi/Realtime/TopLinksPushService.cs:96
 internal async Task PushAsync(Guid userId, CancellationToken cancellationToken)
 {
     // Cluster-wide claim, not just this replica's own IsUnchanged/MinPushInterval throttle - see

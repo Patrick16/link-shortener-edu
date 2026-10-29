@@ -23,14 +23,20 @@ automatically after a connection failure.
 ## How it's implemented here
 
 ```
-# ConnectionStrings__Redis in docker-compose.yml
+# ConnectionStrings__Redis, e.g. docker-compose.yml:843
 redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster
 ```
 
-The client talks to all 3 Sentinel addresses, not one — any single Sentinel being briefly down
-doesn't affect the app's ability to find the current master. Sentinel's own config
-(`sentinel monitor mymaster <ip> 6379 2`, quorum 2 of 3) is generated at container start, not
-bind-mounted read-only, because Sentinel rewrites its own config file on every state change (a
+The `serviceName=` syntax is `StackExchange.Redis`'s own Sentinel-aware connection-string form —
+`ConfigurationOptions.Parse` recognizes it and has `ConnectionMultiplexer.Connect` ask Sentinel for
+`mymaster`'s address instead of dialing a fixed host directly. `RedisExtensions.AddRedisMultiplexer`
+(`src/backend/Shared/Infrastructure/RedisExtensions.cs:74`) is the raw-multiplexer path that parses
+it directly; `AddRedisDistributedCache`'s `AddStackExchangeRedisCache` parses the same connection
+string through the same underlying library for its own `IDistributedCache` path. The client talks
+to all 3 Sentinel addresses, not one — any single
+Sentinel being briefly down doesn't affect the app's ability to find the current master. Sentinel's
+own config (`sentinel monitor mymaster <ip> 6379 2`, quorum 2 of 3) is generated at container start,
+not bind-mounted read-only, because Sentinel rewrites its own config file on every state change (a
 failover, a newly-discovered replica) — see this node's Pitfalls for why that generation step
 turned out to be non-trivial.
 
@@ -63,6 +69,26 @@ string":
    a helper that never checked the exit code, so a `redis-cli` call issued before `redis-master` had
    finished its own ~10-second Sentinel-discovery startup delay looked like a successful `CONFIG SET`
    in the logs while the value silently stayed unchanged — see the pitfall linked above for the fix.
+
+The ON and OFF paths are deliberate mirror images, each ordered so no service or container is ever
+left pointed at something that's about to disappear:
+
+```mermaid
+flowchart TD
+    Req(["POST /api/infra/redis-sentinel\n{enabled}"]) --> Check{"enabled?"}
+
+    Check -->|false - OFF| Off1["SetRedisMinReplicasToWriteAsync(0)\n(relax write-fencing FIRST,\nbefore anything else can race it)"]
+    Off1 --> Off2["switch REDIS_CONN to the direct\nredis-master:6379 form"]
+    Off2 --> Off3["recreate the 6 Redis-using services"]
+    Off3 --> Off4["stop sentinel-1/2/3 + replica1/2\ncontainers LAST"]
+
+    Check -->|true - ON| On1["ReclaimRedisMasterRoleAsync\n(REPLICAOF NO ONE - skipped if some\nother node already reports ROLE=master)"]
+    On1 --> On2["start sentinel-1/2/3 + replica1/2\ncontainers FIRST"]
+    On2 --> On3["SelfHealSentinelAsync\n(force every Sentinel onto the real\nmaster now, don't wait for its 30s poll)"]
+    On3 --> On4["switch REDIS_CONN to the\nSentinel-aware serviceName= form"]
+    On4 --> On5["recreate the 6 Redis-using services"]
+    On5 --> On6["SetRedisMinReplicasToWriteAsync(1)\n(restore write-fencing LAST,\nafter replicas had time to reconnect)"]
+```
 
 ## Pitfalls
 

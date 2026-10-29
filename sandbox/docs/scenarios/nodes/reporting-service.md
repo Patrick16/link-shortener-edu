@@ -31,6 +31,19 @@ consumer never queries ClickHouse before inserting (a point-lookup-per-row patte
 specifically bad at) — it just lets the engine's own merge process eventually dedup, which means a
 query run immediately after a redelivery can briefly still double-count until the next merge runs.
 
+```mermaid
+flowchart TD
+    B["ClickTrackedEvent batch"] --> D["dedup by Id within THIS batch only\n(last-write-wins, GroupBy + Select(Last))"]
+    D --> G["bounded-parallelism geo-IP resolve\n(GeoIpConcurrency, independent of\nTrafficService's own resolver/cache)"]
+    G --> I["one bulk INSERT into reports_db.clicks\n- every row, redelivered or not,\nno pre-insert lookup against ClickHouse"]
+    I --> N["ReplacingMergeTree's own background merge\nlater collapses same-(hash, id) rows to one"]
+```
+
+Contrast with [ShortenerService](node:shortener-service)/[TrafficService](node:traffic-service)'s
+Postgres writes, which pre-check and skip an insert for an `Id`/`Hash` already stored — ClickHouse
+has no unique-constraint equivalent to check against cheaply, so this consumer trades a point-in-
+time dedup guarantee for never paying a per-row lookup against a store that's bad at them.
+
 ## How it's implemented here
 
 ```csharp

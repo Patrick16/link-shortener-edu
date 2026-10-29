@@ -33,6 +33,16 @@ rather than failing the click). Mongo is schema-less on purpose: this data grows
 the core record, and neither store is transactional with the other — see this node's Pitfalls for
 what that non-transactionality cost before it was handled correctly.
 
+```mermaid
+flowchart TD
+    B["ClickTrackedEvent batch\n(distinct by Id - redelivery keeps the last copy)"] --> C{"Id already in\nPostgres Clicks?"}
+    C -->|no| PI["INSERT into Clicks\n(Id, ClickedAt, InboundLink, OutboundLink, Hash)"]
+    C -->|"yes - redelivery, or a losing\nreplica's duplicate batch"| PS["skip the Postgres insert"]
+    PI --> M
+    PS --> M["ALWAYS attempt the Mongo ClickMeta\nupsert by Id - idempotent, safe to repeat"]
+    M --> Done(["click durably recorded in both stores -\nnot transactional with each other, but\nthe asymmetry here is what makes a\nredelivery safe without one"])
+```
+
 **Why no transactional outbox here.** The textbook answer to a non-transactional dual-write is an
 outbox table plus a relay worker, so this is a deliberate choice, not an oversight. Three things
 already in place cover the failure modes an outbox would also cover: the Postgres write runs first
@@ -59,7 +69,7 @@ counter that can tolerate drift vs. a real audit trail that can't).
 ## How it's implemented here
 
 ```csharp
-// src/backend/Services/TrafficService/ClickTrackedConsumer.cs:38
+// src/backend/Services/TrafficService/ClickTrackedConsumer.cs:44
 internal async Task<BatchOutcome> HandleBatchAsync(
     IReadOnlyList<BatchItem<ClickTrackedEvent>> batch, CancellationToken cancellationToken)
 {
