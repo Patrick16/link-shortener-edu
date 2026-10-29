@@ -4,9 +4,10 @@ using Microsoft.Extensions.Logging;
 namespace Infrastructure;
 
 // Hedged read for ReportingApi's GET /reports/{hash}/clicks: races the same query against two of
-// clicks_meta_db's three rs0 members (mongo2/mongo3, deliberately not the primary - see
-// MongoExtensions.AddMongoClickMetaReader's own comment for why) to cut tail latency on a slow
-// replica, instead of waiting on whichever one happened to get picked. This is NOT what Mongo's own
+// clicks_meta_db's CURRENT secondaries (whichever two those are - the caller already excluded the
+// real primary live, not by assuming it's always mongo1; see MongoExtensions.
+// AddMongoClickMetaReader's own comment) to cut tail latency on a slow replica, instead of waiting
+// on whichever one happened to get picked. This is NOT what Mongo's own
 // readPreference=secondaryPreferred does - that policy still only ever queries ONE node per
 // request; this class is the app-level mechanism that actually races two of them.
 //
@@ -49,9 +50,13 @@ public sealed class HedgedClickMetaQueryService(
         TimeSpan hedgeDelay,
         CancellationToken cancellationToken)
     {
-        using var ctsFirst = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var ctsSecond = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-
+        // Not `using` - a CTS backing a call that's still genuinely in flight must not be disposed
+        // out from under it (found in review: disposing at method scope raced the loser's own,
+        // still-unwinding Mongo call against the exact token it was cancelled with). Each one is
+        // disposed explicitly below, only once the call it belongs to has actually finished -
+        // immediately when that's already true, or via a continuation when it's the cancelled
+        // loser and still running.
+        var ctsFirst = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var firstTask = first(ctsFirst.Token);
 
         var delayTask = Task.Delay(hedgeDelay, cancellationToken);
@@ -59,7 +64,18 @@ public sealed class HedgedClickMetaQueryService(
         if (completedEarly == firstTask && firstTask.IsCompletedSuccessfully)
         {
             // The common case: first answered inside the hedge delay - second never needs to
-            // exist at all, so there's nothing to cancel either.
+            // exist at all. firstTask is already done, so disposing its CTS here can't race
+            // anything still in flight against it.
+            ctsFirst.Dispose();
+            return await firstTask;
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // The caller itself gave up (e.g. the HTTP request was aborted) in this same window -
+            // no point firing a second query nobody will ever read the result of. Let the natural
+            // cancellation surface through firstTask's own linked token instead.
+            ctsFirst.Dispose();
             return await firstTask;
         }
 
@@ -67,24 +83,47 @@ public sealed class HedgedClickMetaQueryService(
         // but FAULTED within the delay - either way, a second replica is worth trying before
         // giving up (a quick failure is not a reason to skip the fallback).
         logger.LogDebug("Racing a second replica for this read ({Reason})", completedEarly == firstTask ? "first replica errored" : "hedge delay elapsed");
+        var ctsSecond = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var secondTask = second(ctsSecond.Token);
 
+        // Looked up by task identity, not by a `completed == firstTask` ternary - once a task has
+        // been removed from `pending` and its CTS disposed (the fault branch below), a LATER
+        // iteration must never try to re-derive "which CTS belongs to the other one" from that
+        // same ternary, or it ends up calling Cancel() on an already-disposed source (found by the
+        // tests this fix landed with, not just reasoned about).
+        var ctsByTask = new Dictionary<Task<T>, CancellationTokenSource> { [firstTask] = ctsFirst, [secondTask] = ctsSecond };
         var pending = new List<Task<T>> { firstTask, secondTask };
         while (true)
         {
             var completed = await Task.WhenAny(pending);
             pending.Remove(completed);
+            var completedCts = ctsByTask[completed];
 
             if (completed.IsCompletedSuccessfully)
             {
-                // Cancel whichever call is still outstanding - never the one that just won.
-                (completed == firstTask ? ctsSecond : ctsFirst).Cancel();
+                // If the other call is still in `pending`, it's genuinely still outstanding -
+                // cancel it (never the one that just won), but don't dispose its CTS right here:
+                // it may still be mid-flight against that exact token. The continuation disposes it
+                // once that call has actually finished unwinding, whenever that turns out to be.
+                // If it's NOT still in `pending`, it already faulted in an earlier iteration and its
+                // CTS was already disposed there - nothing left to do for it.
+                if (pending.Count > 0)
+                {
+                    var loserTask = pending[0];
+                    var loserCts = ctsByTask[loserTask];
+                    loserCts.Cancel();
+                    _ = loserTask.ContinueWith(_ => loserCts.Dispose(), TaskScheduler.Default);
+                }
+
+                completedCts.Dispose();
                 return completed.Result;
             }
 
-            // This one faulted (or was cancelled) - give the other call a chance before giving up,
-            // same reasoning as the header comment: a single slow-but-alive replica shouldn't be
-            // worse off than a single dead one.
+            // This one faulted (or was cancelled) - already finished, so disposing its own CTS
+            // right here is safe. Give the other call a chance before giving up, same reasoning as
+            // the header comment: a single slow-but-alive replica shouldn't be worse off than a
+            // single dead one.
+            completedCts.Dispose();
             if (pending.Count == 0)
             {
                 return await completed; // rethrows the real exception/cancellation

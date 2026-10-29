@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MongoDB.Bson;
 using MongoDB.Driver;
 
 namespace Infrastructure;
@@ -27,11 +28,11 @@ public static class MongoExtensions
 
     // Read side (ReportingApi) - the only service that ever queries clicks_meta_db. Wraps the
     // ordinary replica-set-aware client in HedgedClickMetaQueryService, which races GetRecentAsync
-    // against two of rs0's members directly (bypassing replica-set discovery - see that class's
-    // own header comment for why this needs its own direct-to-node clients rather than just reusing
-    // whichever node readPreference happens to pick). Falls back to the plain client whenever rs0
-    // doesn't currently have all 3 members (the Mongo-replicas toggle is off) - nothing to hedge
-    // against with only mongo1 up.
+    // against two of rs0's current secondaries directly (bypassing replica-set discovery - see
+    // that class's own header comment for why this needs its own direct-to-node clients rather
+    // than just reusing whichever node readPreference happens to pick). Falls back to the plain
+    // client whenever rs0 doesn't currently have all 3 members (the Mongo-replicas toggle is off) -
+    // nothing to hedge against with only one node up, whichever one that is.
     public static IHostApplicationBuilder AddMongoClickMetaReader(this IHostApplicationBuilder builder)
     {
         var connectionString = builder.Configuration.GetConnectionString(Constants.MongoDbConnectionString)!;
@@ -47,14 +48,20 @@ public static class MongoExtensions
                 return fallback;
             }
 
-            // Skips the first server (mongo1, the primary) on purpose - see this reader's own
-            // comment for why the primary stays out of the hedge pool. directConnection=true is
-            // required here: without it, the Mongo driver would discover the whole replica set
-            // from this one seed and route the query via its OWN server-selection logic again,
-            // silently undoing the "pin this call to exactly this physical node" point of hedging.
-            var hedgeNodes = url.Servers.Skip(1)
-                .Select(server => (IClickMetaQueryService)new MongoClickMetaQueryService(
-                    $"mongodb://{server.Host}:{server.Port}/{url.DatabaseName}?directConnection=true"))
+            // Excludes whichever node is CURRENTLY the real primary - checked live via each
+            // node's own `hello` reply, not by trusting MONGO_HOSTS's list position. Found in
+            // review: this project's own PLAN.md already has a precedent (the 2026-10-06 Mongo
+            // backup-script fix) where mongo2, not mongo1, was the real primary after a failover -
+            // an earlier version of this code assumed "first in the list" and would have silently
+            // hedged against the primary instead of the two secondaries once that happened here
+            // too. directConnection=true is required on each candidate: without it, the Mongo
+            // driver would discover the whole replica set from that one seed and route the query
+            // via its OWN server-selection logic again, silently undoing the "pin this call to
+            // exactly this physical node" point of hedging.
+            var hedgeNodes = url.Servers
+                .Select(server => $"mongodb://{server.Host}:{server.Port}/{url.DatabaseName}?directConnection=true")
+                .Where(directConnectionString => !IsCurrentPrimary(directConnectionString))
+                .Select(directConnectionString => (IClickMetaQueryService)new MongoClickMetaQueryService(directConnectionString))
                 .ToList();
 
             return new HedgedClickMetaQueryService(
@@ -63,5 +70,27 @@ public static class MongoExtensions
         });
 
         return builder;
+    }
+
+    // One-time, synchronous (this only ever runs once, while this DI factory builds the
+    // singleton at startup) `hello` check against a single direct-connected node - the same
+    // "ask the real thing, don't trust a static label" principle control-api's own
+    // MongoTopologyService already applies via `rs.status()`, just reached through the driver
+    // instead of execing mongosh (this runs inside the product backend, which has no docker-exec
+    // access). isWritablePrimary is the modern (MongoDB 5.0+) replacement for the legacy
+    // `ismaster` field - this stack runs MongoDB 7.
+    private static bool IsCurrentPrimary(string directConnectionString)
+    {
+        try
+        {
+            var hello = new MongoClient(directConnectionString).GetDatabase("admin")
+                .RunCommand<BsonDocument>(new BsonDocument("hello", 1));
+            return hello.GetValue("isWritablePrimary", false).ToBoolean();
+        }
+        catch
+        {
+            // Unreachable at startup - definitely not a primary worth hedging against either way.
+            return false;
+        }
     }
 }
