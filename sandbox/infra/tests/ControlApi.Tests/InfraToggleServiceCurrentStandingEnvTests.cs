@@ -42,5 +42,6 @@ public class InfraToggleServiceCurrentStandingEnvTests
         Assert.Equal("redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster", env["REDIS_CONN"]);
         Assert.Equal("mongo1:27017,mongo2:27017,mongo3:27017", env["MONGO_HOSTS"]);
         Assert.Equal("15", env["MONGO_HEDGE_DELAY_MS"]);
+        Assert.Equal("true", env["CIRCUIT_BREAKERS_ENABLED"]);
     }
 }
