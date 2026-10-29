@@ -278,6 +278,53 @@ main {
   color: var(--text);
 }
 
+.recent-clicks-panel {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.recent-clicks-panel h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.recent-clicks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.recent-clicks-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.recent-clicks-item:last-child {
+  border-bottom: none;
+}
+
+.recent-clicks-time {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.recent-clicks-location,
+.recent-clicks-device {
+  color: var(--text);
+}
+
 .clicks-chart {
   display: block;
   width: 100%;

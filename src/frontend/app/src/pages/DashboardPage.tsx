@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAuth } from '../auth/AuthContext'
 import { buildShortUrl, deleteLink, getLinks } from '../api/linkApi'
-import { getClickSummary } from '../api/statsApi'
+import { getClickSummary, getRecentClicks } from '../api/statsApi'
 import { ApiError } from '../api/client'
 import { ClicksByDayChart } from '../components/ClicksByDayChart'
 import { TopLinksPanel } from '../components/TopLinksPanel'
 import { useTopLinks } from '../hooks/useTopLinks'
-import type { ClickSummary, LinkListItem, LinksPage } from '../types'
+import type { ClickDetail, ClickSummary, LinkListItem, LinksPage } from '../types'
 
 type Tab = 'active' | 'deleted'
 
@@ -27,6 +27,10 @@ function deletionLabel(item: LinkListItem): string {
 // ClickHouse, not a live query, so re-fetching on every toggle wouldn't even show something newer
 // most of the time, just extra round trips.
 type SummaryState = ClickSummary | 'loading' | 'error'
+
+// Same "distinct from not-yet-requested" shape as SummaryState, for the Mongo-backed recent-clicks
+// list fetched alongside it.
+type RecentClicksState = ClickDetail[] | 'loading' | 'error'
 
 function StatsPanel({ summary }: { summary: SummaryState }) {
   if (summary === 'loading') return <p className="hint">Loading stats…</p>
@@ -55,6 +59,37 @@ function StatsPanel({ summary }: { summary: SummaryState }) {
   )
 }
 
+// Mongo-backed counterpart to StatsPanel - individual raw click rows (exact city, full device
+// info) instead of pre-aggregated ClickHouse buckets. "No recent clicks." deliberately isn't the
+// same copy as StatsPanel's "No clicks yet." - the two panels can be on screen at once, and
+// getByText-style lookups (tests, screen readers) need the text to stay unambiguous.
+function RecentClicksPanel({ clicks }: { clicks: RecentClicksState }) {
+  if (clicks === 'loading') return <p className="hint">Loading recent clicks…</p>
+  if (clicks === 'error') return <p className="error">Could not load recent clicks for this link.</p>
+
+  if (clicks.length === 0) {
+    return <p className="hint">No recent clicks.</p>
+  }
+
+  const location = (click: ClickDetail) => [click.city, click.country].filter(Boolean).join(', ') || '—'
+  const device = (click: ClickDetail) => [click.browser, click.os, click.deviceType].filter(Boolean).join(' · ') || '—'
+
+  return (
+    <div className="recent-clicks-panel">
+      <h4>Recent clicks</h4>
+      <ul className="recent-clicks-list">
+        {clicks.map((click) => (
+          <li key={click.id} className="recent-clicks-item">
+            <span className="recent-clicks-time">{new Date(click.clickedAt).toLocaleString()}</span>
+            <span className="recent-clicks-location">{location(click)}</span>
+            <span className="recent-clicks-device">{device(click)}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 export default function DashboardPage() {
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>('active')
@@ -63,6 +98,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null)
   const [expandedHash, setExpandedHash] = useState<string | null>(null)
   const [summaries, setSummaries] = useState<Record<string, SummaryState>>({})
+  const [recentClicks, setRecentClicks] = useState<Record<string, RecentClicksState>>({})
   const [deletingHash, setDeletingHash] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const topLinks = useTopLinks(Boolean(user))
@@ -147,18 +183,35 @@ export default function DashboardPage() {
     // panel into "Could not load stats" for the rest of the session with no way to retry short of a
     // full page reload.
     const existing = summaries[hash]
-    if (existing !== undefined && existing !== 'error') return
+    if (existing === undefined || existing === 'error') {
+      setSummaries((prev) => ({ ...prev, [hash]: 'loading' }))
+      getClickSummary(hash)
+        .then((summary) => {
+          if (!mountedRef.current) return
+          setSummaries((prev) => ({ ...prev, [hash]: summary }))
+        })
+        .catch(() => {
+          if (!mountedRef.current) return
+          setSummaries((prev) => ({ ...prev, [hash]: 'error' }))
+        })
+    }
 
-    setSummaries((prev) => ({ ...prev, [hash]: 'loading' }))
-    getClickSummary(hash)
-      .then((summary) => {
-        if (!mountedRef.current) return
-        setSummaries((prev) => ({ ...prev, [hash]: summary }))
-      })
-      .catch(() => {
-        if (!mountedRef.current) return
-        setSummaries((prev) => ({ ...prev, [hash]: 'error' }))
-      })
+    // Independent fetch, same skip/retry rule as the summary above - Mongo and ClickHouse are two
+    // separate read models fed by two separate consumers of the same event, so one failing doesn't
+    // imply anything about the other.
+    const existingRecent = recentClicks[hash]
+    if (existingRecent === undefined || existingRecent === 'error') {
+      setRecentClicks((prev) => ({ ...prev, [hash]: 'loading' }))
+      getRecentClicks(hash)
+        .then((clicks) => {
+          if (!mountedRef.current) return
+          setRecentClicks((prev) => ({ ...prev, [hash]: clicks }))
+        })
+        .catch(() => {
+          if (!mountedRef.current) return
+          setRecentClicks((prev) => ({ ...prev, [hash]: 'error' }))
+        })
+    }
   }
 
   if (!user) return null
@@ -225,7 +278,10 @@ export default function DashboardPage() {
                   </button>
                 )}
                 {expandedHash === item.shortenLink && (
-                  <StatsPanel summary={summaries[item.shortenLink] ?? 'loading'} />
+                  <>
+                    <StatsPanel summary={summaries[item.shortenLink] ?? 'loading'} />
+                    <RecentClicksPanel clicks={recentClicks[item.shortenLink] ?? 'loading'} />
+                  </>
                 )}
               </li>
             ))}

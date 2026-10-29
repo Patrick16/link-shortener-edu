@@ -67,3 +67,18 @@ export type TopLinkEntry = {
   hash: string
   clicks: number
 }
+
+// Mirrors ReportingApi's ClickDetail (src/backend/Shared/Common/Models/ClickDetail.cs) - raw
+// per-click rows read from Mongo, the flexible-document counterpart to ClickSummary's pre-
+// aggregated ClickHouse buckets. No ipAddress field - the backend deliberately withholds it.
+export type ClickDetail = {
+  id: string
+  clickedAt: string
+  userAgent: string
+  referrer: string
+  browser: string | null
+  os: string | null
+  deviceType: string | null
+  country: string | null
+  city: string | null
+}

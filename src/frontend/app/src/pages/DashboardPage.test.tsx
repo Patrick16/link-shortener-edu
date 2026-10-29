@@ -19,6 +19,12 @@ vi.mock('../api/linkApi', async () => {
 
 vi.mock('../api/statsApi', () => ({
   getClickSummary: vi.fn(),
+  // Persistent default (vi.clearAllMocks() in beforeEach resets call history, not this
+  // implementation) so every pre-existing "Stats" test below - which only cares about
+  // getClickSummary - doesn't also need to stub this second, independent fetch. Tests that DO care
+  // about recent clicks override with mockResolvedValueOnce/mockRejectedValueOnce, which reverts to
+  // this default afterward instead of leaking into later tests.
+  getRecentClicks: vi.fn().mockResolvedValue([]),
 }))
 
 // Keeps the dashboard tests off a real SignalR connection - the hub's own behaviour is covered by
@@ -187,6 +193,80 @@ describe('DashboardPage', () => {
     await user.click(screen.getByRole('button', { name: 'Hide stats' }))
     await user.click(screen.getByRole('button', { name: 'Stats' }))
     expect(statsApi.getClickSummary).toHaveBeenCalledTimes(1)
+  })
+
+  it('also fetches and shows recent clicks when expanding stats', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 1, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
+        totalCount: 1,
+      }),
+    )
+    vi.mocked(statsApi.getClickSummary).mockResolvedValue({
+      hash: 'abc12345',
+      totalClicks: 1,
+      byDay: [],
+      byCountry: [],
+      byDevice: [],
+      byBrowser: [],
+    })
+    vi.mocked(statsApi.getRecentClicks).mockResolvedValueOnce([
+      {
+        id: 'c1',
+        clickedAt: '2099-01-01T12:00:00Z',
+        userAgent: 'Mozilla/5.0',
+        referrer: '',
+        browser: 'Chrome',
+        os: 'Windows',
+        deviceType: 'Desktop',
+        country: 'Germany',
+        city: 'Berlin',
+      },
+    ])
+
+    render(<DashboardPage />)
+    await user.click(await screen.findByRole('button', { name: 'Stats' }))
+
+    expect(await screen.findByText('Berlin, Germany')).toBeInTheDocument()
+    expect(screen.getByText('Chrome · Windows · Desktop')).toBeInTheDocument()
+    expect(statsApi.getRecentClicks).toHaveBeenCalledWith('abc12345')
+  })
+
+  it('shows a message when there are no recent clicks', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
+        totalCount: 1,
+      }),
+    )
+    vi.mocked(statsApi.getClickSummary).mockResolvedValue({ hash: 'abc12345', totalClicks: 0, byDay: [], byCountry: [], byDevice: [], byBrowser: [] })
+
+    render(<DashboardPage />)
+    await user.click(await screen.findByRole('button', { name: 'Stats' }))
+
+    expect(await screen.findByText('No recent clicks.')).toBeInTheDocument()
+  })
+
+  it('shows an error message when recent clicks fail to load', async () => {
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 0, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
+        totalCount: 1,
+      }),
+    )
+    vi.mocked(statsApi.getClickSummary).mockResolvedValue({ hash: 'abc12345', totalClicks: 0, byDay: [], byCountry: [], byDevice: [], byBrowser: [] })
+    vi.mocked(statsApi.getRecentClicks).mockRejectedValueOnce(new ApiError(500, 'boom'))
+
+    render(<DashboardPage />)
+    await user.click(await screen.findByRole('button', { name: 'Stats' }))
+
+    expect(await screen.findByText('Could not load recent clicks for this link.')).toBeInTheDocument()
   })
 
   it('shows an error message when stats fail to load', async () => {

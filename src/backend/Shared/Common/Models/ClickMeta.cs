@@ -28,4 +28,10 @@ public record ClickMeta(
     // anonymously-created link. Mirrors ClickFact.UserId's identical field/reasoning: lets
     // ReportingApi's Mongo-backed reads (GET /reports/{hash}/clicks) scope to the caller the same
     // way its ClickHouse-backed summary already does, without a separate ownership lookup.
-    Guid? UserId = null);
+    //
+    // Needs its own BsonGuidRepresentation, same reasoning as Id above - found live: without it,
+    // MongoClickMetaQueryService.GetRecentAsync's Filter.Eq(x => x.UserId, callerUserId) throws
+    // BsonSerializationException ("GuidRepresentation is Unspecified") the moment the driver tries
+    // to serialize callerUserId into the query, since this property has no attribute of its own to
+    // fall back on.
+    [property: BsonGuidRepresentation(GuidRepresentation.Standard)] Guid? UserId = null);
