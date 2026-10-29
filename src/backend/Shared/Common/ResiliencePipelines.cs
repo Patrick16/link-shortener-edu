@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.CircuitBreaker;
@@ -17,8 +18,24 @@ namespace Common;
 // non-obvious choices below instead of three copies of the same comment.
 public static class ResiliencePipelines
 {
-    public static ResiliencePipeline BuildCircuitBreaker(string dependencyName, ILogger logger)
+    // Resilience:CircuitBreakersEnabled=false is control-api's "circuit breakers" toggle (own
+    // GET/POST pair - see CircuitBreakerToggleCapability's own comment on why this isn't an
+    // InfraStatus/Topology control despite touching 6 services). Centralized here, read the same
+    // way by all three BuildCircuitBreaker call sites plus GeoIpExtensions' separate HTTP-pipeline
+    // breaker, so they can't drift onto different defaults for the same flag.
+    public static bool CircuitBreakersEnabled(IConfiguration configuration) =>
+        !bool.TryParse(configuration["Resilience:CircuitBreakersEnabled"], out var enabled) || enabled;
+
+    public static ResiliencePipeline BuildCircuitBreaker(string dependencyName, ILogger logger, bool enabled = true)
     {
+        if (!enabled)
+        {
+            // ResiliencePipeline.Empty's ExecuteAsync just invokes the callback directly - a
+            // DI-time swap decided once at registration, not an if/else guard duplicated across
+            // EntityCacheService/SyncGrpcDispatcher/RabbitMqPublisher's own call sites.
+            return ResiliencePipeline.Empty;
+        }
+
         return new ResiliencePipelineBuilder()
             .AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {

@@ -23,7 +23,8 @@ public static class RabbitMqExtensions
         builder.Services.AddSingleton<IMessageFallbackStore>(_ => new SqliteMessageFallbackStore(fallbackConnectionString!));
         builder.Services.TryAddKeyedSingleton(Constants.RabbitMqCircuitBreakerKey, (sp, key) =>
             ResiliencePipelines.BuildCircuitBreaker(
-                (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!)));
+                (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!),
+                ResiliencePipelines.CircuitBreakersEnabled(sp.GetRequiredService<IConfiguration>())));
         builder.Services.AddSingleton<IMessagePublisher, RabbitMqPublisher>();
         builder.Services.AddHostedService<RabbitMqWarmupService>();
         builder.Services.AddHostedService<RabbitMqRetryWorker>();

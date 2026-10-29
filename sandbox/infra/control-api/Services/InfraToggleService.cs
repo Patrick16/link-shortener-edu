@@ -76,6 +76,15 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // The only service that ever queries clicks_meta_db for reads - see SetMongoHedgeDelayMsAsync.
     private static readonly IReadOnlyList<string> MongoReadingServices = ["reporting-api"];
 
+    // Every service that registers at least one Polly circuit breaker - see
+    // SetCircuitBreakersEnabledAsync. auth-api/redirect-api via AddRedisRateLimiter, link-api/
+    // redirect-api/shortener-service via AddRedisDistributedCache, link-api/redirect-api's gRPC
+    // dispatcher and RabbitMQ publisher, traffic-service/reporting-service via
+    // AddGeoIpResolution. reporting-api is deliberately NOT here - it only calls
+    // AddRedisMultiplexer (SignalR pub/sub), which has no breaker of its own.
+    private static readonly IReadOnlyList<string> CircuitBreakerUsingServices =
+        ["auth-api", "link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service"];
+
     // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
     // tool despite not surviving a control-api restart.
     private bool _nginxBypassed;
@@ -103,6 +112,10 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // Mirrors MongoExtensions.DefaultHedgeDelayMs (and the shipped ${MONGO_HEDGE_DELAY_MS:-15}
     // fallback).
     private int _mongoHedgeDelayMs = 15;
+
+    // Mirrors ResiliencePipelines.CircuitBreakersEnabled's own default (no key set => enabled) and
+    // the shipped ${CIRCUIT_BREAKERS_ENABLED:-true} fallback.
+    private bool _circuitBreakersEnabled = true;
 
     // Drives REDIS_CONN below - same cached, recreate-with-a-different-env-var shape as
     // _pgcatEnabled/_cacheEnabled/_messagingMode, not the live-read shape RedisEnabled/
@@ -136,6 +149,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         ["REDIS_CONN"] = _redisConnectionViaSentinel ? RedisSentinelConnectionString : RedisDirectConnectionString,
         ["MONGO_HOSTS"] = _mongoConnectionIncludesReplicas ? MongoAllHosts : MongoPrimaryOnlyHost,
         ["MONGO_HEDGE_DELAY_MS"] = _mongoHedgeDelayMs.ToString(),
+        ["CIRCUIT_BREAKERS_ENABLED"] = _circuitBreakersEnabled ? "true" : "false",
     };
 
     public int GetRabbitMqPrefetch() => _rabbitMqPrefetch;
@@ -241,6 +255,27 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
 
             _mongoHedgeDelayMs = delayMs;
             return delayMs;
+        }, ct);
+
+    public bool GetCircuitBreakersEnabled() => _circuitBreakersEnabled;
+
+    public Task<bool> SetCircuitBreakersEnabledAsync(bool enabled, CancellationToken ct) =>
+        runtime.RunExclusiveToggleAsync(async ct =>
+        {
+            var env = CurrentStandingEnv();
+            env["CIRCUIT_BREAKERS_ENABLED"] = enabled ? "true" : "false";
+            var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(CircuitBreakerUsingServices, ct);
+
+            logger.LogWarning("Switching Resilience__CircuitBreakersEnabled for {Services} to {Enabled}", string.Join(", ", CircuitBreakerUsingServices), enabled);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CircuitBreakerUsingServices], env, ct);
+            if (exitCode != 0)
+            {
+                logger.LogWarning("Toggling circuit breakers failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            _circuitBreakersEnabled = enabled;
+            return _circuitBreakersEnabled;
         }, ct);
 
     // See InfraStatus's own comment on HaproxyEnabled/PostgresReplicasEnabled/RedisEnabled/

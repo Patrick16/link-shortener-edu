@@ -74,6 +74,9 @@
       "type": "service",
       "icon": "🔑",
       "description": "Registration / login, issues a JWT access token + rotating refresh token",
+      "capabilities": [
+        "circuit-breaker-toggle"
+      ],
       "details": {
         "purpose": "Owns users_db (the only writer to it, and the only one that migrates it); refresh tokens are stored there too, one row per issued token, rotated (old one revoked) on every refresh",
         "technologies": [
@@ -100,7 +103,8 @@
       "capabilities": [
         "scalable",
         "l1-cache-toggle",
-        "negative-cache-toggle"
+        "negative-cache-toggle",
+        "circuit-breaker-toggle"
       ],
       "details": {
         "purpose": "POST /links generates the hash, optionally attaches userId from a Bearer token (no [Authorize] — anonymous still works), and publishes it; GET /links/{hash} is a cached read against links_db; GET /links (paginated) lists a user's own links",
@@ -127,7 +131,8 @@
       "capabilities": [
         "scalable",
         "l1-cache-toggle",
-        "negative-cache-toggle"
+        "negative-cache-toggle",
+        "circuit-breaker-toggle"
       ],
       "details": {
         "purpose": "Cache-first read of links_db (same data LinkApi writes); 404 on unknown hash; publishes ClickTrackedEvent, then records the click in the owner's Redis day bucket (hot path, doesn't wait on Postgres) before redirecting",
@@ -182,7 +187,8 @@
       "description": "Consumes LinkCreatedEvent (persists the link) and ClickTrackedEvent (bumps its click count)",
       "capabilities": [
         "scalable",
-        "link-expiry-leader"
+        "link-expiry-leader",
+        "circuit-breaker-toggle"
       ],
       "details": {
         "purpose": "Owns links_db (the only writer, and the only one that migrates it); both consumers are redelivery-safe - LinkCreated skips if the hash is already stored, ClickTracked just re-increments (an approximate display counter, not the audit trail - that's TrafficService's Clicks table)",
@@ -206,7 +212,8 @@
       "description": "Consumes ClickTrackedEvent, persists the click record and its enriched metadata",
       "capabilities": [
         "scalable",
-        "geoip-bulkhead"
+        "geoip-bulkhead",
+        "circuit-breaker-toggle"
       ],
       "details": {
         "purpose": "Owns clicks_db (the only writer, and the only one that migrates it) - Postgres Clicks is the exactly-once audit trail (skips if the event's Id is already stored); also parses the User-Agent and resolves geo-IP, then upserts a ClickMeta document into MongoDB, independently idempotent from the Postgres write",
@@ -605,7 +612,8 @@
       "description": "CQRS read side: a third, independent consumer of ClickTrackedEvent - builds its own denormalized read model in ClickHouse, straight from the raw event, never from traffic-service's own Postgres/Mongo writes",
       "capabilities": [
         "scalable",
-        "geoip-bulkhead"
+        "geoip-bulkhead",
+        "circuit-breaker-toggle"
       ],
       "details": {
         "purpose": "Owns reports_db in ClickHouse (the only writer) - parses the same raw UserAgent/geo-IP as traffic-service does independently, then does one bulk insert per consumed batch; single-row inserts are a real ClickHouse anti-pattern this service specifically avoids",

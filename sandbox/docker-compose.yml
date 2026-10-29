@@ -866,6 +866,10 @@ services:
       # 429s - a sequence with Register/Login steps and enough VUs is the easiest way to trigger it.
       RateLimiting__PermitLimit: "${AUTH_RATE_LIMIT_PERMIT:-100000}"
       RateLimiting__WindowSeconds: "${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}"
+      # Resilience backlog item 1's own on/off switch (Polly circuit breakers for Redis/gRPC/
+      # RabbitMQ/ip-api.com) - control-api's "circuit breakers" toggle recreates all 6
+      # breaker-registering services with this flipped, see SetCircuitBreakersEnabledAsync.
+      Resilience__CircuitBreakersEnabled: "${CIRCUIT_BREAKERS_ENABLED:-true}"
     depends_on:
       haproxy:
         condition: service_healthy
@@ -949,6 +953,8 @@ services:
       # shortener-service directly - see nginx.conf's own comment for why (replica load-balancing).
       Messaging__Mode: "${MESSAGING_MODE:-rabbitmq}"
       Messaging__Grpc__TargetUrl: "http://nginx:9090"
+      # See auth-api's identical comment on this one.
+      Resilience__CircuitBreakersEnabled: "${CIRCUIT_BREAKERS_ENABLED:-true}"
     volumes:
       - link-api-data:/data
     # LinkApi.csproj turns on Server GC, which sizes one heap per logical core it detects - with no
@@ -1030,6 +1036,8 @@ services:
       # both go stale (see RedirectController's own comment for the full asymmetry).
       Messaging__Mode: "${MESSAGING_MODE:-rabbitmq}"
       Messaging__Grpc__TargetUrl: "http://nginx:9091"
+      # See auth-api's identical comment on this one.
+      Resilience__CircuitBreakersEnabled: "${CIRCUIT_BREAKERS_ENABLED:-true}"
     volumes:
       - redirect-api-data:/data
     # See link-api's identical limit above - same reasoning, same Server GC setting in
@@ -1113,6 +1121,8 @@ services:
       # See auth-api's identical comment on these two - same default/override story everywhere.
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
+      # See auth-api's identical comment on this one.
+      Resilience__CircuitBreakersEnabled: "${CIRCUIT_BREAKERS_ENABLED:-true}"
     depends_on:
       haproxy:
         condition: service_healthy
@@ -1176,6 +1186,8 @@ services:
       # See auth-api's identical comment on these two - same default/override story everywhere.
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
+      # See auth-api's identical comment on this one.
+      Resilience__CircuitBreakersEnabled: "${CIRCUIT_BREAKERS_ENABLED:-true}"
     depends_on:
       haproxy:
         condition: service_healthy
@@ -1257,6 +1269,8 @@ services:
       # See auth-api's identical comment on these two - same default/override story everywhere.
       OTEL_TRACES_SAMPLER: "${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}"
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
+      # See auth-api's identical comment on this one.
+      Resilience__CircuitBreakersEnabled: "${CIRCUIT_BREAKERS_ENABLED:-true}"
     depends_on:
       rabbitmq:
         condition: service_healthy

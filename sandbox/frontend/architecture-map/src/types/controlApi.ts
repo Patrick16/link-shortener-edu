@@ -356,6 +356,13 @@ export interface NegativeCacheStatus {
   enabled: boolean
 }
 
+// Resilience backlog item 1's own on/off switch (Polly circuit breakers for Redis/gRPC/
+// RabbitMQ/ip-api.com) - same "own GET/POST pair, not InfraStatus" shape as L1CacheStatus/
+// NegativeCacheStatus above. See SetCircuitBreakersEnabledAsync on the backend.
+export interface CircuitBreakerStatus {
+  enabled: boolean
+}
+
 // Concurrency limit on traffic-service/reporting-service's shared ip-api.com HttpClient
 // (bulkhead isolation, resilience backlog item 15) - read once at startup, so setting this
 // recreates both containers. See SetGeoIpBulkheadLimitAsync on the backend.

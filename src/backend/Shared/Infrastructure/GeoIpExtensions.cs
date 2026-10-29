@@ -34,6 +34,10 @@ public static class GeoIpExtensions
         var maxConcurrentRequests = int.TryParse(builder.Configuration["GeoIp:MaxConcurrentRequests"], out var configured)
             ? configured
             : DefaultMaxConcurrentRequests;
+        // Read once here, outside the AddResilienceHandler callback below, since the callback only
+        // decides whether to CHAIN .AddCircuitBreaker at all - the bulkhead rate limiter above it
+        // stays either way, it's a separate toggle (control-api's "geoip-bulkhead" capability).
+        var circuitBreakersEnabled = ResiliencePipelines.CircuitBreakersEnabled(builder.Configuration);
 
         builder.AddRedisDistributedCache();
         builder.Services.AddHttpClient<IpApiGeoIpResolver>(client =>
@@ -79,8 +83,16 @@ public static class GeoIpExtensions
                             ResilienceMetrics.BulkheadRejections.Add(1, new KeyValuePair<string, object?>("dependency", "geo-ip"));
                             return default;
                         },
-                    })
-                    .AddCircuitBreaker(new()
+                    });
+
+                // Resilience:CircuitBreakersEnabled=false (control-api's "circuit breakers" toggle)
+                // simply never chains this strategy - same DI-time swap as ResiliencePipelines.
+                // BuildCircuitBreaker's ResiliencePipeline.Empty, just expressed as "don't add the
+                // strategy" instead of "add a no-op one", since AddResilienceHandler's builder has
+                // no equivalent empty-strategy primitive to swap in.
+                if (circuitBreakersEnabled)
+                {
+                    resilience.AddCircuitBreaker(new()
                     {
                         ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
                             .Handle<Exception>(ex => ex is not OperationCanceledException)
@@ -90,6 +102,7 @@ public static class GeoIpExtensions
                         SamplingDuration = TimeSpan.FromSeconds(30),
                         BreakDuration = TimeSpan.FromSeconds(15),
                     });
+                }
             });
         builder.Services.AddSingleton<IGeoIpResolver>(sp => new CachingGeoIpResolver(
             sp.GetRequiredService<IpApiGeoIpResolver>(),

@@ -100,4 +100,15 @@ public interface IInfraToggleService
     int GetMongoHedgeDelayMs();
 
     Task<int> SetMongoHedgeDelayMsAsync(int delayMs, CancellationToken ct);
+
+    // Resilience backlog item 1's own on/off switch (Polly circuit breakers for Redis, gRPC,
+    // RabbitMQ and ip-api.com - see ResiliencePipelines/GeoIpExtensions). Same "own GET/POST pair,
+    // recreate with a different env var" shape as L1CacheEnabled above, not InfraStatus/Topology -
+    // it doesn't change which nodes are in the active request path either. Unlike every other
+    // toggle in this file, it touches all 6 breaker-registering services at once (auth-api/
+    // link-api/redirect-api/shortener-service/traffic-service/reporting-service - see
+    // CircuitBreakerUsingServices), not just one DB- or cache-touching pair.
+    bool GetCircuitBreakersEnabled();
+
+    Task<bool> SetCircuitBreakersEnabledAsync(bool enabled, CancellationToken ct);
 }

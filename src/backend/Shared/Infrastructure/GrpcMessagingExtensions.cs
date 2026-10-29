@@ -63,7 +63,8 @@ public static class GrpcMessagingExtensions
             // noise) in a process that's never going to call it.
             builder.Services.TryAddKeyedSingleton(Constants.GrpcCircuitBreakerKey, (sp, key) =>
                 ResiliencePipelines.BuildCircuitBreaker(
-                    (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!)));
+                    (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!),
+                    ResiliencePipelines.CircuitBreakersEnabled(sp.GetRequiredService<IConfiguration>())));
             builder.Services.AddSingleton<IEventDispatcher, SyncGrpcDispatcher>();
         }
         else

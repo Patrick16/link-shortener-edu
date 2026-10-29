@@ -58,4 +58,31 @@ public class ResiliencePipelinesTests
 
         Assert.Equal("ok", result);
     }
+
+    [Fact]
+    public async Task BuildCircuitBreaker_Disabled_NeverOpensNoMatterHowManyFailures()
+    {
+        // enabled: false is control-api's "circuit breakers" toggle turned off - BuildCircuitBreaker
+        // must hand back a genuine no-op pipeline (ResiliencePipeline.Empty), not just a breaker with
+        // an impossibly high threshold, so every call still reaches the delegate and a dead
+        // dependency goes back to paying its full timeout on every request.
+        var pipeline = ResiliencePipelines.BuildCircuitBreaker("test-dependency", NullLogger.Instance, enabled: false);
+        var callCount = 0;
+
+        Task Fail(CancellationToken _)
+        {
+            callCount++;
+            throw new InvalidOperationException("dependency is down");
+        }
+
+        for (var i = 0; i < CallsPastThreshold * 2; i++)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => pipeline.ExecuteAsync(ct => new ValueTask(Fail(ct)), CancellationToken.None).AsTask());
+        }
+
+        // Still reaches the delegate every time - a real breaker would have opened and started
+        // throwing BrokenCircuitException well before this many failures.
+        Assert.Equal(CallsPastThreshold * 2, callCount);
+    }
 }

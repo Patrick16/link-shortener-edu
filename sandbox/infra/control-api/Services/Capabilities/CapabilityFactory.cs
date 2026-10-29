@@ -38,6 +38,7 @@ public sealed class CapabilityFactory
         ["mongo-replicas-toggle"] = sp => new MongoReplicasToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<MongoReplicasToggleCapability>>()),
         ["link-expiry-leader"] = sp => new LinkExpiryLeaderCapability(sp.GetRequiredService<IRedisInfraService>(), sp.GetRequiredService<ILogger<LinkExpiryLeaderCapability>>()),
         ["mongo-hedge-delay"] = sp => new MongoHedgeDelayCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<MongoHedgeDelayCapability>>()),
+        ["circuit-breaker-toggle"] = sp => new CircuitBreakerToggleCapability(sp.GetRequiredService<IInfraToggleService>(), sp.GetRequiredService<ILogger<CircuitBreakerToggleCapability>>()),
     };
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };

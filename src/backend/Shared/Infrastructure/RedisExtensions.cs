@@ -58,7 +58,8 @@ public static class RedisExtensions
     {
         builder.Services.TryAddKeyedSingleton(Constants.RedisCircuitBreakerKey, (sp, key) =>
             ResiliencePipelines.BuildCircuitBreaker(
-                (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!)));
+                (string)key!, sp.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(ResiliencePipelines).FullName!),
+                ResiliencePipelines.CircuitBreakersEnabled(sp.GetRequiredService<IConfiguration>())));
         return builder;
     }
 

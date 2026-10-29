@@ -12,6 +12,7 @@ import { MongoHedgeDelayControl } from '../components/MongoHedgeDelayControl'
 import { MongoReadPreferenceControl } from '../components/MongoReadPreferenceControl'
 import { L1CacheControl } from '../components/L1CacheControl'
 import { NegativeCacheControl } from '../components/NegativeCacheControl'
+import { CircuitBreakerControl } from '../components/CircuitBreakerControl'
 import { ReplicationLagControl } from '../components/ReplicationLagControl'
 import { PgcatConnectionsPanel } from '../components/PgcatConnectionsPanel'
 import { PostgresConnectionsPanel } from '../components/PostgresConnectionsPanel'
@@ -41,6 +42,7 @@ const CONTROL_COMPONENTS: Record<string, ComponentType<CapabilityControlProps>> 
   'mongo-read-preference': MongoReadPreferenceControl,
   'l1-cache-toggle': L1CacheControl,
   'negative-cache-toggle': NegativeCacheControl,
+  'circuit-breaker-toggle': CircuitBreakerControl,
   'replication-lag': ReplicationLagControl,
   'pgcat-connections': PgcatConnectionsPanel,
   'postgres-connections': PostgresConnectionsPanel,

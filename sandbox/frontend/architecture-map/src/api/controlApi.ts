@@ -1,6 +1,7 @@
 import type {
   ChaosRequest,
   ChaosAction,
+  CircuitBreakerStatus,
   CustomScenario,
   DataSourceDefinition,
   DeadLetterMessageSample,
@@ -156,6 +157,9 @@ export const controlApi = {
 
   getNegativeCacheEnabled: () => request<NegativeCacheStatus>('/api/infra/negative-cache'),
   setNegativeCacheEnabled: (enabled: boolean) => request<NegativeCacheStatus>('/api/infra/negative-cache', 'POST', { enabled }),
+
+  getCircuitBreakersEnabled: () => request<CircuitBreakerStatus>('/api/infra/circuit-breakers'),
+  setCircuitBreakersEnabled: (enabled: boolean) => request<CircuitBreakerStatus>('/api/infra/circuit-breakers', 'POST', { enabled }),
 
   getMongoReadPreference: () => request<MongoReadPreferenceStatus>('/api/infra/mongo-read-preference'),
   setMongoReadPreference: (preference: MongoReadPreference) =>
