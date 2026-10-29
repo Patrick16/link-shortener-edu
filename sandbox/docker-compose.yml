@@ -1280,6 +1280,11 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__ClickHouse: "Host=clickhouse;Port=8123;Database=reports_db"
+      # Program.cs's AddMongoClickMetaReader()/AddMongoHealthCheck needed this and never got it -
+      # found live (docker-compose up), not by inspection: /health/ready threw ArgumentNullException
+      # out of MongoUrl.Create since the connection string was simply missing here. Same
+      # replica-set-aware URI traffic-service's own identical ConnectionStrings__Mongo line uses.
+      ConnectionStrings__Mongo: "mongodb://${MONGO_HOSTS:-mongo1:27017,mongo2:27017,mongo3:27017}/clicks_meta_db?replicaSet=rs0&readPreference=${MONGO_READ_PREFERENCE:-primary}"
       # Reads the per-user day buckets RedirectApi writes, and subscribes to its change channel for
       # the live top-links push - same Sentinel-resolved address every other Redis client uses.
       ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379,serviceName=mymaster}"
@@ -1294,6 +1299,10 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      # Same reasoning as traffic-service's identical depends_on entry: AddMongoClickMetaReader
+      # above needs rs0 to actually exist, not just mongo1's process to be up.
+      mongo-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
       interval: 5s
