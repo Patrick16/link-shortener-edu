@@ -67,6 +67,26 @@ public class HedgedClickMetaQueryServiceTests
     }
 
     [Fact]
+    public async Task RaceAsync_CallerAlreadyCancelledOnceHedgeDelayElapses_NeverStartsSecond()
+    {
+        var sut = NewSut();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var secondStarted = false;
+        var firstTcs = new TaskCompletionSource<int>();
+
+        var raceTask = sut.RaceAsync(
+            _ => firstTcs.Task,
+            _ => { secondStarted = true; return Task.FromResult(2); },
+            hedgeDelay: TimeSpan.Zero,
+            cts.Token);
+
+        firstTcs.TrySetCanceled();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => raceTask);
+        Assert.False(secondStarted);
+    }
+
+    [Fact]
     public async Task RaceAsync_BothFault_RethrowsAFailure()
     {
         var sut = NewSut();

@@ -75,7 +75,15 @@ public sealed class HedgedClickMetaQueryService(
             // The caller itself gave up (e.g. the HTTP request was aborted) in this same window -
             // no point firing a second query nobody will ever read the result of. Let the natural
             // cancellation surface through firstTask's own linked token instead.
-            ctsFirst.Dispose();
+            //
+            // Found in review (a regression of F1 within this very fix): firstTask is NOT
+            // necessarily done yet here - Task.Delay's own cancellation transition is pure TPL
+            // state and reliably wins the race against a real in-flight Mongo call noticing its
+            // token was cancelled. Disposing ctsFirst synchronously, right here, raced that
+            // still-unwinding call exactly like the loser-disposal bug this whole file exists to
+            // avoid - the same continuation-based disposal used for the loser below is needed here
+            // too, not a direct `Dispose()` before the await.
+            _ = firstTask.ContinueWith(_ => ctsFirst.Dispose(), TaskScheduler.Default);
             return await firstTask;
         }
 
