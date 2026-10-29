@@ -20,7 +20,7 @@ public class ClickTrackedConsumerTests
         return factory.Object;
     }
 
-    private static ClickTrackedEvent NewEvent(Guid? id = null) => new()
+    private static ClickTrackedEvent NewEvent(Guid? id = null, Guid? userId = null) => new()
     {
         Id = id ?? Guid.NewGuid(),
         Hash = "abc12345",
@@ -29,6 +29,7 @@ public class ClickTrackedConsumerTests
         ClickedAt = DateTime.UtcNow,
         UserAgent = "",
         Referrer = "",
+        UserId = userId,
     };
 
     private static List<BatchItem<ClickTrackedEvent>> NewBatch(params ClickTrackedEvent[] events) =>
@@ -169,5 +170,55 @@ public class ClickTrackedConsumerTests
 
         await using var verify = await factory.CreateDbContextAsync();
         Assert.Equal(2, await verify.Clicks.CountAsync());
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_EventWithUserId_CarriesItThroughToTheMeta()
+    {
+        // ReportingApi's GET /reports/{hash}/clicks (MongoClickMetaQueryService) scopes its query to
+        // the caller's own user_id - this has to reach the stored ClickMeta the same way UserId
+        // already reaches ClickFact for the ClickHouse side (see ReportingService's identical test).
+        var ownerId = Guid.NewGuid();
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var clickMetaStore = new Mock<IClickMetaStore>();
+        List<ClickMeta>? saved = null;
+        clickMetaStore.Setup(x => x.SaveManyAsync(It.IsAny<IReadOnlyCollection<ClickMeta>>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyCollection<ClickMeta>, CancellationToken>((metas, _) => saved = metas.ToList())
+            .Returns(Task.CompletedTask);
+        var sut = new ClickTrackedConsumer(
+            Mock.Of<IMessageConsumer>(),
+            factory,
+            clickMetaStore.Object,
+            Mock.Of<IUserAgentParser>(),
+            Mock.Of<IGeoIpResolver>(),
+            NullLogger<ClickTrackedConsumer>.Instance);
+
+        await sut.HandleBatchAsync(NewBatch(NewEvent(userId: ownerId)), CancellationToken.None);
+
+        Assert.Equal(ownerId, saved!.Single().UserId);
+    }
+
+    [Fact]
+    public async Task HandleBatchAsync_EventWithNoUserId_StoresNullOwner()
+    {
+        // An anonymously-created link's clicks must stay unowned in Mongo too, not accidentally
+        // default to some sentinel value that could later match a real caller's id.
+        var factory = NewFactory(Guid.NewGuid().ToString());
+        var clickMetaStore = new Mock<IClickMetaStore>();
+        List<ClickMeta>? saved = null;
+        clickMetaStore.Setup(x => x.SaveManyAsync(It.IsAny<IReadOnlyCollection<ClickMeta>>(), It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyCollection<ClickMeta>, CancellationToken>((metas, _) => saved = metas.ToList())
+            .Returns(Task.CompletedTask);
+        var sut = new ClickTrackedConsumer(
+            Mock.Of<IMessageConsumer>(),
+            factory,
+            clickMetaStore.Object,
+            Mock.Of<IUserAgentParser>(),
+            Mock.Of<IGeoIpResolver>(),
+            NullLogger<ClickTrackedConsumer>.Instance);
+
+        await sut.HandleBatchAsync(NewBatch(NewEvent()), CancellationToken.None);
+
+        Assert.Null(saved!.Single().UserId);
     }
 }

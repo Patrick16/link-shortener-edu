@@ -12,9 +12,16 @@ namespace ReportingApi.Controllers;
 [Authorize]
 [ApiController]
 [Route("reports")]
-public partial class ReportsController(IClickFactQueryService queryService) : ControllerBase
+public partial class ReportsController(IClickFactQueryService queryService, IClickMetaQueryService clickMetaQueryService) : ControllerBase
 {
     private readonly IClickFactQueryService _queryService = queryService;
+    private readonly IClickMetaQueryService _clickMetaQueryService = clickMetaQueryService;
+
+    // Bounds for GetRecentClicks's ?limit - a missing/zero/negative value falls back to
+    // DefaultClicksLimit, anything above MaxClicksLimit is clamped rather than rejected, so a caller
+    // passing an unreasonable value just gets the capped list instead of a 400.
+    private const int DefaultClicksLimit = 20;
+    private const int MaxClicksLimit = 100;
 
     // Matches the short-hash alphabet Sha256Base62HashGenerator produces - rejecting anything else
     // here means the ClickHouse query never even runs on garbage input, on top of the server-side
@@ -42,5 +49,24 @@ public partial class ReportsController(IClickFactQueryService queryService) : Co
         // else's-hash branch was itself the privacy leak it was meant to prevent).
         var summary = await _queryService.GetSummaryAsync(hash, userId, cancellationToken);
         return Ok(summary);
+    }
+
+    // Mongo-backed counterpart to GetSummary - raw per-click documents (exact city, full user
+    // agent, referrer URL) instead of ClickHouse's pre-aggregated buckets. Same owner-scoping and
+    // always-200 reasoning as GetSummary - see IClickMetaQueryService.GetRecentAsync's own comment.
+    [HttpGet("{hash}/clicks")]
+    public async Task<IActionResult> GetRecentClicks(
+        [FromRoute] string hash, [FromQuery] int limit, CancellationToken cancellationToken)
+    {
+        if (!HashFormat().IsMatch(hash))
+        {
+            return Problem(detail: "Hash is not a valid short-link hash.", statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        var effectiveLimit = Math.Clamp(limit <= 0 ? DefaultClicksLimit : limit, 1, MaxClicksLimit);
+
+        var clicks = await _clickMetaQueryService.GetRecentAsync(hash, userId, effectiveLimit, cancellationToken);
+        return Ok(clicks);
     }
 }

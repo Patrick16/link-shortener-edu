@@ -11,12 +11,17 @@ namespace ReportingApi.Tests;
 
 public class ReportsControllerTests
 {
-    private static ReportsController NewSut(out Mock<IClickFactQueryService> queryService, out Guid userId)
+    private static ReportsController NewSut(out Mock<IClickFactQueryService> queryService, out Guid userId) =>
+        NewSut(out queryService, out _, out userId);
+
+    private static ReportsController NewSut(
+        out Mock<IClickFactQueryService> queryService, out Mock<IClickMetaQueryService> clickMetaQueryService, out Guid userId)
     {
         queryService = new Mock<IClickFactQueryService>();
+        clickMetaQueryService = new Mock<IClickMetaQueryService>();
         userId = Guid.NewGuid();
         var identity = new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, userId.ToString())], "TestAuth");
-        return new ReportsController(queryService.Object)
+        return new ReportsController(queryService.Object, clickMetaQueryService.Object)
         {
             ControllerContext = new ControllerContext
             {
@@ -69,5 +74,53 @@ public class ReportsControllerTests
         var problem = Assert.IsType<ObjectResult>(result);
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
         queryService.Verify(x => x.GetSummaryAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetRecentClicks_ValidHash_ReturnsOkWithClicks()
+    {
+        var sut = NewSut(out _, out var clickMetaQueryService, out var userId);
+        var clicks = new[] { new ClickDetail(Guid.NewGuid(), DateTime.UtcNow, "ua", "ref", "Chrome", "Windows", "Desktop", "US", "Seattle") };
+        clickMetaQueryService.Setup(x => x.GetRecentAsync("abc12345", userId, 20, It.IsAny<CancellationToken>())).ReturnsAsync(clicks);
+
+        var result = await sut.GetRecentClicks("abc12345", 0, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        Assert.Same(clicks, ok.Value);
+    }
+
+    [Theory]
+    [InlineData(0, 20)]
+    [InlineData(-5, 20)]
+    [InlineData(50, 50)]
+    [InlineData(500, 100)]
+    public async Task GetRecentClicks_ClampsLimitIntoValidRange(int requestedLimit, int expectedLimit)
+    {
+        var sut = NewSut(out _, out var clickMetaQueryService, out var userId);
+        clickMetaQueryService
+            .Setup(x => x.GetRecentAsync("abc12345", userId, expectedLimit, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var result = await sut.GetRecentClicks("abc12345", requestedLimit, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        clickMetaQueryService.Verify(x => x.GetRecentAsync("abc12345", userId, expectedLimit, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("has spaces")]
+    [InlineData("has/slash")]
+    [InlineData("waytoolongofahashvaluetoeverbereal")]
+    public async Task GetRecentClicks_InvalidHash_ReturnsProblem400WithoutQuerying(string hash)
+    {
+        var sut = NewSut(out _, out var clickMetaQueryService, out _);
+
+        var result = await sut.GetRecentClicks(hash, 20, CancellationToken.None);
+
+        var problem = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        clickMetaQueryService.Verify(
+            x => x.GetRecentAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

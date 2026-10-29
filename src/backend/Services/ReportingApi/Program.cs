@@ -9,6 +9,7 @@ builder.AddServiceDefaults();
 builder.AddWebApiDefaults();
 
 builder.AddClickHouseReader();
+builder.AddMongoClickMetaReader();
 
 // Unlike LinkApi/RedirectApi's optional-JWT posture, every ReportingApi endpoint requires a valid
 // token - this is the one read path that would otherwise let anyone enumerate click stats for any
@@ -36,6 +37,7 @@ builder.Services.AddSignalR()
 
 builder.Services.AddHealthChecks()
     .AddClickHouseHealthCheck<IClickFactQueryService>()
+    .AddMongoHealthCheck<IClickMetaQueryService>()
     .AddRedisHealthCheck();
 
 var app = builder.Build();

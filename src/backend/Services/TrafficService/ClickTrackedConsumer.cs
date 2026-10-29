@@ -97,7 +97,8 @@ public sealed class ClickTrackedConsumer(
                 parsedUserAgent.Os,
                 parsedUserAgent.DeviceType,
                 geo.Country,
-                geo.City));
+                geo.City,
+                e.UserId));
         }
 
         await _clickMetaStore.SaveManyAsync(metas, cancellationToken);

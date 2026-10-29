@@ -11,8 +11,7 @@ public static class TrafficServiceExtensions
     // the click.tracked consumer.
     public static WebApplicationBuilder AddClickTracking(this WebApplicationBuilder builder)
     {
-        var mongoConnectionString = builder.Configuration.GetConnectionString(Constants.MongoDbConnectionString);
-        builder.Services.AddSingleton<IClickMetaStore>(_ => new MongoClickMetaStore(mongoConnectionString!));
+        builder.AddMongoClickMetaWriter();
         builder.Services.AddSingleton<IUserAgentParser, UaParserUserAgentParser>();
 
         // See GeoIpExtensions.AddGeoIpResolution's own comment - shared with ReportingService so

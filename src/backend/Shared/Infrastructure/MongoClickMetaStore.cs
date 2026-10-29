@@ -62,9 +62,16 @@ public sealed class MongoClickMetaStore : IClickMetaStore
 
     public Task EnsureIndexesAsync(CancellationToken cancellationToken = default)
     {
-        var model = new CreateIndexModel<ClickMeta>(
+        var ttlModel = new CreateIndexModel<ClickMeta>(
             Builders<ClickMeta>.IndexKeys.Ascending(x => x.ClickedAt),
             new CreateIndexOptions { ExpireAfter = RetentionWindow });
-        return _collection.Indexes.CreateOneAsync(model, cancellationToken: cancellationToken);
+
+        // Backs ReportingApi's GET /reports/{hash}/clicks query (MongoClickMetaQueryService) -
+        // equality on Hash + UserId, sorted by ClickedAt descending - without this, that query is a
+        // full collection scan.
+        var recentClicksModel = new CreateIndexModel<ClickMeta>(
+            Builders<ClickMeta>.IndexKeys.Ascending(x => x.Hash).Ascending(x => x.UserId).Descending(x => x.ClickedAt));
+
+        return _collection.Indexes.CreateManyAsync([ttlModel, recentClicksModel], cancellationToken);
     }
 }

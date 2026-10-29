@@ -31,8 +31,11 @@ public static class HealthChecksBuilderExtensions
     public static IHealthChecksBuilder AddGrpcMessagingHealthCheck(this IHealthChecksBuilder builder)
         => builder.AddCheck<GrpcChannelHealthCheck>("grpc-messaging", tags: ReadyTags);
 
-    public static IHealthChecksBuilder AddMongoHealthCheck(this IHealthChecksBuilder builder)
-        => builder.AddCheck<MongoHealthCheck>("mongo", tags: ReadyTags);
+    // One generic method for any IPingable (IClickMetaStore in TrafficService, IClickMetaQueryService
+    // in ReportingApi) - same shape as AddClickHouseHealthCheck<TPingable> below.
+    public static IHealthChecksBuilder AddMongoHealthCheck<TPingable>(this IHealthChecksBuilder builder)
+        where TPingable : class, IPingable
+        => builder.AddCheck<MongoHealthCheck<TPingable>>("mongo", tags: ReadyTags);
 
     // Needs IConnectionMultiplexer registered (AddRedisMultiplexer), not just the IDistributedCache
     // that AddRedisDistributedCache provides.

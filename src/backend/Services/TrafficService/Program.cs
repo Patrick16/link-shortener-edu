@@ -18,7 +18,7 @@ builder.AddMessagingGrpcServer();
 builder.Services.AddHealthChecks()
     .AddPostgresFactoryHealthCheck<DatabaseContext>()
     .AddRabbitMqHealthCheck()
-    .AddMongoHealthCheck();
+    .AddMongoHealthCheck<IClickMetaStore>();
 
 var app = builder.Build();
 

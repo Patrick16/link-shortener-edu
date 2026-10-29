@@ -23,4 +23,9 @@ public record ClickMeta(
     string? Os,
     string? DeviceType,
     string? Country,
-    string? City);
+    string? City,
+    // The link's owner at click time, carried through from ClickTrackedEvent.UserId - null for an
+    // anonymously-created link. Mirrors ClickFact.UserId's identical field/reasoning: lets
+    // ReportingApi's Mongo-backed reads (GET /reports/{hash}/clicks) scope to the caller the same
+    // way its ClickHouse-backed summary already does, without a separate ownership lookup.
+    Guid? UserId = null);
