@@ -38,10 +38,10 @@ type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index
 // now (opened from the header, next to Topology/Presets - see RunHistoryPanel) so this sidebar is
 // node-settings only.
 //
-// Collapsed by default on a fresh visit (the graph itself is the point on first load, not a panel
-// with nothing selected yet) - but selecting anything on the graph force-expands it via
-// sidebar.expand(), so the very next click after landing on an empty graph still shows that node's
-// detail immediately instead of silently updating an unopened panel.
+// The sidebar (and its resizer) simply isn't rendered at all while nothing's selected, rather than
+// showing collapsed-or-empty - there's nothing useful to show, and every panel it can show already
+// has its own close (x) button that clears the selection, which is what makes it disappear again.
+// No separate manual collapse/expand toggle is needed on top of that.
 function App() {
   const { containers, resourceHistory, connected, loading, error } = useLiveStack()
   const roles = useInfraTopology()
@@ -54,7 +54,7 @@ function App() {
   const [presetsOpen, setPresetsOpen] = useState(false)
   const [topologyOpen, setTopologyOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1, true)
+  const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1)
 
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
 
@@ -90,7 +90,6 @@ function App() {
       infraStatus.refresh()
     })
     setSelection({ kind: 'component', id: 'k6' })
-    sidebar.expand()
     setHistoryOpen(false)
   }
 
@@ -101,7 +100,6 @@ function App() {
   function loadScenarioFromPreset(scenario: CustomScenario) {
     trafficConfig.loadScenario(scenario)
     setSelection({ kind: 'component', id: 'k6' })
-    sidebar.expand()
   }
 
   return (
@@ -155,9 +153,9 @@ function App() {
       {historyOpen && <RunHistoryPanel lastSavedRunId={trafficRun.lastSavedRunId} onReuseRun={reuseRun} onClose={() => setHistoryOpen(false)} />}
 
       <div className="app-body">
-        <aside className="app-sidebar-left" style={{ width: sidebar.width, padding: sidebar.collapsed ? 0 : undefined }}>
-          {!sidebar.collapsed && (
-            <>
+        {(selectedComponent || selectedConnection) && (
+          <>
+            <aside className="app-sidebar-left" style={{ width: sidebar.width }}>
               {selectedComponent?.id === 'k6' && (
                 <K6ConfigPanel
                   component={selectedComponent}
@@ -193,27 +191,10 @@ function App() {
                 />
               )}
               {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}
-              {!selectedComponent && !selectedConnection && (
-                <p className="sidebar-empty-note">Select a node or connection on the graph to see its controls and status.</p>
-              )}
-            </>
-          )}
-        </aside>
-        <div className="app-resizer" onPointerDown={sidebar.onPointerDown}>
-          <button
-            type="button"
-            className="app-resizer-toggle"
-            onClick={(e) => {
-              e.stopPropagation()
-              sidebar.toggleCollapsed()
-            }}
-            onPointerDown={(e) => e.stopPropagation()}
-            aria-label={sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            title={sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            {sidebar.collapsed ? '›' : '‹'}
-          </button>
-        </div>
+            </aside>
+            <div className="app-resizer" onPointerDown={sidebar.onPointerDown} />
+          </>
+        )}
 
         <main className="app-center">
           <Diagram
@@ -223,14 +204,8 @@ function App() {
             trafficActive={trafficRun.running}
             infraStatus={infraStatus.status}
             selectedConnectionIndex={selection?.kind === 'connection' ? selection.index : null}
-            onSelectComponent={(id) => {
-              setSelection({ kind: 'component', id })
-              sidebar.expand()
-            }}
-            onSelectConnection={(index) => {
-              setSelection({ kind: 'connection', index })
-              sidebar.expand()
-            }}
+            onSelectComponent={(id) => setSelection({ kind: 'component', id })}
+            onSelectConnection={(index) => setSelection({ kind: 'connection', index })}
             metaById={metaById}
             pinnedIds={pins.pinnedIds}
             resourceHistoryByContainer={resourceHistory}
