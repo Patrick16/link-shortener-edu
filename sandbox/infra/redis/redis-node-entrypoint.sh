@@ -45,6 +45,20 @@
 # whole point of running 3 Sentinels is meant to provide), but a straight disagreement with no
 # majority is treated the same as "no answer" and goes through the same retry/ambiguity handling
 # above.
+#
+# "ANY_SENTINEL_HOST_RESOLVED=0" means no Sentinel answered DNS just now - it does NOT mean this
+# container's own volumes are blank. Found live: a plain `docker compose up` onto volumes left over
+# from an earlier session (this node's own STATE_FILE already saying "master" from a previous real
+# failover, Sentinel's own sentinel.conf already carrying a learned "mymaster" IP from that same
+# earlier topology) hits this exact branch, because the Sentinel *containers* genuinely don't exist
+# yet at that instant - and this branch, by design, never consults STATE_FILE or warns that it
+# didn't. Two separately-persisted memories (this node's and Sentinel's) can then each resurrect
+# independently, pointing at two different, no-longer-accurate pictures of who's master, without
+# either side ever being wrong about what IT remembers. The log line below used to call this a
+# "genuine cold start", which is only true for a container's own reachability, not for the volumes
+# behind it - `sandbox/scripts/stop-stack.ps1 -Wipe` (`docker compose down -v`) is what actually
+# guarantees a blank slate, since it drops every data-plane AND Sentinel volume together, not just
+# Postgres's.
 
 SENTINELS="redis-sentinel-1 redis-sentinel-2 redis-sentinel-3"
 STATE_FILE="/state/last-confirmed-role"
@@ -125,7 +139,7 @@ DEVIATES=0
 
 if [ -z "$MASTER_ADDR" ]; then
   if [ "$ANY_SENTINEL_HOST_RESOLVED" = "0" ]; then
-    echo "redis-node-entrypoint: no Sentinel container exists yet (genuine cold start) - using this node's default role ($NODE_DEFAULT_ROLE)"
+    echo "redis-node-entrypoint: no Sentinel container reachable yet - using this node's default role ($NODE_DEFAULT_ROLE). This only means Sentinel didn't answer DNS just now, NOT that this node's or Sentinel's own persisted state is actually blank - if either volume survived from an earlier session, this 'cold' boot can still race a stale memory into existence (see this script's own header comment)."
   elif [ "$LAST_ROLE" = "master" ]; then
     if [ "$DEVIATES" = "1" ]; then
       echo "redis-node-entrypoint: AMBIGUOUS - Sentinel container(s) exist but none gave a confident answer after $max_attempts attempts, and this node's last Sentinel-confirmed role was master even though its compose-declared default is '$NODE_DEFAULT_ROLE'. This looks like a real promotion Sentinel can't currently confirm, not a normal cold start - trusting the last confirmed role and starting as master anyway (write-fencing via '$MIN_REPLICAS_FLAGS' keeps it from accepting writes until a replica connects), but the topology MUST be reconciled manually once Sentinel is reachable again."
