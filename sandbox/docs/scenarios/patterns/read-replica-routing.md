@@ -98,3 +98,6 @@ primary-only and recover again without touching a terminal — see
 - [High availability & failover](pattern:high-availability-failover) — same "replica of a
   primary" shape, different goal (surviving a primary's death, not scaling reads) — Postgres
   replicas here do **not** fail over automatically, unlike Redis/Mongo in that pattern.
+- [Hedged reads](pattern:hedged-reads) — another "multiple replicas, one logical read" shape, but
+  the opposite trade-off: this pattern picks one node ahead of time to spread load, hedging races
+  more than one node per request to cut tail latency.

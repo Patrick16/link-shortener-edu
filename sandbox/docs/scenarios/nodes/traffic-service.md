@@ -102,6 +102,8 @@ makes "always attempt it, even on a Postgres-side redelivery" safe rather than d
   (resilience-gap) — fixed
 - 🐛 [Docker-internal IPs were misclassified as public, hitting a real external API on every click](pitfall:traffic-geoip-dualstack-misclassified)
   (cpu-leak) — fixed
+- 🐛 [A `Guid` field in a Mongo document needs its own `BsonGuidRepresentation`](pitfall:mongo-guid-field-needs-bsonguidrepresentation)
+  (db-query) — fixed
 - ⚠️ [Two independent event consumers doubled load on a shared rate-limited external API](pitfall:geoip-dual-consumer-rate-limit-doubling)
   (architecture-bug) — fixed
 - ⚠️ [Shared-cache DI wiring copy-pasted across two independently deployed services](pitfall:geoip-cache-wiring-duplicated-across-services)

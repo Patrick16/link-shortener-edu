@@ -198,6 +198,76 @@ flowchart LR
   non-public IP, which matters when trying to reproduce rejections in a local docker-compose run
   where most client IPs are docker-internal.
 
+## Turning it off
+
+Every breaker above is **always on in production code**, but for an educational sandbox whose whole
+point is to let someone *feel* the difference a pattern makes, that's a real gap: there was no way
+to see the "without a circuit breaker" baseline live — only read about it. A live on/off switch
+closes that gap: with it, stop a dependency (e.g. RabbitMQ), watch a breaker open and every
+subsequent call fail fast, flip breakers off, repeat the same outage, and watch every call instead
+pay the dependency's full timeout again before falling back to whatever fail-open behavior already
+existed underneath (the SQLite queue, a cache miss, ...).
+
+**A DI-time no-op swap, not an if/else in the call path** — matching this project's own standing
+convention for behavior toggles. `ResiliencePipelines.BuildCircuitBreaker` takes a third parameter,
+`bool enabled = true`; when `false`, it returns `ResiliencePipeline.Empty` (a real Polly pipeline
+whose `ExecuteAsync` just invokes the callback directly) instead of building a breaker. This is
+decided once, at service registration (`TryAddKeyedSingleton`), never re-checked per call:
+
+```csharp
+// src/backend/Shared/Common/ResiliencePipelines.cs (shape)
+public static ResiliencePipeline BuildCircuitBreaker(string dependencyName, ILogger logger, bool enabled = true)
+{
+    if (!enabled)
+    {
+        return ResiliencePipeline.Empty; // every ExecuteAsync call just invokes the delegate directly
+    }
+    return new ResiliencePipelineBuilder().AddCircuitBreaker(/* ... */).Build();
+}
+
+// read once at startup, independently by each of the three call sites below
+public static bool CircuitBreakersEnabled(IConfiguration configuration) =>
+    configuration.GetValue("Resilience:CircuitBreakersEnabled", true);
+```
+
+The three `TryAddKeyedSingleton` call sites (`RedisExtensions.cs`, `GrpcMessagingExtensions.cs`,
+`RabbitMqExtensions.cs`) all pass `ResiliencePipelines.CircuitBreakersEnabled(configuration)` as the
+new argument. The ip-api.com breaker (built differently, via
+`Microsoft.Extensions.Http.Resilience`'s `AddResilienceHandler`, not this shared builder — see "How
+it's implemented here" above) can't return an empty pipeline the same way, so `GeoIpExtensions.cs`
+instead just skips chaining `.AddCircuitBreaker(...)` onto that pipeline when the flag reads false;
+the bulkhead concurrency limiter earlier in that same pipeline is a separate toggle and is
+unaffected either way.
+
+**The toggle recreates six containers, not one.** `InfraToggleService` tracks
+`_circuitBreakersEnabled` as in-memory standing state (default `true`, lost on a control-api
+restart like every other toggle here), exposed via the `circuit-breaker-toggle` capability
+(`GET`/`POST /api/infra/circuit-breakers`) and `CIRCUIT_BREAKERS_ENABLED` in `CurrentStandingEnv()`.
+Flipping it force-recreates every service that registers at least one breaker —
+`auth-api`/`link-api`/`redirect-api`/`shortener-service`/`traffic-service`/`reporting-service` —
+via `sandbox/docker-compose.yml`'s `Resilience__CircuitBreakersEnabled:
+"${CIRCUIT_BREAKERS_ENABLED:-true}"` on each of those six. `reporting-api` is deliberately excluded:
+it only touches Redis through `AddRedisMultiplexer` for SignalR pub/sub, which registers no breaker
+of its own. The architecture-map control (`CircuitBreakerControl.tsx`, registered under the
+`circuit-breaker-toggle` capability name on all six affected nodes) can be opened from any one of
+them — there's exactly one shared flag, not six independent ones, so toggling from any node's panel
+affects all six together.
+
+```mermaid
+flowchart LR
+    UI["Any of the 6 nodes' panels\n(CircuitBreakerControl)"] -- "POST /api/infra/circuit-breakers" --> CAPI["control-api\nInfraToggleService"]
+    CAPI -- "force-recreate, --no-deps,\nResilience__CircuitBreakersEnabled=false" --> Services["auth-api, link-api, redirect-api,\nshortener-service, traffic-service,\nreporting-service"]
+    Services -- "CircuitBreakersEnabled(config) read\nonce at startup" --> Pipeline{"enabled?"}
+    Pipeline -- "true" --> Breaker["real Polly breaker\n(FailureRatio/BreakDuration as above)"]
+    Pipeline -- "false" --> Empty["ResiliencePipeline.Empty\n(every call just runs the delegate)"]
+```
+
+Because the flag is read once per process at startup, toggling it is "recreate six containers" (a
+few seconds), not an instant in-process flip — the same "recreate, don't hot-reload" shape every
+other `InfraToggleService` toggle already uses in this project. Disabling the breaker also doesn't
+touch the ip-api.com pipeline's separate bulkhead/concurrency limiter (see "A related pattern" above)
+— that stays active either way, since it's a different toggle covering a different failure mode.
+
 ## Pitfalls
 
 No pitfall-docs recorded for this pattern yet — the tuning duplication between the shared builder

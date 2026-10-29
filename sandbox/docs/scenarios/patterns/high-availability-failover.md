@@ -100,6 +100,8 @@ reach a voting majority, unlike either other store).
   (resilience-gap) — fixed
 - ⚠️ [A failed "temporarily change state, then undo it" sequence can throw before the undo ever runs](pitfall:mongo-reconfig-timeout-leaves-priorities-skewed)
   (resilience-gap) — fixed
+- ⚠️ [Assuming the first host in a replica-set connection string is always the primary](pitfall:mongo-hedge-static-primary-assumption)
+  (architecture-bug) — fixed
 - ⚠️ [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
   (resilience-gap) — fixed
 

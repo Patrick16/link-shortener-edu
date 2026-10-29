@@ -97,6 +97,8 @@ many small transactions.
   (infrastructure-bug) — fixed
 - 🐛 [A reporting query ran five independent round trips sequentially, one of them redundant](pitfall:clickhouse-summary-query-sequential-and-redundant)
   (db-query) — fixed
+- 🐛 [A `Guid` field in a Mongo document needs its own `BsonGuidRepresentation`](pitfall:mongo-guid-field-needs-bsonguidrepresentation)
+  (db-query) — fixed
 
 ## Relatives
 

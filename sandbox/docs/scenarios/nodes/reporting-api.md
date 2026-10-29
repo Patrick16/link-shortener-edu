@@ -94,8 +94,19 @@ underlying Mongo document keeps the raw IP (TrafficService needs it for geo-IP r
 handing a visitor's IP to the link owner through this API is a PII exposure this feature has no need
 to take on. Pre-existing Mongo documents from before this endpoint shipped have no `UserId` (the
 field didn't exist yet) and so can never show up here for any real caller — invisible, not errored,
-the same backward-compatible shape `ClickFact.UserId` already has on the ClickHouse side. There is
-currently no frontend consumer of this endpoint — backend-only as of this writing.
+the same backward-compatible shape `ClickFact.UserId` already has on the ClickHouse side. The
+product dashboard (`src/frontend/app`, `DashboardPage`'s "Recent clicks" panel) now consumes this
+endpoint, fetched independently of the existing ClickHouse-backed "Stats" panel — both panels can be
+on screen at once and can disagree in liveness, since they're fed by two separate consumers
+(ReportingService→ClickHouse, TrafficService→Mongo) of the same `ClickTrackedEvent`.
+
+The query itself doesn't go straight to the replica set's driver-picked node: `GetRecentAsync` is
+actually served by `HedgedClickMetaQueryService`, which races the same query against two of `rs0`'s
+current secondaries and takes whichever answers first, to cut tail latency on a slow replica — see
+[Hedged reads](pattern:hedged-reads) for the full mechanism (the hedge-delay race, live primary
+detection, the `mongo-hedge-delay` control dial). `GuidRepresentation` is also worth knowing about
+here: `ClickMeta.UserId` (the field this query filters on) needs its own
+`[BsonGuidRepresentation(...)]` for the driver to serialize it at all — see this node's Pitfalls.
 
 ```mermaid
 flowchart LR
@@ -104,9 +115,9 @@ flowchart LR
     TS -- "Postgres insert" --> PG[(clicks_db)]
     TS -- "Mongo upsert\n(ClickMeta incl. UserId)" --> MG[(clicks_meta_db)]
     Caller["Link owner (JWT)"] -- "GET /reports/hash/clicks?limit=" --> RepAPI["ReportingApi\nReportsController"]
-    RepAPI -- "GetRecentAsync(hash, callerUserId, limit)" --> MCQS["MongoClickMetaQueryService"]
-    MCQS -- "filter Hash+UserId, sort ClickedAt desc,\nlimit (compound index)" --> MG
-    MCQS -- "ClickDetail[] (no IpAddress)" --> RepAPI
+    RepAPI -- "GetRecentAsync(hash, callerUserId, limit)" --> HCQS["HedgedClickMetaQueryService\n(races 2 secondaries, see Hedged reads)"]
+    HCQS -- "filter Hash+UserId, sort ClickedAt desc,\nlimit (compound index)" --> MG
+    HCQS -- "ClickDetail[] (no IpAddress)" --> RepAPI
 ```
 
 **Live top links**, three pieces working together:
@@ -240,6 +251,12 @@ bug — see this node's Pitfalls for both it and the nginx keepalive/hashing iss
   (infrastructure-bug) — fixed
 - 🐛 [A reporting query ran five independent round trips sequentially, one of them redundant](pitfall:clickhouse-summary-query-sequential-and-redundant)
   (db-query) — fixed
+- 🐛 [A `Guid` field in a Mongo document needs its own `BsonGuidRepresentation`](pitfall:mongo-guid-field-needs-bsonguidrepresentation)
+  (db-query) — fixed
+- ⚠️ [Disposing a `CancellationTokenSource` the instant it's "no longer needed," not once its task is actually done](pitfall:cts-disposed-before-task-finishes)
+  (concurrency) — fixed
+- ⚠️ [Assuming the first host in a replica-set connection string is always the primary](pitfall:mongo-hedge-static-primary-assumption)
+  (architecture-bug) — fixed
 
 ## Relatives
 
@@ -257,3 +274,5 @@ bug — see this node's Pitfalls for both it and the nginx keepalive/hashing iss
 - [CQRS fan-out](pattern:cqrs-fanout)
 - [Distributed locking: Redis claims](pattern:distributed-locking-redis) — the cross-replica push
   claim `TopLinksPushService` takes before pushing
+- [Hedged reads](pattern:hedged-reads) — the `/clicks` query races two of Mongo's secondaries
+  instead of waiting on whichever one the driver happened to pick

@@ -104,6 +104,10 @@ flowchart TD
 
 - ⚠️ [A failed "temporarily change state, then undo it" sequence can throw before the undo ever runs](pitfall:mongo-reconfig-timeout-leaves-priorities-skewed)
   (resilience-gap) — fixed
+- 🐛 [A `Guid` field in a Mongo document needs its own `BsonGuidRepresentation`](pitfall:mongo-guid-field-needs-bsonguidrepresentation)
+  (db-query) — fixed
+- ⚠️ [Assuming the first host in a replica-set connection string is always the primary](pitfall:mongo-hedge-static-primary-assumption)
+  (architecture-bug) — fixed
 
 ## Relatives
 
@@ -115,3 +119,5 @@ flowchart TD
 ### Patterns
 
 - [High availability & failover](pattern:high-availability-failover)
+- [Hedged reads](pattern:hedged-reads) — ReportingApi races two of this replica set's current
+  secondaries for the `/clicks` query instead of waiting on just one
