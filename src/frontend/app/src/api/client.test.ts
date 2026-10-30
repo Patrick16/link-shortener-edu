@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { apiFetch, ApiError, getAccessToken, setAccessToken } from './client'
+import { apiFetch, ApiError, getAccessToken, setAccessToken, setRefreshTokenHandler } from './client'
 
 describe('access token storage', () => {
   beforeEach(() => {
@@ -153,6 +153,94 @@ describe('apiFetch', () => {
     const result = await apiFetch<undefined>('https://api.example.com', '/things')
 
     expect(result).toBeUndefined()
+  })
+})
+
+describe('apiFetch - 401 refresh-and-retry', () => {
+  beforeEach(() => {
+    setAccessToken(null)
+    setRefreshTokenHandler(null)
+    vi.stubGlobal('fetch', vi.fn())
+  })
+
+  afterEach(() => {
+    setRefreshTokenHandler(null)
+    vi.unstubAllGlobals()
+  })
+
+  it('refreshes once and retries with the new token on a 401 from an authenticated call', async () => {
+    setAccessToken('stale-token')
+    const refreshHandler = vi.fn().mockImplementation(async () => {
+      setAccessToken('fresh-token')
+      return 'fresh-token'
+    })
+    setRefreshTokenHandler(refreshHandler)
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true }), { status: 200 }))
+
+    const result = await apiFetch<{ ok: boolean }>('https://api.example.com', '/things', { auth: true })
+
+    expect(result).toEqual({ ok: true })
+    expect(refreshHandler).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledTimes(2)
+    const [, secondInit] = vi.mocked(fetch).mock.calls[1]
+    const headers = secondInit!.headers as Record<string, string>
+    expect(headers['Authorization']).toBe('Bearer fresh-token')
+  })
+
+  it('does not retry a 401 from a call that never attached a Bearer token (e.g. refresh itself)', async () => {
+    const refreshHandler = vi.fn()
+    setRefreshTokenHandler(refreshHandler)
+    vi.mocked(fetch).mockResolvedValue(new Response('Unauthorized', { status: 401 }))
+
+    await expect(apiFetch('https://api.example.com', '/refresh', { method: 'POST' })).rejects.toMatchObject({
+      status: 401,
+    })
+    expect(refreshHandler).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('throws the original 401 (not the refresh failure) when the refresh itself fails', async () => {
+    setAccessToken('stale-token')
+    setRefreshTokenHandler(vi.fn().mockRejectedValue(new Error('refresh token expired')))
+    vi.mocked(fetch).mockResolvedValue(new Response('Unauthorized', { status: 401 }))
+
+    await expect(apiFetch('https://api.example.com', '/things', { auth: true })).rejects.toMatchObject({
+      status: 401,
+      message: 'Unauthorized',
+    })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it('dedupes two concurrent 401s into a single refresh call', async () => {
+    // Regression this dedup exists to prevent: two requests failing at once would otherwise each
+    // independently call POST /refresh, and the refresh-token rotation's own reuse detection would
+    // revoke the session on the second call, logging the user out of what should be transparent.
+    setAccessToken('stale-token')
+    let resolveRefresh!: (token: string) => void
+    const refreshHandler = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveRefresh = resolve
+        }),
+    )
+    setRefreshTokenHandler(refreshHandler)
+    vi.mocked(fetch).mockImplementation(async (_url, init) => {
+      const headers = init?.headers as Record<string, string> | undefined
+      return headers?.['Authorization'] === 'Bearer fresh-token'
+        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        : new Response('Unauthorized', { status: 401 })
+    })
+
+    const first = apiFetch('https://api.example.com', '/a', { auth: true })
+    const second = apiFetch('https://api.example.com', '/b', { auth: true })
+    await Promise.resolve() // let both requests reach their first (401) fetch call
+    setAccessToken('fresh-token')
+    resolveRefresh('fresh-token')
+
+    await Promise.all([first, second])
+    expect(refreshHandler).toHaveBeenCalledOnce()
   })
 })
 

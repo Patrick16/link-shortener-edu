@@ -15,8 +15,9 @@ public class RedisWarmupServiceTests
         var services = new Mock<IServiceProvider>();
         services.Setup(s => s.GetService(typeof(IConnectionMultiplexer)))
             .Throws(new InvalidOperationException("Sentinel: Failed connecting to configured primary"));
+        services.Setup(s => s.GetService(typeof(IDistributedCache))).Returns(Mock.Of<IDistributedCache>());
 
-        var sut = new RedisWarmupService(Mock.Of<IDistributedCache>(), services.Object, NullLogger<RedisWarmupService>.Instance);
+        var sut = new RedisWarmupService(services.Object, NullLogger<RedisWarmupService>.Instance);
 
         await sut.StartAsync(CancellationToken.None);
     }
@@ -27,8 +28,10 @@ public class RedisWarmupServiceTests
         var cache = new Mock<IDistributedCache>();
         cache.Setup(c => c.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("redis down"));
+        var services = new Mock<IServiceProvider>();
+        services.Setup(s => s.GetService(typeof(IDistributedCache))).Returns(cache.Object);
 
-        var sut = new RedisWarmupService(cache.Object, Mock.Of<IServiceProvider>(), NullLogger<RedisWarmupService>.Instance);
+        var sut = new RedisWarmupService(services.Object, NullLogger<RedisWarmupService>.Instance);
 
         await sut.StartAsync(CancellationToken.None);
     }
@@ -43,8 +46,9 @@ public class RedisWarmupServiceTests
         // GetService returning null must be handled without touching PingAsync.
         var services = new Mock<IServiceProvider>();
         services.Setup(s => s.GetService(typeof(IConnectionMultiplexer))).Returns((object?)null);
+        services.Setup(s => s.GetService(typeof(IDistributedCache))).Returns(cache.Object);
 
-        var sut = new RedisWarmupService(cache.Object, services.Object, NullLogger<RedisWarmupService>.Instance);
+        var sut = new RedisWarmupService(services.Object, NullLogger<RedisWarmupService>.Instance);
 
         await sut.StartAsync(CancellationToken.None);
     }
@@ -63,11 +67,33 @@ public class RedisWarmupServiceTests
         cache.Setup(c => c.GetAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(neverCompletes.Task);
         var services = new Mock<IServiceProvider>();
         services.Setup(s => s.GetService(typeof(IConnectionMultiplexer))).Returns((object?)null);
-        var sut = new RedisWarmupService(cache.Object, services.Object, NullLogger<RedisWarmupService>.Instance);
+        services.Setup(s => s.GetService(typeof(IDistributedCache))).Returns(cache.Object);
+        var sut = new RedisWarmupService(services.Object, NullLogger<RedisWarmupService>.Instance);
 
         var startTask = sut.StartAsync(CancellationToken.None);
         var completed = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(8)));
 
         Assert.Same(startTask, completed);
+    }
+
+    [Fact]
+    public async Task StartAsync_NoDistributedCacheRegistered_SkipsItAndStillWarmsMultiplexer()
+    {
+        // AuthApi's own case (found in review, see AuthApiServiceExtensions.AddAuthRateLimiting's
+        // comment on why this service is now registered there too) - only a raw
+        // IConnectionMultiplexer is registered, no IDistributedCache at all. Must not throw trying
+        // to call a null cache.
+        var multiplexer = new Mock<IConnectionMultiplexer>();
+        var database = new Mock<IDatabase>();
+        database.Setup(d => d.PingAsync(It.IsAny<CommandFlags>())).ReturnsAsync(TimeSpan.Zero);
+        multiplexer.Setup(m => m.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(database.Object);
+        var services = new Mock<IServiceProvider>();
+        services.Setup(s => s.GetService(typeof(IConnectionMultiplexer))).Returns(multiplexer.Object);
+        services.Setup(s => s.GetService(typeof(IDistributedCache))).Returns((object?)null);
+
+        var sut = new RedisWarmupService(services.Object, NullLogger<RedisWarmupService>.Instance);
+
+        await sut.StartAsync(CancellationToken.None);
+        database.Verify(d => d.PingAsync(It.IsAny<CommandFlags>()), Times.Once);
     }
 }

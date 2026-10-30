@@ -18,9 +18,14 @@ namespace Infrastructure;
 //
 // IConnectionMultiplexer is resolved optionally (IServiceProvider.GetService, not a constructor
 // dependency) since only RedirectApi registers one directly - LinkApi only has the IDistributedCache
-// registration, so this same service works unmodified in both.
+// registration, so this same service works unmodified in both. IDistributedCache is resolved the
+// same optional way (found in review, added for AuthApi - see AuthApiServiceExtensions.
+// AddAuthRateLimiting's own comment): AuthApi registers only a raw IConnectionMultiplexer
+// (AddRedisRateLimiter), deliberately never AddRedisDistributedCache's cache/memory-cache/warmup
+// bundle (see RedisExtensions.AddRedisRateLimiter's own comment on why) - a hard constructor
+// dependency on IDistributedCache would make this service unusable there even though the
+// multiplexer-only warmup below is exactly what it needs.
 public sealed class RedisWarmupService(
-    IDistributedCache cache,
     IServiceProvider services,
     ILogger<RedisWarmupService> logger) : IHostedService
 {
@@ -49,6 +54,12 @@ public sealed class RedisWarmupService(
 
     private async Task WarmupDistributedCacheAsync(CancellationToken cancellationToken)
     {
+        var cache = services.GetService<IDistributedCache>();
+        if (cache is null)
+        {
+            return;
+        }
+
         try
         {
             await cache.GetAsync("__warmup__", cancellationToken);

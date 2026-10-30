@@ -39,4 +39,51 @@ public class LinkDeletionMarkerStoreTests
         // handling sees this as a real cancellation, not as a false "no tombstone found".
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => sut.GetAsync("abc12345", cts.Token));
     }
+
+    [Fact]
+    public async Task TryMarkOptimisticallyAsync_RedisCallNeverCompletes_RespectsCancellationInsteadOfHangingForever()
+    {
+        // Same gap as GetAsync above - StringSetAsync has no cancellable overload either, so this
+        // method's own ExecuteAsync lambda needs its own .WaitAsync(ct), not just GetAsync's.
+        // Overload matters for Moq: TryMarkOptimisticallyAsync's (key, value, expiry, when) call
+        // resolves to the 4-arg StringSetAsync(RedisKey, RedisValue, TimeSpan?, When) overload, not
+        // the 5-arg one with a trailing CommandFlags - confirmed via reflection against
+        // IDatabaseAsync, since StackExchange.Redis overloads this method several different ways.
+        var neverCompletes = new TaskCompletionSource<bool>();
+        var database = new Mock<IDatabase>();
+        database.Setup(d => d.StringSetAsync(
+                It.IsAny<RedisKey>(), It.IsAny<RedisValue>(), It.IsAny<TimeSpan?>(), It.IsAny<When>()))
+            .Returns(neverCompletes.Task);
+        var multiplexer = new Mock<IConnectionMultiplexer>();
+        multiplexer.Setup(m => m.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(database.Object);
+        var sut = new RedisLinkDeletionMarkerStore(
+            multiplexer.Object, EnabledConfig(), ResiliencePipeline.Empty, NullLogger<RedisLinkDeletionMarkerStore>.Instance);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => sut.TryMarkOptimisticallyAsync("abc12345", DeletedReason.Manual, cts.Token));
+    }
+
+    [Fact]
+    public async Task ConfirmAsync_RedisCallNeverCompletes_RespectsCancellationInsteadOfHangingForever()
+    {
+        // Same gap as GetAsync above - StringSetAsync has no cancellable overload either, so this
+        // method's own ExecuteAsync lambda needs its own .WaitAsync(ct), not just GetAsync's.
+        // ConfirmAsync's bare (key, value) call resolves to the Expiration/ValueCondition overload
+        // (the only one where every parameter past value has a default) - confirmed the same way as
+        // TryMarkOptimisticallyAsync's test above.
+        var neverCompletes = new TaskCompletionSource<bool>();
+        var database = new Mock<IDatabase>();
+        database.Setup(d => d.StringSetAsync(
+                It.IsAny<RedisKey>(), It.IsAny<RedisValue>(), It.IsAny<Expiration>(), It.IsAny<ValueCondition>(), It.IsAny<CommandFlags>()))
+            .Returns(neverCompletes.Task);
+        var multiplexer = new Mock<IConnectionMultiplexer>();
+        multiplexer.Setup(m => m.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(database.Object);
+        var sut = new RedisLinkDeletionMarkerStore(
+            multiplexer.Object, EnabledConfig(), ResiliencePipeline.Empty, NullLogger<RedisLinkDeletionMarkerStore>.Instance);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => sut.ConfirmAsync("abc12345", DeletedReason.Manual, DateTime.UtcNow, cts.Token));
+    }
 }

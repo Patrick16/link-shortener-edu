@@ -173,16 +173,24 @@ curl http://localhost:8081/health/ready  # -> Healthy, or a non-200 if Postgres/
 
 ## Known limitations (by design, for now)
 
-- **No rate limiting, no input validation beyond "is it well-formed JSON".** Fine for a learning
-  project's first scenario; not something you'd want unguarded on the open internet.
-- **Single Postgres instance, no replicas, no sharding.** That's scenarios 3 and 4.
-- **Click *metadata* doesn't exist yet.** The `Clicks` row itself (hash, in/outbound link, timestamp)
-  is real — but user-agent/referrer/headers → Mongo `ClicksMeta` isn't built (Mongo isn't in the
-  stack). See `../architecture.md`.
-- **No dead-letter queue.** Both consumers (`ShortenerService`, `TrafficService`) give up on a
-  message after 5 failed delivery attempts (`RabbitMqConsumer.MaxDeliveryAttempts`) and nack it
-  without requeueing — bounded, so a poison message can no longer loop indefinitely, but with nowhere
-  configured to catch it, it's simply dropped rather than landing somewhere for inspection.
+Stale as of this edit (found in external review, 2026-10-30): the three bullets this section used
+to carry here — "no rate limiting", "no dead-letter queue", "click metadata/Mongo doesn't exist" —
+all describe gaps that have since been built and documented elsewhere, not this file's own scope.
+Left as a pointer rather than re-narrating:
+
+- **Rate limiting** exists on both AuthApi and RedirectApi — see
+  [`nodes/auth-api.md`](nodes/auth-api.md) and [`nodes/redirect-api.md`](nodes/redirect-api.md).
+- **Dead-letter handling** exists (`{queue}.dead`, with inspect/replay endpoints) — see
+  [`02-async.md`](02-async.md)'s "Inspecting and recovering dead-lettered messages" section.
+- **Click metadata** exists — Mongo is in the stack, `ClickMeta` documents are written per click -
+  see [`02-async.md`](02-async.md)'s "Click metadata (Mongo)" section.
+
+Still accurate:
+
+- **No input validation beyond "is it well-formed JSON".** Fine for a learning project; not
+  something you'd want unguarded on the open internet.
+- **Single Postgres instance, no replicas, no sharding, by this scenario alone.** Read replicas and
+  partitioning are separate, independently-toggleable features — see `../architecture.md`.
 - **`infra/rabbitmq/definitions.json` (relative to `sandbox/`) is not used.** The exchange/queue/
   binding topology is declared by the application itself (see
   `src/backend/Shared/Infrastructure/RabbitMqPublisher.cs` and `RabbitMqConsumer.cs`), not loaded

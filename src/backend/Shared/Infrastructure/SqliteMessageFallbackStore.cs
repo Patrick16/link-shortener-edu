@@ -20,11 +20,21 @@ public sealed class SqliteMessageFallbackStore : IMessageFallbackStore
     // row back up - short enough that a real outage still recovers promptly, long enough to never
     // fire while a normal in-flight tick (PollInterval below is 30s) is still working the row.
     private static readonly TimeSpan StaleClaimThreshold = TimeSpan.FromMinutes(2);
+    // How many seconds SQLite's own busy handler blocks-and-retries internally before giving up and
+    // throwing SQLITE_BUSY to the caller - found in review: with no busy timeout set, Microsoft.Data
+    // .Sqlite's default is to fail IMMEDIATELY on contention, not to wait, so the multi-replica
+    // concurrent-writer scenario StaleClaimThreshold's own comment describes (N replicas sharing one
+    // file) could lose an event on nothing worse than two replicas' publishes landing in the same
+    // few milliseconds - no actual outage needed. 5s comfortably covers SaveAsync/DeleteAsync's own
+    // single-row writes without risking a real deadlock (SQLite's busy handler can't deadlock with
+    // itself - it's one writer waiting for another to finish its own short transaction).
+    private const int BusyTimeoutSeconds = 5;
     private readonly string _connectionString;
 
     public SqliteMessageFallbackStore(string connectionString)
     {
-        _connectionString = connectionString;
+        var builder = new SqliteConnectionStringBuilder(connectionString) { DefaultTimeout = BusyTimeoutSeconds };
+        _connectionString = builder.ConnectionString;
         EnsureTableCreated();
     }
 

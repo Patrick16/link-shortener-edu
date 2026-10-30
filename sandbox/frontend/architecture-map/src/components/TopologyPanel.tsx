@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { InfraToggleControl } from './InfraToggleControl'
 import { EnumToggleControl } from './EnumToggleControl'
 import { applyInfraConfig, type ApplySystemConfigResult } from '../utils/infraConfig'
@@ -16,6 +16,19 @@ const MESSAGING_MODE_OPTIONS: { value: MessagingMode; label: string }[] = [
   { value: 'rabbitmq', label: 'RabbitMQ (async)' },
   { value: 'grpc', label: 'gRPC (sync)' },
 ]
+
+// Read live from Docker on every GetInfraStatusAsync call (see InfraToggleService's own comment on
+// why), not cached control-api state like the other fields - so they can change out from under this
+// panel's draft at any time via a generic start/stop control on the node's own panel, not just
+// through this one. Found in review: without reconciling these, draft kept showing a stale value as
+// "unsaved changes" and Save would push that stale value right back, undoing the manual action.
+const LIVE_READ_FIELDS = [
+  'haproxyEnabled',
+  'postgresReplicasEnabled',
+  'redisEnabled',
+  'redisSentinelEnabled',
+  'mongoReplicasEnabled',
+] as const satisfies readonly (keyof InfraStatus)[]
 
 function sameStatus(a: InfraStatus, b: InfraStatus): boolean {
   return (
@@ -60,6 +73,36 @@ export function TopologyPanel({ status, onClose, onApplied, onShowAllLabels, onH
   useEffect(() => {
     if (!draft && status) setDraft(status)
   }, [draft, status])
+
+  // Tracks the previous poll's status so the reconciliation below can tell "this live field
+  // changed out from under the panel" apart from "the panel's own pending edit to this field
+  // hasn't round-tripped into status yet" - see LIVE_READ_FIELDS's own comment. Starts as the
+  // first status this panel ever saw, matching draft's own initial seed above.
+  const prevLiveStatusRef = useRef<InfraStatus | null>(status)
+
+  useEffect(() => {
+    if (!status) return
+    const prev = prevLiveStatusRef.current
+    prevLiveStatusRef.current = status
+
+    if (!prev) return
+
+    setDraft((current) => {
+      if (!current) return current
+      let next: InfraStatus | null = null
+      for (const field of LIVE_READ_FIELDS) {
+        // Only pull in the new live value when the draft hadn't already diverged from the last
+        // known live value on its own - i.e. the user isn't mid-edit on this exact field via this
+        // panel's own toggle. A field that's still untouched (draft === prev) but changed live
+        // (prev !== status) gets the fresh value; one already diverging is left alone.
+        if (current[field] === prev[field] && prev[field] !== status[field]) {
+          next ??= { ...current }
+          next[field] = status[field]
+        }
+      }
+      return next ?? current
+    })
+  }, [status])
 
   if (!draft) {
     return (

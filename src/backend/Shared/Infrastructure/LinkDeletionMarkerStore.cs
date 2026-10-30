@@ -76,8 +76,10 @@ public sealed class RedisLinkDeletionMarkerStore(
         {
             var value = JsonSerializer.Serialize(new LinkDeletionMarker(DateTime.UtcNow, reason));
             var db = _connectionMultiplexer.GetDatabase();
+            // .WaitAsync(ct) is load-bearing, not decorative - see GetAsync's own comment below for
+            // why ExecuteAsync alone does NOT cancel a hung-but-connected call on this pipeline.
             return await _resilience.ExecuteAsync(
-                ct => new ValueTask<bool>(db.StringSetAsync(Key(hash), value, OptimisticTtl, When.NotExists)),
+                ct => new ValueTask<bool>(db.StringSetAsync(Key(hash), value, OptimisticTtl, When.NotExists).WaitAsync(ct)),
                 cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -99,7 +101,7 @@ public sealed class RedisLinkDeletionMarkerStore(
             var value = JsonSerializer.Serialize(new LinkDeletionMarker(deletedAt, reason));
             var db = _connectionMultiplexer.GetDatabase();
             await _resilience.ExecuteAsync(
-                ct => new ValueTask(db.StringSetAsync(Key(hash), value)), cancellationToken);
+                ct => new ValueTask(db.StringSetAsync(Key(hash), value).WaitAsync(ct)), cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -117,11 +119,15 @@ public sealed class RedisLinkDeletionMarkerStore(
             // StackExchange.Redis's StringGetAsync has no CancellationToken overload at all (it
             // isn't cancellable from the inside), so a caller's token - e.g. RedirectController's
             // request budget - would otherwise be silently ignored here, no matter how slow a
-            // connected-but-hanging Redis gets (found in review: this call was the one piece of
-            // that budget's advertised coverage that wasn't actually bounded by it). The resilience
-            // pipeline's own ExecuteAsync already races the call against this token.
+            // connected-but-hanging Redis gets. ExecuteAsync alone does NOT fix this: this pipeline
+            // (ResiliencePipelines.BuildCircuitBreaker) is circuit-breaker-only, no timeout strategy,
+            // so without an explicit .WaitAsync(ct) racing the call itself, ExecuteAsync just awaits
+            // the callback's task directly and never observes cancellation while it's still pending
+            // (found in review, confirmed by running this file's own cancellation test against a
+            // never-completing mock - it hung instead of throwing). Same fix needed in
+            // TryMarkOptimisticallyAsync/ConfirmAsync above, which had the identical gap.
             var value = await _resilience.ExecuteAsync(
-                ct => new ValueTask<RedisValue>(db.StringGetAsync(Key(hash))), cancellationToken);
+                ct => new ValueTask<RedisValue>(db.StringGetAsync(Key(hash)).WaitAsync(ct)), cancellationToken);
             return value.IsNullOrEmpty ? null : JsonSerializer.Deserialize<LinkDeletionMarker>((string)value!);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

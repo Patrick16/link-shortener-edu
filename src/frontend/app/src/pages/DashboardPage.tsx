@@ -171,19 +171,18 @@ export default function DashboardPage() {
     }
   }
 
-  function toggleStats(hash: string) {
-    if (expandedHash === hash) {
-      setExpandedHash(null)
-      return
-    }
-
-    setExpandedHash(hash)
+  // `force` skips the "already loaded" guard below - used by the manual Refresh button (found
+  // missing in review: summaries/recentClicks cache for the rest of the session once loaded, with
+  // no way to see newer data short of a full page reload, even though both are genuinely live data
+  // that keeps changing as new clicks arrive). Toggling the panel closed and back open still only
+  // fetches once per hash, same as before - a refresh is an explicit action, not automatic.
+  function fetchStatsFor(hash: string, force: boolean) {
     // Skip refetching an already-loaded or in-flight summary, but NOT a previously failed one -
     // otherwise a transient failure (ReportingApi/ClickHouse briefly down) would lock that link's
     // panel into "Could not load stats" for the rest of the session with no way to retry short of a
     // full page reload.
     const existing = summaries[hash]
-    if (existing === undefined || existing === 'error') {
+    if (force || existing === undefined || existing === 'error') {
       setSummaries((prev) => ({ ...prev, [hash]: 'loading' }))
       getClickSummary(hash)
         .then((summary) => {
@@ -200,7 +199,7 @@ export default function DashboardPage() {
     // separate read models fed by two separate consumers of the same event, so one failing doesn't
     // imply anything about the other.
     const existingRecent = recentClicks[hash]
-    if (existingRecent === undefined || existingRecent === 'error') {
+    if (force || existingRecent === undefined || existingRecent === 'error') {
       setRecentClicks((prev) => ({ ...prev, [hash]: 'loading' }))
       getRecentClicks(hash)
         .then((clicks) => {
@@ -212,6 +211,16 @@ export default function DashboardPage() {
           setRecentClicks((prev) => ({ ...prev, [hash]: 'error' }))
         })
     }
+  }
+
+  function toggleStats(hash: string) {
+    if (expandedHash === hash) {
+      setExpandedHash(null)
+      return
+    }
+
+    setExpandedHash(hash)
+    fetchStatsFor(hash, false)
   }
 
   if (!user) return null
@@ -279,6 +288,14 @@ export default function DashboardPage() {
                 )}
                 {expandedHash === item.shortenLink && (
                   <>
+                    <button
+                      type="button"
+                      className="link-stats-refresh"
+                      onClick={() => fetchStatsFor(item.shortenLink, true)}
+                      disabled={summaries[item.shortenLink] === 'loading' && recentClicks[item.shortenLink] === 'loading'}
+                    >
+                      Refresh stats
+                    </button>
                     <StatsPanel summary={summaries[item.shortenLink] ?? 'loading'} />
                     <RecentClicksPanel clicks={recentClicks[item.shortenLink] ?? 'loading'} />
                   </>

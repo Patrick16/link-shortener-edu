@@ -195,6 +195,39 @@ describe('DashboardPage', () => {
     expect(statsApi.getClickSummary).toHaveBeenCalledTimes(1)
   })
 
+  it('refetches both summary and recent clicks when Refresh stats is clicked, even though both already loaded successfully', async () => {
+    // Found in review: summaries/recentClicks cache for the rest of the session once loaded (by
+    // design, see fetchStatsFor's own comment), but that left no way to see newer data short of a
+    // full page reload - both are genuinely live data that keeps changing as new clicks arrive.
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
+        totalCount: 1,
+      }),
+    )
+    vi.mocked(statsApi.getClickSummary).mockResolvedValue({
+      hash: 'abc12345',
+      totalClicks: 5,
+      byDay: [],
+      byCountry: [],
+      byDevice: [],
+      byBrowser: [],
+    })
+
+    render(<DashboardPage />)
+    await user.click(await screen.findByRole('button', { name: 'Stats' }))
+    await screen.findByText('5')
+    expect(statsApi.getClickSummary).toHaveBeenCalledTimes(1)
+    expect(statsApi.getRecentClicks).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole('button', { name: 'Refresh stats' }))
+
+    expect(statsApi.getClickSummary).toHaveBeenCalledTimes(2)
+    expect(statsApi.getRecentClicks).toHaveBeenCalledTimes(2)
+  })
+
   it('also fetches and shows recent clicks when expanding stats', async () => {
     const user = userEvent.setup()
     mockUser({ email: 'alice@example.com', name: 'Alice' })

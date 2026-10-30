@@ -120,6 +120,54 @@ public class SqliteMessageFallbackStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task SaveAsync_FileLockedByAnotherConnection_WaitsForBusyTimeoutInsteadOfThrowingImmediately()
+    {
+        // Found in review: with no busy timeout set, Microsoft.Data.Sqlite fails SQLITE_BUSY
+        // immediately on any write contention instead of waiting - under N replicas sharing this
+        // one file (see StaleClaimThreshold's own comment), that could lose an event on nothing
+        // worse than two concurrent SaveAsync calls landing within the same few milliseconds, no
+        // actual outage needed. Holds a real write lock open on a second connection to the same
+        // file (an uncommitted INSERT inside a transaction) and releases it from a background task
+        // shortly after - SaveAsync on the SUT must block until that release and then succeed,
+        // rather than throwing right away.
+        //
+        // Both SaveAsync and the lock release run via Task.Run, deliberately not just awaited inline
+        // one after another: Microsoft.Data.Sqlite's busy-handler retry blocks its calling thread
+        // synchronously rather than yielding cooperatively (confirmed by this test initially
+        // asserting Task.IsCompleted shortly after an unawaited call - it was already true, because
+        // the whole busy-wait had run synchronously inside that call expression itself, before
+        // control ever returned to the test method), so SaveAsync and the release genuinely need
+        // separate threads to race against each other at all.
+        var sut = NewSut();
+        await using var lockingConnection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={_dbPath};Pooling=False");
+        await lockingConnection.OpenAsync();
+        var lockingTransaction = await lockingConnection.BeginTransactionAsync();
+        await using (var lockCommand = lockingConnection.CreateCommand())
+        {
+            lockCommand.Transaction = (Microsoft.Data.Sqlite.SqliteTransaction)lockingTransaction;
+            lockCommand.CommandText = "INSERT INTO FailedMessages (MessageId, Topic, Payload, CreatedAt) VALUES ('lock-holder', 'topic', '{}', '2020-01-01T00:00:00Z');";
+            await lockCommand.ExecuteNonQueryAsync();
+        }
+
+        var releaseTask = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            await lockingTransaction.CommitAsync();
+        });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        await Task.Run(() => sut.SaveAsync(new FallbackMessage("msg-1", "topic", "{}", DateTime.UtcNow), CancellationToken.None));
+        stopwatch.Stop();
+        await releaseTask;
+
+        Assert.True(stopwatch.Elapsed >= TimeSpan.FromMilliseconds(400), $"Expected SaveAsync to wait for the lock (~500ms), not succeed instantly - took {stopwatch.Elapsed}");
+        // 5s matches SqliteMessageFallbackStore's own BusyTimeoutSeconds - well under it confirms
+        // SaveAsync succeeded once unblocked, rather than exhausting the whole budget and throwing.
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"Expected SaveAsync to succeed once the lock was released, not exhaust the full busy timeout - took {stopwatch.Elapsed}");
+        var pending = await sut.GetPendingAsync(CancellationToken.None);
+        Assert.Contains("msg-1", pending.Select(m => m.MessageId));
+    }
+
+    [Fact]
     public async Task GetPendingAsync_MoreThanFiveHundredRows_CapsBatchSize()
     {
         // Regression: during a long broker outage under load, this table can grow into the tens or

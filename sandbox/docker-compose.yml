@@ -1123,6 +1123,14 @@ services:
       OTEL_TRACES_SAMPLER_ARG: "${OTEL_TRACES_SAMPLER_ARG:-1}"
       # See auth-api's identical comment on this one.
       Resilience__CircuitBreakersEnabled: "${CIRCUIT_BREAKERS_ENABLED:-true}"
+      # Gates the pre-warm write above (ConnectionStrings__Redis's own comment) the same way
+      # link-api/redirect-api's Cache__Enabled gates their reads - found in review: this was
+      # missing entirely, so toggling caching off still left this service warming Redis on every
+      # link creation, an incomplete "cold cache" demo (not harmful on its own - nothing was
+      # reading from it with caching off - but misleading). Losing the pre-warm's read-your-writes
+      # benefit when caching is off is correct, not a regression: with caching off, RedirectApi
+      # reads Postgres directly anyway, so there is nothing left for the pre-warm to protect against.
+      Cache__Enabled: "${CACHE_ENABLED:-true}"
     depends_on:
       haproxy:
         condition: service_healthy

@@ -111,4 +111,15 @@ public interface IInfraToggleService
     bool GetCircuitBreakersEnabled();
 
     Task<bool> SetCircuitBreakersEnabledAsync(bool enabled, CancellationToken ct);
+
+    // Called once, at control-api startup (see ToggleStateReconcilerService) - every field above
+    // other than NginxBypassed/HaproxyEnabled/PostgresReplicasEnabled/RedisEnabled/
+    // RedisSentinelEnabled/MongoReplicasEnabled is in-memory standing state that resets to its
+    // hardcoded default on a control-api restart, desynced from whatever the already-running
+    // containers were actually last recreated with. Re-derives each cached field from the real env
+    // vars CurrentStandingEnv() set on them, so the very next toggle flip after a restart recreates
+    // services with their ACTUAL current config carried forward, not the hardcoded defaults -
+    // see InfraToggleService's own comment on this method for why a file-backed store wasn't
+    // chosen instead.
+    Task ReconcileFromLiveContainersAsync(CancellationToken ct);
 }

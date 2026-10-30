@@ -40,6 +40,7 @@ public static class ControlPlaneServiceExtensions
         services.AddHostedService<ResourceStatsPollerService>();
         services.AddHostedService<TopologyPollerService>();
         services.AddHostedService<SentinelSelfHealPollerService>();
+        services.AddHostedService<ToggleStateReconcilerService>();
         return builder;
     }
 

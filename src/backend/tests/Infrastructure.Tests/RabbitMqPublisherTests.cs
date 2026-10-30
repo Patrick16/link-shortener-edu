@@ -118,6 +118,35 @@ public class RabbitMqPublisherTests
     }
 
     [Fact]
+    public async Task PublishAsync_BrokerUnreachableAndFallbackSaveThrows_LogsPermanentLossAndRethrows()
+    {
+        // Found in review: this fallback save had no protection of its own - a SQLITE_BUSY from a
+        // concurrent replica sharing the same fallback file (or any other failure) used to propagate
+        // with nothing to mark it apart from "something unexpected escaped" further up the stack.
+        // Now logged, with the message's own id/topic, at the exact point the event is actually lost.
+        var connection = new Mock<IRabbitMqConnection>();
+        connection.Setup(x => x.CreateChannelAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("broker unreachable"));
+        var fallbackStore = new Mock<IMessageFallbackStore>();
+        fallbackStore.Setup(x => x.SaveAsync(It.IsAny<FallbackMessage>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("SQLITE_BUSY"));
+        var logger = new Mock<ILogger<RabbitMqPublisher>>();
+        var sut = new RabbitMqPublisher(connection.Object, fallbackStore.Object, logger.Object, NoBreaker);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.PublishAsync(new { Value = "hi" }, "some.topic", CancellationToken.None));
+
+        logger.Verify(
+            x => x.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("some.topic") && state.ToString()!.Contains("PERMANENTLY LOST")),
+                It.IsAny<InvalidOperationException>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task PublishAsync_BasicPublishThrows_SavesToFallbackStoreAndDiscardsChannel()
     {
         var channel = NewOpenChannelMock();

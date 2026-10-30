@@ -15,7 +15,11 @@ builder.AddAuthRateLimiting();
 builder.Services.AddFrontendCors(builder.Configuration, allowCredentials: true);
 
 builder.Services.AddHealthChecks()
-    .AddPostgresHealthCheck<DatabaseContext>();
+    .AddPostgresHealthCheck<DatabaseContext>()
+    // Found in review: AuthApi's rate limiter depends on Redis (AddAuthRateLimiting ->
+    // AddRedisRateLimiter -> AddRedisMultiplexer) but /health/ready never reflected that - only
+    // needs the multiplexer AddRedisMultiplexer already registers, not AddRedisDistributedCache.
+    .AddRedisHealthCheck();
 
 var app = builder.Build();
 

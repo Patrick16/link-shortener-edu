@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import * as authApi from '../api/authApi'
-import { getAccessToken, setAccessToken } from '../api/client'
+import { getAccessToken, requestTokenRefresh, setAccessToken, setRefreshTokenHandler } from '../api/client'
 import { decodeJwt } from './jwt'
 
 type AuthUser = {
@@ -45,6 +45,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(userFromToken(newToken))
   }, [])
 
+  // The actual refresh work, shared by apiFetch's reactive 401 retry (client.ts's
+  // requestTokenRefresh, registered below) and this file's own proactive exp-based timer -
+  // both funnel through requestTokenRefresh's single in-flight promise rather than each calling
+  // this directly, so the two paths can never independently race into two concurrent
+  // POST /refresh calls (see requestTokenRefresh's own comment on why that matters).
+  const refreshAndApply = useCallback(async (): Promise<string> => {
+    const response = await authApi.refresh()
+    applyToken(response.token)
+    return response.token
+  }, [applyToken])
+
+  useEffect(() => {
+    setRefreshTokenHandler(refreshAndApply)
+    return () => setRefreshTokenHandler(null)
+  }, [refreshAndApply])
+
   const logout = useCallback(() => {
     setAccessToken(null)
     setToken(null)
@@ -84,8 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const refreshOrLogout = async () => {
       try {
-        const response = await authApi.refresh()
-        if (!cancelled) applyToken(response.token)
+        // Through the shared dedup, not authApi.refresh() directly - a reactive 401 retry
+        // (client.ts's apiFetch) landing at the same moment this proactive timer fires shares this
+        // exact in-flight call instead of racing it into a second POST /refresh.
+        await requestTokenRefresh()
       } catch {
         if (!cancelled) logout()
       }

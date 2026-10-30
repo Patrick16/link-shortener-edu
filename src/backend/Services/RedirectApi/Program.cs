@@ -73,7 +73,6 @@ app.UseForwardedHeaders(forwardedHeadersOptions);
 app.UseApiExceptionHandling();
 app.UseHttpsRedirection();
 app.UseFrontendCors();
-app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthEndpoints();

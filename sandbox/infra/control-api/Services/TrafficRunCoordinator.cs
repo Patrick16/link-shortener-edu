@@ -72,7 +72,20 @@ public sealed class TrafficRunCoordinator(
             return false;
         }
 
-        activeCts.Cancel();
+        try
+        {
+            activeCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The run finished (and ReleaseSlot disposed this same CTS) in the window between this
+            // method reading _runCts above and calling Cancel() below - deliberately read outside
+            // the lock (see this class's own comment on why Cancel() itself isn't called while
+            // holding _gate). Nothing to cancel at this point; same outcome as _runCts already being
+            // null.
+            return false;
+        }
+
         return true;
     }
 
@@ -137,6 +150,11 @@ public sealed class TrafficRunCoordinator(
     {
         lock (_gate)
         {
+            // Dispose, not just drop the reference - found in review, a one-CTS-per-run leak
+            // (harmless on its own at human-interaction run rate, but still worth not leaving
+            // around). Safe to call twice: the success path calls ReleaseSlot once early and once
+            // more, as a no-op, from RunAsync's own finally block - Dispose() is idempotent.
+            _runCts?.Dispose();
             _runCts = null;
             _runActive = false;
         }

@@ -33,6 +33,16 @@ public static class AuthApiServiceExtensions
     public static WebApplicationBuilder AddAuthRateLimiting(this WebApplicationBuilder builder)
     {
         builder.AddRedisRateLimiter();
+        // Found in review: AuthApi had no warmup for the raw multiplexer AddRedisRateLimiter
+        // registers, unlike LinkApi/RedirectApi/ShortenerService's IDistributedCache connection (see
+        // RedisWarmupService's own comment on why this matters - the exact same connection-
+        // establishment tax, just on this service's rate limiter instead of its cache). Safe to add
+        // here without pulling in AddRedisDistributedCache's cache/memory-cache/InstanceName baggage
+        // this class's own comment on AddRedisRateLimiter already deliberately avoids for AuthApi -
+        // RedisWarmupService resolves IDistributedCache optionally (IServiceProvider.GetService, not
+        // a constructor dependency), so it degrades to warming the multiplexer alone when nothing
+        // registered one, exactly AuthApi's case.
+        builder.Services.AddHostedService<RedisWarmupService>();
 
         // Read directly from configuration (not IOptions<T>) - this is consumed once,
         // synchronously, while building the policy below, so there's nothing for IOptions<T>'s

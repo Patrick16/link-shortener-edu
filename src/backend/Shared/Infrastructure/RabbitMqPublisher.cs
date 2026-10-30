@@ -66,9 +66,26 @@ public sealed class RabbitMqPublisher(
             // too, silently losing the event instead of persisting it. This save is the actual safety
             // net for exactly the case a cancelled publish represents, so it needs its own chance to
             // run regardless of why the live attempt was aborted.
-            await _fallbackStore.SaveAsync(
-                new FallbackMessage(messageId, topic, payload, DateTime.UtcNow),
-                CancellationToken.None);
+            //
+            // This is the actual last line of defense - if it throws (found in review: it previously
+            // had no protection of its own beyond SqliteMessageFallbackStore's new busy-timeout), the
+            // event is gone for good, not just "still in the fallback queue". Logged here, at the
+            // exact point of loss with the message's own id/topic, rather than left to whichever
+            // generic catch happens to be further up the call stack (e.g. LocalPublishQueueWorker's,
+            // which can't tell this case apart from any other unexpected exception) - then rethrown
+            // so that catch still sees it and the existing "something unexpected escaped" accounting
+            // stays accurate.
+            try
+            {
+                await _fallbackStore.SaveAsync(
+                    new FallbackMessage(messageId, topic, payload, DateTime.UtcNow),
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Message {MessageId} on topic {Topic} is PERMANENTLY LOST - RabbitMQ publish failed and the SQLite fallback write also failed", messageId, topic);
+                throw;
+            }
         }
     }
 

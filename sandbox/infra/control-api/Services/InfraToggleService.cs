@@ -68,9 +68,14 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     private static readonly IReadOnlyList<string> DbTouchingServices =
         ["auth-api", "link-api", "redirect-api", "shortener-service", "traffic-service"];
 
-    // Only these two actually read/populate the Redis cache (see LinkCacheService) - shortener-
-    // service/traffic-service/auth-api have no cache to disable.
-    private static readonly IReadOnlyList<string> CacheUsingServices = ["link-api", "redirect-api"];
+    // link-api/redirect-api read/populate the Redis cache (see LinkCacheService); shortener-service
+    // only ever writes to it (the LinkCreatedConsumer pre-warm plus RedisLinkDeletionMarkerStore.
+    // ConfirmAsync's tombstone - see docker-compose.yml's own comments on both) but still needs the
+    // same Cache__Enabled gate, found missing in review: without it, toggling caching off still left
+    // this service warming/writing to Redis on every link creation/deletion - not harmful on its own
+    // (nothing was reading from it with caching off), but an incomplete "cold cache" demo. traffic-
+    // service/auth-api genuinely have no cache to disable at all.
+    private static readonly IReadOnlyList<string> CacheUsingServices = ["link-api", "redirect-api", "shortener-service"];
 
     // Only these two actually branch on Messaging:Mode (IEventDispatcher's DI registration) -
     // shortener-service/traffic-service/reporting-service always host their gRPC endpoint
@@ -105,8 +110,20 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     private static readonly IReadOnlyList<string> CircuitBreakerUsingServices =
         ["auth-api", "link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service"];
 
-    // In-memory standing toggle state - see InfraStatus for why this is fine for a local sandbox
-    // tool despite not surviving a control-api restart.
+    // In-memory standing toggle state - fine for a local sandbox tool not surviving a control-api
+    // restart in isolation (the user just has to re-apply whatever they'd set), but NOT fine
+    // on its own for what that reset actually does to an already-running stack: after a restart,
+    // every field below but _nginxBypassed resets to its hardcoded default, and the NEXT toggle
+    // flip's CurrentStandingEnv() recreates services using those stale defaults - potentially
+    // pointing a service at infra that isn't the infra actually running (e.g. REDIS_CONN back to
+    // Sentinel-form while Sentinel is still stopped). Found in external review, confirmed by
+    // reading GetInfraStatusAsync/CurrentStandingEnv together. ReconcileFromLiveContainersAsync
+    // below closes this at startup by re-deriving each field from the real env vars already-running
+    // containers were last recreated with - deliberately not a file-backed store
+    // (ScenarioStore/PresetStore's own shape): those two persist genuine user-authored content that
+    // has no other source of truth; this state's actual source of truth is always the live
+    // containers themselves; a file would just be a second, independently-stale copy of exactly
+    // what this method reads directly instead.
     private bool _nginxBypassed;
     private bool _pgcatEnabled = true;
     private bool _cacheEnabled = true;
@@ -958,5 +975,124 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
                 await runtime.Client.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, ct);
             }
         }
+    }
+
+    // See this class's own comment on the cached-field block above, and IInfraToggleService's
+    // comment on this method, for why this exists and why it's a live reconcile rather than a
+    // file-backed store. Reads three representative, already-running containers' real env vars
+    // (every env var CurrentStandingEnv() can set lands on at least one of them) rather than one
+    // container per field - cheaper, and link-api/traffic-service/reporting-api are exactly the
+    // services CurrentStandingEnv()'s own vars target anyway. Best-effort: a container not existing
+    // yet (e.g. control-api started before `docker compose up` ever ran) just means this field
+    // keeps its hardcoded default, same as before this method existed - not an error, since there's
+    // nothing live to reconcile against yet.
+    public async Task ReconcileFromLiveContainersAsync(CancellationToken ct)
+    {
+        var linkApiEnv = await GetContainerEnvAsync("link-api", ct);
+        if (linkApiEnv is not null)
+        {
+            // DB_HOST/DB_PORT/CACHE_ENABLED/etc. (CurrentStandingEnv()'s own keys) are docker-compose
+            // ${VAR} SUBSTITUTION names, resolved away by `docker compose up` into each service's
+            // real, already-rendered env vars below - they never appear on the container itself
+            // (confirmed live: an early version of this method looked for them directly and silently
+            // matched nothing, reconciling every field back to its hardcoded default no matter what
+            // was actually running - caught by actually toggling pgcat off and restarting control-api
+            // against the real stack, not just by a passing unit test).
+            if (linkApiEnv.TryGetValue("ConnectionStrings__Postgres", out var postgresConnStr))
+            {
+                _pgcatEnabled = postgresConnStr.Contains("Host=haproxy", StringComparison.OrdinalIgnoreCase);
+                var poolSize = ParseConnectionStringValue(postgresConnStr, "Maximum Pool Size");
+                if (poolSize is not null && int.TryParse(poolSize, out var npgsqlPoolSize)) _npgsqlPoolSize = npgsqlPoolSize;
+            }
+
+            if (linkApiEnv.TryGetValue("Cache__Enabled", out var cacheEnabled)) _cacheEnabled = cacheEnabled == "true";
+            if (linkApiEnv.TryGetValue("Cache__L1Enabled", out var l1CacheEnabled)) _l1CacheEnabled = l1CacheEnabled == "true";
+            if (linkApiEnv.TryGetValue("Cache__NegativeEnabled", out var negativeCacheEnabled)) _negativeCacheEnabled = negativeCacheEnabled == "true";
+            if (linkApiEnv.TryGetValue("Messaging__Mode", out var messagingMode)) _messagingMode = messagingMode;
+            if (linkApiEnv.TryGetValue("Resilience__CircuitBreakersEnabled", out var circuitBreakersEnabled)) _circuitBreakersEnabled = circuitBreakersEnabled == "true";
+            // No direct "which form is this" flag on the wire - RedisSentinelConnectionString is
+            // the only one of the two shipped forms containing "sentinel", so that substring is
+            // exactly as reliable a discriminator as comparing the whole string would be.
+            if (linkApiEnv.TryGetValue("ConnectionStrings__Redis", out var redisConn)) _redisConnectionViaSentinel = redisConn.Contains("sentinel", StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            logger.LogInformation("ReconcileFromLiveContainersAsync: link-api not running yet - keeping hardcoded toggle defaults for its fields");
+        }
+
+        var trafficServiceEnv = await GetContainerEnvAsync("traffic-service", ct);
+        if (trafficServiceEnv is not null)
+        {
+            if (trafficServiceEnv.TryGetValue("ConnectionStrings__Mongo", out var mongoConnStr))
+            {
+                // "mongodb://mongo1:27017/..." (primary-only) vs "mongodb://mongo1:27017,mongo2:...
+                // ,mongo3:.../..." (all 3) - mongo2 only ever appears in the all-hosts form, so its
+                // presence is a reliable enough discriminator without parsing the URI properly.
+                _mongoConnectionIncludesReplicas = mongoConnStr.Contains("mongo2", StringComparison.OrdinalIgnoreCase);
+                var readPreferenceMatch = System.Text.RegularExpressions.Regex.Match(mongoConnStr, "readPreference=([^&]+)");
+                if (readPreferenceMatch.Success) _mongoReadPreference = readPreferenceMatch.Groups[1].Value;
+            }
+
+            if (trafficServiceEnv.TryGetValue("GeoIp__MaxConcurrentRequests", out var bulkheadLimitRaw) && int.TryParse(bulkheadLimitRaw, out var bulkheadLimit)) _geoIpBulkheadLimit = bulkheadLimit;
+            if (trafficServiceEnv.TryGetValue("RabbitMq__PrefetchCount", out var prefetchRaw) && int.TryParse(prefetchRaw, out var prefetch)) _rabbitMqPrefetch = prefetch;
+        }
+        else
+        {
+            logger.LogInformation("ReconcileFromLiveContainersAsync: traffic-service not running yet - keeping hardcoded toggle defaults for its fields");
+        }
+
+        var reportingApiEnv = await GetContainerEnvAsync("reporting-api", ct);
+        if (reportingApiEnv is not null)
+        {
+            if (reportingApiEnv.TryGetValue("Mongo__HedgeDelayMs", out var hedgeDelayRaw) && int.TryParse(hedgeDelayRaw, out var hedgeDelay)) _mongoHedgeDelayMs = hedgeDelay;
+        }
+        else
+        {
+            logger.LogInformation("ReconcileFromLiveContainersAsync: reporting-api not running yet - keeping hardcoded toggle defaults for its fields");
+        }
+
+        logger.LogWarning(
+            "Reconciled standing toggle state from live container env vars: pgcat={Pgcat} cache={Cache} l1Cache={L1Cache} negativeCache={NegativeCache} messaging={Messaging} npgsqlPool={NpgsqlPool} circuitBreakers={CircuitBreakers} redisViaSentinel={RedisViaSentinel} mongoReadPreference={MongoReadPreference} geoIpBulkhead={GeoIpBulkhead} mongoIncludesReplicas={MongoIncludesReplicas} rabbitMqPrefetch={RabbitMqPrefetch} mongoHedgeDelayMs={MongoHedgeDelayMs}",
+            _pgcatEnabled, _cacheEnabled, _l1CacheEnabled, _negativeCacheEnabled, _messagingMode, _npgsqlPoolSize, _circuitBreakersEnabled,
+            _redisConnectionViaSentinel, _mongoReadPreference, _geoIpBulkheadLimit, _mongoConnectionIncludesReplicas, _rabbitMqPrefetch, _mongoHedgeDelayMs);
+    }
+
+    // Parses one "Key=Value" segment out of a semicolon-separated ADO.NET connection string (e.g.
+    // Npgsql's "Host=postgres;Port=5432;...;Maximum Pool Size=100") - null when the key isn't
+    // present, same "leave the field at its current value" contract every caller above relies on.
+    private static string? ParseConnectionStringValue(string connectionString, string key)
+    {
+        foreach (var segment in connectionString.Split(';'))
+        {
+            var separatorIndex = segment.IndexOf('=');
+            if (separatorIndex > 0 && segment[..separatorIndex].Trim().Equals(key, StringComparison.OrdinalIgnoreCase))
+            {
+                return segment[(separatorIndex + 1)..].Trim();
+            }
+        }
+
+        return null;
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>?> GetContainerEnvAsync(string serviceId, CancellationToken ct)
+    {
+        var container = await runtime.FindAsync(serviceId, ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var inspect = await runtime.Client.Containers.InspectContainerAsync(container.ID, ct);
+        var env = new Dictionary<string, string>();
+        foreach (var entry in inspect.Config.Env)
+        {
+            var separatorIndex = entry.IndexOf('=');
+            if (separatorIndex > 0)
+            {
+                env[entry[..separatorIndex]] = entry[(separatorIndex + 1)..];
+            }
+        }
+
+        return env;
     }
 }
