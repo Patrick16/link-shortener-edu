@@ -104,6 +104,8 @@ reach a voting majority, unlike either other store).
   (architecture-bug) — fixed
 - ⚠️ [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
   (resilience-gap) — fixed
+- ⚠️ [A control-plane process's in-memory cache of "what's currently toggled" has no source of truth once it restarts](pitfall:infra-toggle-state-resets-on-restart-desyncs-live-containers)
+  (architecture-bug) — fixed
 
 ## Relatives
 

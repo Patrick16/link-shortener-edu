@@ -74,6 +74,10 @@ replica.
   (race-condition) — fixed
 - ⚠️ [A docker compose up --scale call without --no-deps silently restarts whatever it depends on](pitfall:pgcat-scale-missing-no-deps-restarts-stopped-replicas)
   (infrastructure-bug) — fixed
+- ⚠️ [A control-plane process's in-memory cache of "what's currently toggled" has no source of truth once it restarts](pitfall:infra-toggle-state-resets-on-restart-desyncs-live-containers)
+  (architecture-bug) — fixed
+- ⚠️ [A docker-compose `${VAR}` substitution name never appears on the running container — only the real, rendered env var does](pitfall:control-api-reads-compose-substitution-names-not-rendered-env)
+  (infrastructure-bug) — fixed
 
 ## Relatives
 

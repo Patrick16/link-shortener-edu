@@ -97,9 +97,15 @@ resolve correctly." Gated independently via `Cache:NegativeEnabled` (same per-no
 control shape as L1's toggle).
 
 Both L1 and negative caching are only wired into `link-api`/`redirect-api`; `ShortenerService` also
-uses `EntityCacheService<Link>` (to pre-warm the cache after persisting) but always runs with every
-`Cache:*` flag at its hardcoded `true` default, regardless of what either control-panel toggle
-shows for LinkApi/RedirectApi.
+uses `EntityCacheService<Link>` (to pre-warm the cache after persisting, plus
+`RedisLinkDeletionMarkerStore.ConfirmAsync`'s tombstone write) but still always runs with
+`Cache:L1Enabled`/`Cache:NegativeEnabled` at their hardcoded `true` defaults, regardless of what
+either control-panel toggle shows for LinkApi/RedirectApi — those two sub-flags were never extended
+to it. The main `Cache:Enabled` on/off switch is different: it was missing from this node's env entirely
+until an external-review pass found the gap (toggling caching off left this node still
+warming/writing to Redis) — see [ShortenerService](node:shortener-service)'s own note on the fix.
+`Cache:Enabled` now reaches `shortener-service` the same way it reaches LinkApi/RedirectApi; only
+the L1/negative sub-flags remain link-api/redirect-api-only.
 
 ### TTL jitter: avoiding a synchronized expiry wave
 

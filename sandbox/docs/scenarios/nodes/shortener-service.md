@@ -65,6 +65,16 @@ prefetch only bounds unacked messages per channel, it doesn't create in-process 
 this node's Pitfalls for a race that scaling surfaced in code that had (at the time, correctly)
 assumed it would only ever run as one instance.
 
+This node's own Redis pre-warm (`LinkCreatedConsumer`, caching the link right after persisting it)
+and `RedisLinkDeletionMarkerStore.ConfirmAsync`'s tombstone write both now honor the same
+`Cache:Enabled` toggle LinkApi/RedirectApi read — found missing in external review: this service was
+left off the Caching toggle's service list entirely, so switching caching off in the control panel
+still left it warming/writing to Redis on every link creation/deletion. Not actively harmful by
+itself (nothing was reading the cache back with caching off), but it made the "cold cache" demo this
+toggle exists for incomplete. See [Caching](pattern:caching) for the full picture of which Cache
+sub-flags do and don't reach this node (the main on/off switch does now; L1/negative caching still
+don't).
+
 `HandleBatchAsync` is also what [LinkApi](node:link-api)'s custom-alias path calls synchronously,
 batch-of-one, over the same gRPC endpoint `Messaging:Mode=grpc` uses — this node has no separate
 code path for it. Its redelivery-safety check now compares each conflicting row's `OriginalLink`,

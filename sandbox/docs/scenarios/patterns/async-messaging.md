@@ -167,6 +167,8 @@ at all where `x-max-priority` reordering would have any effect.)
   (resilience-gap) — fixed
 - 🐛 [A React unmount guard has to re-arm itself every run, and an in-flight request needs to know if it's still the one being shown](pitfall:dlq-stats-panel-stale-async-response)
   (concurrency) — fixed
+- ⚠️ [A last-resort fallback write needs its own protection — it has no fallback of its own](pitfall:sqlite-fallback-save-no-busy-timeout-unprotected)
+  (resilience-gap) — fixed
 
 ## Relatives
 

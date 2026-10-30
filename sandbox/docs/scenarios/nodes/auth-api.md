@@ -83,12 +83,28 @@ address here. Its limit also has no docker-compose override knob (unlike `Redire
 100/60s default was already easy to trip in a demo, so there was no equivalent need to lower it
 live.
 
+The rate limiter's Redis dependency is a raw `AddRedisMultiplexer` connection (`AbortOnConnectFail=
+false`), deliberately not `AddRedisDistributedCache` — AuthApi has no actual cache to warm, so
+pulling in the full cache abstraction plus its memory-cache/warmup bundle just for the multiplexer
+would be dead weight. That deliberate choice had left a real gap: no health check and no connection
+warmup for that same multiplexer, so a cold first login/register paid the Redis connect cost on the
+request path itself (`RateLimitFailureMode.LocalFallback`'s fail-open window covered it in the
+meantime, but didn't make the cold hit free). Fixed by making `RedisWarmupService`'s
+`IDistributedCache` dependency optional (resolved via `IServiceProvider.GetService<T>()`, same
+pattern as its already-optional `IConnectionMultiplexer`) — when no `IDistributedCache` is
+registered, as here, the cache half of the warmup is a no-op and only the multiplexer gets warmed.
+`/health/ready` gained `.AddRedisHealthCheck()` (needs only the multiplexer, already registered),
+and `RedisWarmupService` is now registered as a hosted service alongside the rate limiter, without
+ever pulling in the cache bundle this service deliberately never needed.
+
 ## Pitfalls
 
 - 🐛 [Duplicate-email race could crash Register with an unhandled exception](pitfall:auth-duplicate-email-race)
   (race-condition) — fixed
 - 🐛 [Concurrent refresh-token rotations could fork the token family instead of detecting reuse](pitfall:auth-refresh-token-rotation-race)
   (race-condition) — fixed
+- ⚠️ [A 401-triggered token refresh needs to be deduped across concurrent callers, or it will trip the very reuse-detection it's supposed to avoid](pitfall:frontend-401-no-retry-with-refresh-dedup)
+  (resilience-gap) — fixed; the product frontend's own client-side half of this node's refresh-rotation mechanism
 
 ## Relatives
 

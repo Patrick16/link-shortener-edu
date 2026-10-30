@@ -132,6 +132,9 @@ answered DNS just now, never that either side's persisted memory is actually emp
   (resilience-gap) — fixed
 - ⚠️ [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
   (resilience-gap) — fixed
+- ⚠️ [A control-plane process's in-memory cache of "what's currently toggled" has no source of truth once it restarts](pitfall:infra-toggle-state-resets-on-restart-desyncs-live-containers)
+  (architecture-bug) — fixed; cited here for the "Redis back in Sentinel-form while Sentinel is
+  stopped" failure scenario
 
 ## Relatives
 

@@ -171,6 +171,8 @@ non-obvious part: that 15s is one shared, sequential clock Kestrel's own connect
   (race-condition) — fixed; this node writes the optimistic cache entry that closes it
 - 🐛 [Three services ran identical caching code against three disjoint Redis keyspaces](pitfall:redis-instance-name-breaks-cross-service-cache-sharing)
   (coupling) — fixed; found while verifying the fix above
+- ⚠️ [A backend idempotency guard only protects a retry if the client actually sends the key it's keyed on](pitfall:frontend-createlink-no-idempotency-key)
+  (resilience-gap) — fixed; the product frontend's own half of this node's idempotency feature
 - 🐛 [A soft-delete/expiry check duplicated across two read endpoints only got written into one of them](pitfall:link-api-getlink-missing-live-check)
   (architecture-bug) — fixed
 
