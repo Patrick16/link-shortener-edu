@@ -1,11 +1,19 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using Polly;
 using StackExchange.Redis;
 
 namespace Infrastructure.Tests;
 
 public class LinkDeletionMarkerStoreTests
 {
+    // Empty config -> Cache:Enabled defaults to true (same "no key set => enabled" convention as
+    // EntityCacheServiceTests), and ResiliencePipeline.Empty since this test exercises the
+    // cancellation-propagation try/catch below, not the circuit breaker itself.
+    private static IConfiguration EnabledConfig() =>
+        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+
     [Fact]
     public async Task GetAsync_RedisCallNeverCompletes_RespectsCancellationInsteadOfHangingForever()
     {
@@ -21,7 +29,8 @@ public class LinkDeletionMarkerStoreTests
             .Returns(neverCompletes.Task);
         var multiplexer = new Mock<IConnectionMultiplexer>();
         multiplexer.Setup(m => m.GetDatabase(It.IsAny<int>(), It.IsAny<object>())).Returns(database.Object);
-        var sut = new RedisLinkDeletionMarkerStore(multiplexer.Object, NullLogger<RedisLinkDeletionMarkerStore>.Instance);
+        var sut = new RedisLinkDeletionMarkerStore(
+            multiplexer.Object, EnabledConfig(), ResiliencePipeline.Empty, NullLogger<RedisLinkDeletionMarkerStore>.Instance);
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(20));
 
         // Propagates, same as every other budget-covered call in this request (Fetch,

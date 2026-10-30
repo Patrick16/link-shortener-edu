@@ -27,15 +27,35 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     private const string MongoAllHosts = "mongo1:27017,mongo2:27017,mongo3:27017";
     private const string MongoPrimaryOnlyHost = "mongo1:27017";
 
-    // The 5 containers that make up Redis's HA layer on top of the single redis-master - this
-    // toggle's own stops/starts, see SetRedisSentinelEnabledAsync.
-    private static readonly IReadOnlyList<string> RedisHaContainers = ["redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3", "redis-replica1", "redis-replica2"];
+    // Split in two (bug found live, 2026-10-29): starting all 5 in one pass raced redis-replica1/2's
+    // own entrypoint (which queries Sentinel for the master's address on every start) against
+    // SelfHealSentinelAsync's correction of that same Sentinel answer below - a replica that asked
+    // before the correction landed committed to a stale IP via a literal `--replicaof <ip> <port>`
+    // that Redis never re-resolves, permanently blocking ALL Redis writes once min-replicas-to-write
+    // comes back (connected_slaves never reaches 1). See SetRedisSentinelEnabledInternalAsync's ON
+    // path: Sentinels start and get healed FIRST, replicas only start once that's done, so their
+    // first-ever Sentinel query already gets the right answer - RedisInfraService.
+    // SelfHealReplicasAsync is a defense-in-depth backstop for the residual race (Docker's
+    // StartContainerAsync returns once the start is issued, not once the process inside is actually
+    // answering), not a replacement for this ordering.
+    private static readonly IReadOnlyList<string> RedisSentinelContainers = ["redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3"];
+    private static readonly IReadOnlyList<string> RedisReplicaContainers = ["redis-replica1", "redis-replica2"];
+
+    // The 5 containers that make up Redis's HA layer on top of the single redis-master - OFF stops
+    // all 5 together (order doesn't matter when stopping, unlike starting - see above), see
+    // SetRedisSentinelEnabledAsync.
+    private static readonly IReadOnlyList<string> RedisHaContainers = [.. RedisSentinelContainers, .. RedisReplicaContainers];
 
     // Every service that reads ConnectionStrings__Redis (see docker-compose.yml's REDIS_CONN
-    // indirection) - the Sentinel toggle recreates all 6 together so none of them is left pointed at
-    // a connection-string form the other 5 have already moved on from.
+    // indirection) - the Sentinel toggle recreates all 7 together so none of them is left pointed at
+    // a connection-string form the other 6 have already moved on from. auth-api added here (bug
+    // found live, 2026-10-29): it has no cache to disable (see CacheUsingServices) but DOES hold its
+    // own Redis connection for RedisRateLimitFilter (PLAN.md backlog item 9) - it was missing from
+    // this list entirely, so toggling Redis/Sentinel left it on whatever REDIS_CONN form it happened
+    // to be created with, desynced from the other 6, until some unrelated toggle (e.g. pgcat, via
+    // DbTouchingServices) recreated it as a side effect.
     private static readonly IReadOnlyList<string> RedisUsingServices =
-        ["link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service", "reporting-api"];
+        ["auth-api", "link-api", "redirect-api", "shortener-service", "traffic-service", "reporting-service", "reporting-api"];
 
     // The two REDIS_CONN forms SetRedisSentinelEnabledAsync switches the 6 services above between -
     // mirrors docker-compose.yml's own default (Sentinel-form) exactly, so this toggle's ON state
@@ -398,11 +418,12 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
 
     // Shared by SetCacheEnabledAsync/SetL1CacheEnabledAsync/SetNegativeCacheEnabledAsync - all
     // three recreate the exact same two services (CacheUsingServices), just with a different one
-    // of CurrentStandingEnv's cache-related env vars changed first. Also shared by
-    // SetRedisEnabledAsync's ON path (which sets _cacheEnabled directly and calls this instead of
-    // the public, gated method, same reasoning as every other un-gated private helper in this
-    // class) - always reads the fields rather than taking a parameter, the caller sets them first,
-    // this just recreates to match.
+    // of CurrentStandingEnv's cache-related env vars changed first - always reads the fields rather
+    // than taking a parameter, the caller sets them first, this just recreates to match.
+    // NOT used by SetRedisEnabledAsync's ON path anymore (bug found live, 2026-10-29) - that path
+    // also changes REDIS_CONN's form, which every RedisUsingServices member reads, not just these
+    // two; it now calls RecreateRedisUsingServicesAsync instead, which recreates the superset and
+    // still carries CurrentStandingEnv's CACHE_ENABLED along with it.
     private async Task RecreateCacheUsingServicesAsync(CancellationToken ct)
     {
         var env = CurrentStandingEnv();
@@ -622,7 +643,11 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
                 // REDIS_CONN form instead of trusting the container's own just-applied default.
                 await SetRedisMinReplicasToWriteAsync(_redisConnectionViaSentinel ? 1 : 0, ct);
                 _cacheEnabled = true;
-                await RecreateCacheUsingServicesAsync(ct);
+                // RecreateRedisUsingServicesAsync, not RecreateCacheUsingServicesAsync - this also
+                // moves REDIS_CONN from whatever it was (still Sentinel-form, docker-compose.yml's
+                // own default, if Redis was never toggled before) to the direct form, which every
+                // RedisUsingServices member reads, not just link-api/redirect-api's cache.
+                await RecreateRedisUsingServicesAsync(ct);
             }
             else
             {
@@ -691,14 +716,19 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // containers even start, so there is an unambiguous, confirmable master for both the freshly
     // (re)started replicas' own entrypoints and SelfHealSentinelAsync's ground-truth ROLE check to
     // anchor on - SelfHealSentinelAsync itself then forces every Sentinel's belief to match it
-    // immediately, rather than leaving that to chance or a 30s-away poll tick.
+    // immediately, rather than leaving that to chance or a 30s-away poll tick. Sentinels start (and
+    // get healed) BEFORE redis-replica1/2 even start - see RedisSentinelContainers/
+    // RedisReplicaContainers's own comment for the stale-REPLICAOF race this ordering closes; without
+    // it, a replica could ask a still-stale Sentinel for the master's address before
+    // SelfHealSentinelAsync's correction below ever lands.
     private async Task SetRedisSentinelEnabledInternalAsync(bool enabled, CancellationToken ct)
     {
         if (enabled)
         {
             await ReclaimRedisMasterRoleAsync(ct);
-            await SyncRedisHaContainersAsync(true, ct);
+            await SyncRedisHaContainersAsync(true, RedisSentinelContainers, ct);
             await redis.SelfHealSentinelAsync(ct);
+            await SyncRedisHaContainersAsync(true, RedisReplicaContainers, ct);
             _redisConnectionViaSentinel = true;
             await RecreateRedisUsingServicesAsync(ct);
             await SetRedisMinReplicasToWriteAsync(1, ct);
@@ -708,7 +738,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             await SetRedisMinReplicasToWriteAsync(0, ct);
             _redisConnectionViaSentinel = false;
             await RecreateRedisUsingServicesAsync(ct);
-            await SyncRedisHaContainersAsync(false, ct);
+            await SyncRedisHaContainersAsync(false, RedisHaContainers, ct);
         }
     }
 
@@ -842,9 +872,9 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // CONFIG REWRITE-learned state, replicas re-derive their role via Sentinel rather than blindly
     // rejoining as a replica - see docker-compose.yml's own comments on both), so there's nothing a
     // remove-and-recreate would buy here that stop/start doesn't already give for free.
-    private async Task SyncRedisHaContainersAsync(bool enabled, CancellationToken ct)
+    private async Task SyncRedisHaContainersAsync(bool enabled, IReadOnlyList<string> containers, CancellationToken ct)
     {
-        foreach (var name in RedisHaContainers)
+        foreach (var name in containers)
         {
             var container = await runtime.FindAsync(name, ct)
                 ?? throw new InvalidOperationException($"{name} container not found");

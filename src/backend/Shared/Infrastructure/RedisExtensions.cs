@@ -84,9 +84,16 @@ public static class RedisExtensions
     // Shared by LinkApi (writes the optimistic marker on DELETE), RedirectApi (reads it on every
     // resolve) and ShortenerService (confirms it from the consumer and the TTL sweep job) - all
     // three need it wired identically, so it lives here rather than being duplicated three times.
+    // AddRedisCircuitBreaker() added here (bug found live, 2026-10-29, alongside
+    // RedisLinkDeletionMarkerStore's own missing Cache:Enabled bypass): the keyed ResiliencePipeline
+    // RedisLinkDeletionMarkerStore now takes was only ever registered by whichever OTHER extension
+    // (AddRedisDistributedCache/AddRedisRateLimiter) a given Program.cs happened to also call - every
+    // current caller does, so this worked by accident, not by this method actually declaring its own
+    // dependency. Same self-sufficient, TryAdd-idempotent shape AddRedisRateLimiter already uses.
     public static IHostApplicationBuilder AddLinkDeletionMarkerStore(this IHostApplicationBuilder builder)
     {
         builder.AddRedisMultiplexer();
+        builder.AddRedisCircuitBreaker();
         builder.Services.AddSingleton<ILinkDeletionMarkerStore, RedisLinkDeletionMarkerStore>();
         return builder;
     }
@@ -111,6 +118,11 @@ public static class RedisExtensions
         builder.AddRedisMultiplexer();
         builder.AddRedisCircuitBreaker();
         builder.Services.AddSingleton<IRedisRateLimiter, RedisRateLimiter>();
+        // RedisRateLimitFilter's RateLimitFailureMode.LocalFallback dependency - registered here
+        // (not conditionally, per app) since it's cheap to construct and unused unless a policy
+        // actually opts into LocalFallback; same "always wire it, let the policy decide whether it's
+        // ever called" shape as the breaker above.
+        builder.Services.AddSingleton<ILocalFallbackRateLimiter, LocalFallbackRateLimiter>();
         return builder;
     }
 }

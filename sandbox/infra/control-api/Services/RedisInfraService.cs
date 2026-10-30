@@ -227,40 +227,13 @@ public sealed class RedisInfraService(IContainerRuntime runtime, ILogger<RedisIn
     // has no way to notice: its remembered address quietly stopped being Redis at all.
     public async Task SelfHealSentinelAsync(CancellationToken ct)
     {
-        var observations = new List<RedisRoleObservation>();
-        var containersByServiceId = new Dictionary<string, ContainerListResponse>();
-        foreach (var serviceId in RedisDataNodes)
-        {
-            var container = await runtime.FindAsync(serviceId, ct);
-            if (container is null)
-            {
-                continue;
-            }
-
-            containersByServiceId[serviceId] = container;
-            try
-            {
-                var output = await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "ROLE"], ct);
-                var role = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-                observations.Add(new RedisRoleObservation(serviceId, role switch { "master" => "master", "slave" => "replica", _ => "unreachable" }));
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "SelfHealSentinelAsync: failed to read ROLE from {ServiceId} - skipping this node for this tick", serviceId);
-            }
-        }
-
-        var realMasterServiceId = SelectSoleMaster(observations);
-        if (realMasterServiceId is null)
+        var realMaster = await FindRealMasterAsync(ct);
+        if (realMaster is null)
         {
             return;
         }
 
-        var realMasterIp = await runtime.GetContainerIpAsync(containersByServiceId[realMasterServiceId].ID, ct);
-        if (realMasterIp is null)
-        {
-            return;
-        }
+        var (realMasterServiceId, realMasterIp) = realMaster.Value;
 
         // Best-effort: read whatever down-after/quorum/failover-timeout is currently configured so a
         // correction below can restore it - SENTINEL MONITOR resets a freshly (re-)created "mymaster"
@@ -326,5 +299,122 @@ public sealed class RedisInfraService(IContainerRuntime runtime, ILogger<RedisIn
                 logger.LogWarning(ex, "SelfHealSentinelAsync: failed to re-point {ServiceId} at {RealMasterIp} - will retry next tick", sentinelServiceId, realMasterIp);
             }
         }
+    }
+
+    // Bug found live (2026-10-29 topology QA pass): SelfHealSentinelAsync above only corrects the
+    // SENTINELS' own belief about who's master - a replica that already committed to a WRONG master
+    // address is never corrected by anything. redis-node-entrypoint.sh's `--replicaof <ip> <port>`
+    // uses a literal IP (that's all Sentinel's own protocol ever returns), and Redis never
+    // re-resolves a literal IP on its own, so a replica that asked Sentinel before
+    // SelfHealSentinelAsync's correction landed (the race InfraToggleService.
+    // SetRedisSentinelEnabledInternalAsync's start-Sentinels-before-replicas ordering now minimizes,
+    // but doesn't fully eliminate - Docker's StartContainerAsync returns once the start is issued,
+    // not once the process inside is actually answering) stays stuck retrying a dead address
+    // forever: `connected_slaves:0` on the real master, which write-fences every Redis write once
+    // min-replicas-to-write is back to 1. Same ground-truth ROLE read as SelfHealSentinelAsync
+    // (FindRealMasterAsync), just corrected on the REPLICA side (REPLICAOF) instead of the
+    // Sentinels' side - called right after SelfHealSentinelAsync everywhere that runs (the
+    // Sentinel-enable toggle and SentinelSelfHealPollerService's own 30s tick), so this is a real
+    // backstop, not just a one-time fix applied at toggle time.
+    public async Task SelfHealReplicasAsync(CancellationToken ct)
+    {
+        var realMaster = await FindRealMasterAsync(ct);
+        if (realMaster is null)
+        {
+            return;
+        }
+
+        var (realMasterServiceId, realMasterIp) = realMaster.Value;
+
+        foreach (var serviceId in RedisDataNodes)
+        {
+            if (serviceId == realMasterServiceId)
+            {
+                continue;
+            }
+
+            var container = await runtime.FindAsync(serviceId, ct);
+            if (container is null)
+            {
+                continue;
+            }
+
+            string infoOutput;
+            try
+            {
+                infoOutput = await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "INFO", "replication"], ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "SelfHealReplicasAsync: failed to read replication INFO from {ServiceId} - skipping this tick", serviceId);
+                continue;
+            }
+
+            var masterHost = infoOutput
+                .Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault(l => l.StartsWith("master_host:", StringComparison.Ordinal))
+                ?["master_host:".Length..];
+
+            // Only re-points on a genuine address mismatch, never just because master_link_status is
+            // momentarily "down" - a replica correctly pointed at the real master's IP reconnects on
+            // its own (a real network blip), and re-issuing REPLICAOF on every such blip would just
+            // restart its full resync for no reason.
+            if (string.Equals(masterHost, realMasterIp, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            logger.LogWarning(
+                "SelfHealReplicasAsync: {ServiceId} was replicating from {MasterHost}, but {RealMasterServiceId} ({RealMasterIp}) is the only node currently reporting ROLE=master - re-pointing",
+                serviceId, masterHost ?? "(none)", realMasterServiceId, realMasterIp);
+
+            try
+            {
+                await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "REPLICAOF", realMasterIp, "6379"], ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "SelfHealReplicasAsync: failed to re-point {ServiceId} at {RealMasterIp} - will retry next tick", serviceId, realMasterIp);
+            }
+        }
+    }
+
+    // Shared by SelfHealSentinelAsync/SelfHealReplicasAsync - ROLE asked of each of the three data
+    // nodes directly (never trusting Sentinel's or a replica's own belief about itself), then
+    // SelectSoleMaster's same ambiguity rule both callers need: zero or more than one node
+    // self-reporting master means "don't guess, check again next tick."
+    private async Task<(string ServiceId, string Ip)?> FindRealMasterAsync(CancellationToken ct)
+    {
+        var observations = new List<RedisRoleObservation>();
+        var containersByServiceId = new Dictionary<string, ContainerListResponse>();
+        foreach (var serviceId in RedisDataNodes)
+        {
+            var container = await runtime.FindAsync(serviceId, ct);
+            if (container is null)
+            {
+                continue;
+            }
+
+            containersByServiceId[serviceId] = container;
+            try
+            {
+                var output = await runtime.ExecAsync(container.ID, ["redis-cli", "-p", "6379", "ROLE"], ct);
+                var role = output.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+                observations.Add(new RedisRoleObservation(serviceId, role switch { "master" => "master", "slave" => "replica", _ => "unreachable" }));
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "FindRealMasterAsync: failed to read ROLE from {ServiceId} - skipping this node for this tick", serviceId);
+            }
+        }
+
+        var realMasterServiceId = SelectSoleMaster(observations);
+        if (realMasterServiceId is null)
+        {
+            return null;
+        }
+
+        var realMasterIp = await runtime.GetContainerIpAsync(containersByServiceId[realMasterServiceId].ID, ct);
+        return realMasterIp is null ? null : (realMasterServiceId, realMasterIp);
     }
 }

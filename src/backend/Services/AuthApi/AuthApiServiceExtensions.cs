@@ -22,11 +22,14 @@ public static class AuthApiServiceExtensions
     //
     // Backlog item 9 (PLAN.md) moved this off Microsoft.AspNetCore.RateLimiting's in-memory
     // RateLimitPartition.GetFixedWindowLimiter and onto the shared Redis-backed RedisRateLimiter -
-    // see RedisRateLimitFilter's own comment for why. FailClosed, unlike RedirectApi's own policy:
-    // this guards register/login specifically against brute-force, and an open window during a
-    // Redis outage means unlimited attempts - the one place in this project where "the hot path
-    // must never be blocked by a dependency outage" (this project's usual default, e.g. caching,
-    // the request budget) is the wrong call.
+    // see RedisRateLimitFilter's own comment for why. LocalFallback, unlike RedirectApi's own
+    // FailOpen policy: this guards register/login specifically against brute-force, so a Redis
+    // outage must not open an unlimited window - but plain FailClosed (this policy's choice until a
+    // live topology QA pass, 2026-10-29, found it meant register/login simply didn't work at all in
+    // any topology with Redis disabled) turned out to be the wrong tradeoff too, for an educational
+    // sandbox whose whole point is letting every toggle combination actually be explored. See
+    // RateLimitFailureMode.LocalFallback/LocalFallbackRateLimiter's own comments for what this
+    // degrades to instead (real throttling, just per-process, not shared across replicas).
     public static WebApplicationBuilder AddAuthRateLimiting(this WebApplicationBuilder builder)
     {
         builder.AddRedisRateLimiter();
@@ -45,7 +48,7 @@ public static class AuthApiServiceExtensions
             PartitionKeySelector: httpContext => httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
             PermitLimit: rateLimiting.PermitLimit,
             Window: TimeSpan.FromSeconds(rateLimiting.WindowSeconds),
-            FailureMode: RateLimitFailureMode.FailClosed));
+            FailureMode: RateLimitFailureMode.LocalFallback));
         builder.Services.AddScoped<RedisRateLimitFilter>();
 
         return builder;

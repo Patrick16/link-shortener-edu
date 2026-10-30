@@ -60,11 +60,16 @@ public class RedisRateLimitFilterTests
         Window: TimeSpan.FromSeconds(60),
         FailureMode: failureMode);
 
+    // The real thing, not a fake - LocalFallbackRateLimiter has no Redis/network dependency at all,
+    // so there's nothing to mock; using it directly also exercises the real fixed-window behavior
+    // these tests care about (denying once the limit is exhausted).
+    private static ILocalFallbackRateLimiter NewLocalFallback() => new LocalFallbackRateLimiter();
+
     [Fact]
     public async Task OnActionExecutionAsync_Allowed_CallsNext()
     {
         var rateLimiter = new FakeRateLimiter(RateLimitOutcome.Allowed);
-        var sut = new RedisRateLimitFilter(rateLimiter, NewPolicy(RateLimitFailureMode.FailOpen));
+        var sut = new RedisRateLimitFilter(rateLimiter, NewLocalFallback(), NewPolicy(RateLimitFailureMode.FailOpen));
         var context = NewExecutingContext();
         var nextCalled = false;
 
@@ -77,7 +82,7 @@ public class RedisRateLimitFilterTests
     public async Task OnActionExecutionAsync_Denied_Returns429WithoutCallingNext()
     {
         var rateLimiter = new FakeRateLimiter(RateLimitOutcome.Denied);
-        var sut = new RedisRateLimitFilter(rateLimiter, NewPolicy(RateLimitFailureMode.FailOpen));
+        var sut = new RedisRateLimitFilter(rateLimiter, NewLocalFallback(), NewPolicy(RateLimitFailureMode.FailOpen));
         var context = NewExecutingContext();
         var nextCalled = false;
 
@@ -93,7 +98,7 @@ public class RedisRateLimitFilterTests
     {
         // The whole point of FailOpen - a Redis outage must not block this endpoint.
         var rateLimiter = new FakeRateLimiter(RateLimitOutcome.RedisUnavailable);
-        var sut = new RedisRateLimitFilter(rateLimiter, NewPolicy(RateLimitFailureMode.FailOpen));
+        var sut = new RedisRateLimitFilter(rateLimiter, NewLocalFallback(), NewPolicy(RateLimitFailureMode.FailOpen));
         var context = NewExecutingContext();
         var nextCalled = false;
 
@@ -106,9 +111,9 @@ public class RedisRateLimitFilterTests
     public async Task OnActionExecutionAsync_RedisUnavailableAndFailClosed_Returns503WithoutCallingNext()
     {
         // The whole point of FailClosed - a Redis outage must not open an unlimited window on an
-        // endpoint this policy is specifically protecting (e.g. AuthApi's login).
+        // endpoint this policy is specifically protecting.
         var rateLimiter = new FakeRateLimiter(RateLimitOutcome.RedisUnavailable);
-        var sut = new RedisRateLimitFilter(rateLimiter, NewPolicy(RateLimitFailureMode.FailClosed));
+        var sut = new RedisRateLimitFilter(rateLimiter, NewLocalFallback(), NewPolicy(RateLimitFailureMode.FailClosed));
         var context = NewExecutingContext();
         var nextCalled = false;
 
@@ -119,10 +124,47 @@ public class RedisRateLimitFilterTests
     }
 
     [Fact]
+    public async Task OnActionExecutionAsync_RedisUnavailableAndLocalFallback_CallsNextWhileUnderLocalLimit()
+    {
+        // The whole point of LocalFallback (AuthApi's own policy) - a Redis outage must not open an
+        // unlimited window (FailOpen), but must also not make the endpoint entirely unusable
+        // (FailClosed) - the first request under a fresh local limiter is allowed through.
+        var rateLimiter = new FakeRateLimiter(RateLimitOutcome.RedisUnavailable);
+        var sut = new RedisRateLimitFilter(rateLimiter, NewLocalFallback(), NewPolicy(RateLimitFailureMode.LocalFallback));
+        var context = NewExecutingContext();
+        var nextCalled = false;
+
+        await sut.OnActionExecutionAsync(context, NextDelegate(context, () => nextCalled = true));
+
+        Assert.True(nextCalled);
+    }
+
+    [Fact]
+    public async Task OnActionExecutionAsync_RedisUnavailableAndLocalFallback_Returns429OnceLocalLimitExhausted()
+    {
+        var rateLimiter = new FakeRateLimiter(RateLimitOutcome.RedisUnavailable);
+        var localFallback = NewLocalFallback();
+        // PermitLimit: 1 - the policy under test, not NewPolicy's own default of 10, so a single
+        // extra request past the first is enough to exhaust it without a loop.
+        var policy = NewPolicy(RateLimitFailureMode.LocalFallback) with { PermitLimit = 1 };
+        var first = new RedisRateLimitFilter(rateLimiter, localFallback, policy);
+        var second = new RedisRateLimitFilter(rateLimiter, localFallback, policy);
+
+        await first.OnActionExecutionAsync(NewExecutingContext(), NextDelegate(NewExecutingContext(), () => { }));
+        var context = NewExecutingContext();
+        var nextCalled = false;
+
+        await second.OnActionExecutionAsync(context, NextDelegate(context, () => nextCalled = true));
+
+        Assert.False(nextCalled);
+        Assert.Equal(StatusCodes.Status429TooManyRequests, context.HttpContext.Response.StatusCode);
+    }
+
+    [Fact]
     public async Task OnActionExecutionAsync_ComposesRedisKeyFromPolicyPrefixAndPartitionSelector()
     {
         var rateLimiter = new FakeRateLimiter(RateLimitOutcome.Allowed);
-        var sut = new RedisRateLimitFilter(rateLimiter, NewPolicy(RateLimitFailureMode.FailOpen));
+        var sut = new RedisRateLimitFilter(rateLimiter, NewLocalFallback(), NewPolicy(RateLimitFailureMode.FailOpen));
         var context = NewExecutingContext(remoteIp: "9.8.7.6");
 
         await sut.OnActionExecutionAsync(context, NextDelegate(context, () => { }));

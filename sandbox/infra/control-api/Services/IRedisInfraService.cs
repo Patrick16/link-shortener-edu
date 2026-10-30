@@ -20,6 +20,12 @@ public interface IRedisInfraService
     // address can go silently stale after a redis-master recreate it never observed as a failure.
     Task SelfHealSentinelAsync(CancellationToken ct);
 
+    // Same ground truth as SelfHealSentinelAsync, but corrects a REPLICA found replicating from a
+    // stale master address instead of a Sentinel's belief - see its own comment for the race this
+    // closes (a replica's own entrypoint committing to a now-wrong IP via a literal REPLICAOF before
+    // Sentinel's own correction landed).
+    Task SelfHealReplicasAsync(CancellationToken ct);
+
     // Runs `redis-cli FLUSHALL` inside the redis container via Docker's exec API - lets a demo show
     // cold-cache behavior on demand. Returns the command's own output, or null if redis isn't
     // running.

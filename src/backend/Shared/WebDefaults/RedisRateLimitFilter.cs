@@ -22,6 +22,7 @@ namespace WebDefaults;
 // are identical, so two copies would just be the same bug waiting to diverge twice.
 public sealed class RedisRateLimitFilter(
     IRedisRateLimiter rateLimiter,
+    ILocalFallbackRateLimiter localFallbackLimiter,
     RateLimitPolicy policy) : IAsyncActionFilter
 {
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
@@ -33,11 +34,24 @@ public sealed class RedisRateLimitFilter(
             policy.Window,
             context.HttpContext.RequestAborted);
 
+        // LocalFallback only ever applies on THIS outcome - Allowed/Denied already came from a real,
+        // Redis-backed check and are trusted as-is. Re-expressed as Allowed/Denied (not a third
+        // branch below) so the existing rejection logic/messaging doesn't need its own LocalFallback
+        // case - from here on, a LocalFallback policy behaves exactly like FailOpen/FailClosed would
+        // on whichever outcome the in-memory limiter just decided.
+        if (outcome == RateLimitOutcome.RedisUnavailable && policy.FailureMode == RateLimitFailureMode.LocalFallback)
+        {
+            outcome = localFallbackLimiter.TryAcquire(policy.KeyPrefix, partitionKey, policy.PermitLimit, policy.Window)
+                ? RateLimitOutcome.Allowed
+                : RateLimitOutcome.Denied;
+        }
+
         var rejected = outcome switch
         {
             RateLimitOutcome.Denied => true,
             // Allowed never rejects; RedisUnavailable rejects only under FailClosed - see
-            // RateLimitFailureMode's own comment for why this differs per app.
+            // RateLimitFailureMode's own comment for why this differs per app. LocalFallback never
+            // reaches this branch: the check above already resolved it to Allowed/Denied.
             RateLimitOutcome.RedisUnavailable => policy.FailureMode == RateLimitFailureMode.FailClosed,
             _ => false,
         };

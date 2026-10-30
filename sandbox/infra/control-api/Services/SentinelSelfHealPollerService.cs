@@ -21,10 +21,15 @@ public class SentinelSelfHealPollerService(
             try
             {
                 await redis.SelfHealSentinelAsync(stoppingToken);
+                // Same tick, not a separate poller - both correct the same underlying drift (a
+                // stale learned address after a redis-master recreate Sentinel never saw as a
+                // failure), just on different sides (Sentinels' belief vs. a replica's own
+                // REPLICAOF) - see SelfHealReplicasAsync's own comment.
+                await redis.SelfHealReplicasAsync(stoppingToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                logger.LogWarning(ex, "Sentinel self-heal check failed - will retry next tick");
+                logger.LogWarning(ex, "Sentinel/replica self-heal check failed - will retry next tick");
             }
         }
     }

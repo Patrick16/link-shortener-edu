@@ -3,16 +3,23 @@ using Microsoft.AspNetCore.Http;
 namespace WebDefaults;
 
 // RedisUnavailable is explicitly a per-endpoint decision, not a default (PLAN.md's backlog item
-// 9's own pitfall note) - AuthApi (register/login, where an open window during a Redis outage
-// means unlimited brute-force attempts) and RedirectApi (the hottest read path in the whole
-// stack, where rate limiting is about fairness/backpressure, not stopping an attack, and Redis
-// already being on the critical path for the link-cache/deletion-marker lookups means adding a
-// THIRD reason for Redis to block this path is the wrong tradeoff) deliberately choose
-// opposite values here.
+// 9's own pitfall note) - RedirectApi (the hottest read path in the whole stack, where rate
+// limiting is about fairness/backpressure, not stopping an attack, and Redis already being on the
+// critical path for the link-cache/deletion-marker lookups means adding a THIRD reason for Redis
+// to block this path is the wrong tradeoff) chooses FailOpen; AuthApi chooses LocalFallback (see
+// its own case below).
 public enum RateLimitFailureMode
 {
     FailOpen,
     FailClosed,
+
+    // Falls back to ILocalFallbackRateLimiter (WebDefaults.RedisRateLimitFilter) instead of either
+    // extreme - added after FailClosed turned out to mean "register/login simply don't work in any
+    // topology with Redis disabled" (bug found live, 2026-10-29 topology QA pass), and plain
+    // FailOpen would have reopened exactly the unbounded-brute-force window FailClosed existed to
+    // close. Real throttling while Redis is down, just per-process instead of shared across
+    // replicas - see LocalFallbackRateLimiter's own comment for the tradeoff this accepts.
+    LocalFallback,
 }
 
 // One of these per app (AuthApi, RedirectApi), registered as a singleton - see

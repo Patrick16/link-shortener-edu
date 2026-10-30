@@ -41,15 +41,15 @@ public class AuthRateLimitingTests
     }
 
     [Fact]
-    public void AddAuthRateLimiting_RegistersFailClosedPolicy()
+    public void AddAuthRateLimiting_RegistersLocalFallbackPolicy()
     {
-        // FailClosed, not FailOpen (RedirectApi's own choice) - see AddAuthRateLimiting's own
-        // comment: an open window during a Redis outage on register/login means unlimited
-        // brute-force attempts, the one place this project's usual "never block the hot path on a
-        // dependency outage" default (e.g. caching, the request budget) is the wrong call.
+        // LocalFallback, not FailOpen (RedirectApi's own choice) or FailClosed (this policy's
+        // choice until a live topology QA pass, 2026-10-29, found FailClosed meant register/login
+        // simply didn't work in any topology with Redis disabled) - see AddAuthRateLimiting's own
+        // comment.
         var policy = BuildPolicy();
 
-        Assert.Equal(RateLimitFailureMode.FailClosed, policy.FailureMode);
+        Assert.Equal(RateLimitFailureMode.LocalFallback, policy.FailureMode);
     }
 
     [Fact]
