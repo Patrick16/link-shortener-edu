@@ -228,6 +228,56 @@ describe('DashboardPage', () => {
     expect(statsApi.getRecentClicks).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps Refresh stats disabled until both the summary and recent-clicks refetch finish, not just one', async () => {
+    // Regression (feature-review F1 on this file's own introduction of the button): disabled used
+    // && instead of || - summary and recent-clicks are independent fetches that typically resolve
+    // at different times, so the button re-enabled as soon as EITHER resolved while the other was
+    // still in-flight, letting a second click fire an overlapping fetch for the same field whose
+    // out-of-order response could silently overwrite fresher data.
+    const user = userEvent.setup()
+    mockUser({ email: 'alice@example.com', name: 'Alice' })
+    vi.mocked(linkApi.getLinks).mockResolvedValue(
+      page({
+        items: [{ shortenLink: 'abc12345', originalLink: 'https://example.com/a', createdAt: '2099-01-01T00:00:00Z', clickCount: 5, hasCustomAlias: false, expiresAt: null, deletedAt: null }],
+        totalCount: 1,
+      }),
+    )
+    // getClickSummary always resolves immediately (default mockResolvedValue); only
+    // getRecentClicks's SECOND call (the refresh) is held open, so the summary half of the
+    // refresh finishes first while the recent-clicks half is still pending.
+    vi.mocked(statsApi.getClickSummary).mockResolvedValue({
+      hash: 'abc12345',
+      totalClicks: 5,
+      byDay: [],
+      byCountry: [],
+      byDevice: [],
+      byBrowser: [],
+    })
+    let resolveRefreshRecentClicks!: (clicks: never[]) => void
+    vi.mocked(statsApi.getRecentClicks)
+      .mockResolvedValueOnce([]) // initial load, on expanding Stats
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefreshRecentClicks = resolve
+          }),
+      )
+
+    render(<DashboardPage />)
+    await user.click(await screen.findByRole('button', { name: 'Stats' }))
+    await screen.findByText('5')
+
+    await user.click(screen.getByRole('button', { name: 'Refresh stats' }))
+
+    // The summary's refresh call already resolved (it always does), but recent-clicks' refresh
+    // call is still pending - the button must stay disabled, not re-enable just because one of
+    // the two finished.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh stats' })).toBeDisabled())
+
+    resolveRefreshRecentClicks([])
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh stats' })).toBeEnabled())
+  })
+
   it('also fetches and shows recent clicks when expanding stats', async () => {
     const user = userEvent.setup()
     mockUser({ email: 'alice@example.com', name: 'Alice' })

@@ -292,7 +292,12 @@ export default function DashboardPage() {
                       type="button"
                       className="link-stats-refresh"
                       onClick={() => fetchStatsFor(item.shortenLink, true)}
-                      disabled={summaries[item.shortenLink] === 'loading' && recentClicks[item.shortenLink] === 'loading'}
+                      // || not && (feature-review F1): summary and recent-clicks are independent
+                      // fetches that typically resolve at different times - with &&, the button
+                      // re-enabled as soon as either one resolved while the other was still
+                      // in-flight, letting a second click fire an overlapping fetch for the same
+                      // field whose out-of-order response could silently overwrite fresher data.
+                      disabled={summaries[item.shortenLink] === 'loading' || recentClicks[item.shortenLink] === 'loading'}
                     >
                       Refresh stats
                     </button>
