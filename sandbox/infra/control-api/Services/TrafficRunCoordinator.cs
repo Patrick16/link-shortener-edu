@@ -28,65 +28,100 @@ public sealed class TrafficRunCoordinator(
     IOptions<BottleneckThresholds> bottleneckThresholds,
     ILogger<TrafficRunCoordinator> logger)
 {
-    // Guards _runActive and _runCts together so TryStart's claim-and-publish is atomic from
-    // TryCancel's point of view - with those as two separate lock-free steps (the previous
-    // Interlocked.CompareExchange + Volatile.Write), a TryCancel landing in the gap between them
-    // could read a stale/null _runCts and report "no active run" even though _runActive was
-    // already claimed. Called at human-interaction rate (Start/Cancel buttons), never on a hot
-    // path, so a real lock costs nothing here.
-    private readonly Lock _gate = new();
-    private bool _runActive;
-    private CancellationTokenSource? _runCts;
+    // Expresses "one run at a time" as a real slot instead of a hand-rolled bool+lock. TryStart
+    // claims it with Wait(0) (never blocks - a rejected request just means someone else already
+    // has it); exactly one of ReleaseIfOwner's two call sites (the early release in RunAsync, right
+    // after k6 itself finishes, or the finally below as a safety net for the cancel/exception
+    // paths) ever actually calls Release() for a given run - see ReleaseIfOwner's own comment for
+    // why that's guaranteed by construction, not by luck. Replaced a previous _gate (Lock) +
+    // _runActive (bool) + _runCts design - found in review: that version's ReleaseSlot() mutated
+    // the fields directly rather than a value scoped to the specific run calling it, so a run's own
+    // early release (followed by a new run claiming the slot) let that same run's later, second
+    // ReleaseSlot() call (its finally-block safety net) dispose and tear down the NEW run's CTS
+    // instead of a no-op - breaking the "one run at a time" invariant RunResourceMaxTracker depends
+    // on. This design also drops the Lock entirely, closing a reentrancy concern the old version
+    // had to work around (Cancel() deliberately called outside the lock, to avoid a token callback
+    // re-entering it).
+    private readonly SemaphoreSlim _runSlot = new(1, 1);
+
+    // The active run's own CancellationTokenSource, or null when no run is active. Every write is
+    // either TryStart claiming it (Volatile.Write - safe because only the thread that just won
+    // _runSlot.Wait(0) ever writes a new value here) or ReleaseIfOwner clearing it
+    // (Interlocked.CompareExchange - see that method). TryCancel only ever reads it.
+    private CancellationTokenSource? _activeRunCts;
 
     // Returns false when another run already holds the slot. Callers validate the request first: the
     // slot is only claimed here, so a rejected request never blocks a real run from starting.
     public bool TryStart(TrafficRequest request)
     {
-        CancellationTokenSource cts;
-        lock (_gate)
+        if (!_runSlot.Wait(0))
         {
-            if (_runActive)
-            {
-                return false;
-            }
-
-            _runActive = true;
-            cts = new CancellationTokenSource();
-            _runCts = cts;
+            return false;
         }
 
-        _ = Task.Run(() => RunAsync(request, cts));
+        var cts = new CancellationTokenSource();
+        Volatile.Write(ref _activeRunCts, cts);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await RunAsync(request, cts);
+            }
+            finally
+            {
+                // No-op on the success path (already released early inside RunAsync, right after
+                // k6 itself finished) - this is the safety net for the cancellation/exception paths,
+                // which never reach that early release.
+                ReleaseIfOwner(cts);
+            }
+        });
         return true;
     }
 
     public bool TryCancel()
     {
-        CancellationTokenSource? activeCts;
-        lock (_gate)
-        {
-            activeCts = _runCts;
-        }
-
-        if (activeCts is null)
+        // Deliberately just a read, no ownership change - TryCancel never competes with
+        // ReleaseIfOwner for the slot, it only ever asks whatever run is currently active (if any)
+        // to cancel itself.
+        var cts = Volatile.Read(ref _activeRunCts);
+        if (cts is null)
         {
             return false;
         }
 
         try
         {
-            activeCts.Cancel();
+            cts.Cancel();
         }
         catch (ObjectDisposedException)
         {
-            // The run finished (and ReleaseSlot disposed this same CTS) in the window between this
-            // method reading _runCts above and calling Cancel() below - deliberately read outside
-            // the lock (see this class's own comment on why Cancel() itself isn't called while
-            // holding _gate). Nothing to cancel at this point; same outcome as _runCts already being
-            // null.
+            // The run this cts belonged to already released the slot (ReleaseIfOwner disposed it)
+            // in the window between the read above and Cancel() here - deliberately read outside
+            // any lock, so this race is accepted rather than prevented: nothing left to cancel, same
+            // outcome as _activeRunCts already being null.
             return false;
         }
 
         return true;
+    }
+
+    // Releases the slot for exactly one run, identified by its own cts - never whatever cts the
+    // field currently happens to hold. Called (up to) twice per run: the early release in RunAsync
+    // below, and TryStart's finally-block safety net. CompareExchange guarantees only the FIRST of
+    // those two calls to actually run for a given cts ever swaps the field and releases the
+    // semaphore: nothing else can change _activeRunCts away from this cts before then (the slot
+    // this run holds isn't free yet), and by the time Release() below makes the slot available to a
+    // brand new TryStart, the field has already been nulled - so that new run's own cts can never be
+    // clobbered by this run's second (by then stale) call. The second call simply finds the field no
+    // longer equal to its own cts and is a no-op.
+    private void ReleaseIfOwner(CancellationTokenSource cts)
+    {
+        if (Interlocked.CompareExchange(ref _activeRunCts, null, cts) == cts)
+        {
+            cts.Dispose();
+            _runSlot.Release();
+        }
     }
 
     private async Task RunAsync(TrafficRequest request, CancellationTokenSource cts)
@@ -114,10 +149,10 @@ public sealed class TrafficRunCoordinator(
             // and its live resource tracking) is actually finished, not after SaveSnapshotAsync below
             // also completes - that method has its own ~2s delay waiting for trace spans to flush
             // (see its own comment) and doesn't need the guard: resourceMaxima is already captured
-            // above, and nothing else SaveSnapshotAsync touches depends on _runActive. Without this,
-            // a new run attempted during that delay gets rejected with a stale 409 even though
-            // nothing is visibly running anymore.
-            ReleaseSlot();
+            // above, and nothing else SaveSnapshotAsync touches depends on the slot. Without this,
+            // a new run attempted during that delay gets rejected even though nothing is visibly
+            // running anymore.
+            ReleaseIfOwner(cts);
 
             if (report is not null)
             {
@@ -137,26 +172,6 @@ public sealed class TrafficRunCoordinator(
         {
             logger.LogError(ex, "Traffic run for {Scenario} failed", request.Scenario);
             await hub.Clients.All.SendAsync("trafficFailed", new { request.Scenario, error = ex.Message });
-        }
-        finally
-        {
-            // No-op on the success path (already reset above, before SaveSnapshotAsync) - this is
-            // the safety net for the cancellation/exception paths, which never reach that early reset.
-            ReleaseSlot();
-        }
-    }
-
-    private void ReleaseSlot()
-    {
-        lock (_gate)
-        {
-            // Dispose, not just drop the reference - found in review, a one-CTS-per-run leak
-            // (harmless on its own at human-interaction run rate, but still worth not leaving
-            // around). Safe to call twice: the success path calls ReleaseSlot once early and once
-            // more, as a no-op, from RunAsync's own finally block - Dispose() is idempotent.
-            _runCts?.Dispose();
-            _runCts = null;
-            _runActive = false;
         }
     }
 

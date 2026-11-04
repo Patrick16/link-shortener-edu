@@ -64,6 +64,11 @@ public class RabbitMqRetryWorker(
             }
             else
             {
+                // Found in review: without this, a failed row stayed claimed (ClaimedAt still set
+                // from GetPendingAsync above) until StaleClaimThreshold aged it out on its own - a
+                // ~2 minute wait, not the ~15s this worker otherwise polls at. Releasing the claim
+                // explicitly makes the next tick actually retry it, matching NextPollDelay's intent.
+                await _fallbackStore.ReleaseClaimAsync(message.MessageId, cancellationToken);
                 _logger.LogWarning(
                     "Retry failed for fallback message {MessageId} (topic {Topic})",
                     message.MessageId,

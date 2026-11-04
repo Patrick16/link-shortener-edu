@@ -97,11 +97,38 @@ public class SqliteMessageFallbackStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ReleaseClaimAsync_ThenGetPendingAsync_RowIsClaimableAgainImmediately()
+    {
+        // The explicit release path RabbitMqRetryWorker calls on a failed republish - a row doesn't
+        // have to wait for the stale-claim threshold (see the test below) when the caller already
+        // knows the attempt failed.
+        var sut = NewSut();
+        await sut.SaveAsync(new FallbackMessage("msg-1", "topic", "{}", DateTime.UtcNow), CancellationToken.None);
+        await sut.GetPendingAsync(CancellationToken.None); // claims it
+
+        await sut.ReleaseClaimAsync("msg-1", CancellationToken.None);
+        var reclaimed = await sut.GetPendingAsync(CancellationToken.None);
+
+        Assert.Equal(["msg-1"], reclaimed.Select(m => m.MessageId));
+    }
+
+    [Fact]
+    public async Task ReleaseClaimAsync_UnknownId_DoesNotThrow()
+    {
+        var sut = NewSut();
+
+        var exception = await Record.ExceptionAsync(() => sut.ReleaseClaimAsync("never-saved", CancellationToken.None));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public async Task GetPendingAsync_ClaimIsStale_BecomesClaimableAgain()
     {
-        // A row whose claim is stale (its replica crashed mid-tick, or a republish call itself hung
-        // past the next tick) must eventually recover on its own, since nothing ever explicitly
-        // "unclaims" a row on failure - it just stays claimed until the stale threshold passes.
+        // The crash-recovery path (its replica crashed mid-tick, or a republish call itself hung
+        // past the next tick, so ReleaseClaimAsync - see the test above - never ran) - the row must
+        // still eventually recover on its own once the stale threshold passes, rather than being
+        // claimed forever.
         var sut = NewSut();
         await sut.SaveAsync(new FallbackMessage("msg-1", "topic", "{}", DateTime.UtcNow), CancellationToken.None);
         await sut.GetPendingAsync(CancellationToken.None); // claims it

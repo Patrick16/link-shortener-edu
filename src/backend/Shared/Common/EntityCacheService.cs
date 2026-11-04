@@ -192,7 +192,15 @@ public abstract class EntityCacheService<T>(
         }
         finally
         {
-            _inFlightFetches.TryRemove(key, out _);
+            // Conditional remove, not TryRemove(key, out _) - found in review: an unconditional
+            // remove deletes whatever Lazy currently sits at this key, not specifically the one
+            // this call created/awaited. Two callers racing the same key could otherwise have the
+            // first one's finally remove a THIRD caller's brand-new Lazy (published via GetOrAdd
+            // right as the first one's fetch completed) - degrading the single-flight coalescing
+            // this dictionary exists for back into N concurrent DB fetches, under the exact load
+            // that makes coalescing matter most. Correctness doesn't suffer either way (cache-aside
+            // is idempotent), only the stampede protection does.
+            _inFlightFetches.TryRemove(new KeyValuePair<string, Lazy<Task<T?>>>(key, lazyFetch));
         }
     }
 

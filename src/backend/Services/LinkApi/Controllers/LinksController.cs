@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using WebDefaults;
 
 namespace LinkApi.Controllers;
 
@@ -380,9 +381,17 @@ public partial class LinksController(
                 : x.DeletedAt == null && (x.ExpiresAt == null || x.ExpiresAt > now));
         if (!User.HasClaim(Constants.InternalClaim, "true"))
         {
-            // [Authorize] already guarantees one of the two schemes succeeded; for the JWT scheme
-            // that means Sub is always present and parseable.
-            var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+            // [Authorize] already guarantees one of the two schemes succeeded, but not that the
+            // JWT scheme's Sub claim is present/parseable - see ClaimsPrincipalExtensions' own
+            // comment (found in review).
+            if (!User.TryGetAuthenticatedUserId(out var userId))
+            {
+                return Problem(
+                    detail: "Authenticated user id is missing or invalid.",
+                    statusCode: StatusCodes.Status401Unauthorized,
+                    title: "Authentication required.");
+            }
+
             query = query.Where(x => x.UserId == userId);
         }
 
@@ -459,7 +468,13 @@ public partial class LinksController(
     [HttpDelete("{hash}")]
     public async Task<IActionResult> DeleteLink([FromRoute] string hash, CancellationToken cancellationToken)
     {
-        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        if (!User.TryGetAuthenticatedUserId(out var userId))
+        {
+            return Problem(
+                detail: "Authenticated user id is missing or invalid.",
+                statusCode: StatusCodes.Status401Unauthorized,
+                title: "Authentication required.");
+        }
 
         var link = await _context.Links.AsNoTracking().FirstOrDefaultAsync(x => x.Hash == hash, cancellationToken);
         if (link is null)

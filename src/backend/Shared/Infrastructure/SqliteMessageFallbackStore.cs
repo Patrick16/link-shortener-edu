@@ -145,4 +145,21 @@ public sealed class SqliteMessageFallbackStore : IMessageFallbackStore
 
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    public async Task ReleaseClaimAsync(string messageId, CancellationToken cancellationToken)
+    {
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+
+        // Sets ClaimedAt back to NULL rather than waiting for StaleClaimThreshold to age it out -
+        // GetPendingAsync's own WHERE clause already treats NULL the same as a stale claim, so this
+        // is just an earlier, explicit version of the same "eligible again" state. Harmless if the
+        // row was deleted/re-claimed by another replica between GetPendingAsync and this call (0
+        // rows affected, nothing to release).
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"UPDATE {TableName} SET ClaimedAt = NULL WHERE MessageId = $messageId;";
+        command.Parameters.AddWithValue("$messageId", messageId);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
 }

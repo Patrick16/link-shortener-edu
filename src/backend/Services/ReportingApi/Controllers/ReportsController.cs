@@ -1,9 +1,8 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using System.Text.RegularExpressions;
 using Infrastructure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using WebDefaults;
 
 namespace ReportingApi.Controllers;
 
@@ -37,9 +36,12 @@ public partial class ReportsController(IClickFactQueryService queryService, ICli
             return Problem(detail: "Hash is not a valid short-link hash.", statusCode: StatusCodes.Status400BadRequest);
         }
 
-        // [Authorize] already guarantees a valid Bearer token, so Sub is always present and
-        // parseable - same guarantee LinksController relies on for its own owner checks.
-        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        if (!User.TryGetAuthenticatedUserId(out var userId))
+        {
+            return Problem(
+                detail: "Authenticated user id is missing or invalid.",
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
 
         // Always 200: GetSummaryAsync already scopes every underlying query to this caller's own
         // user_id, so a hash this caller doesn't own comes back as an ordinary all-zero summary -
@@ -63,7 +65,13 @@ public partial class ReportsController(IClickFactQueryService queryService, ICli
             return Problem(detail: "Hash is not a valid short-link hash.", statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var userId = Guid.Parse(User.FindFirstValue(JwtRegisteredClaimNames.Sub)!);
+        if (!User.TryGetAuthenticatedUserId(out var userId))
+        {
+            return Problem(
+                detail: "Authenticated user id is missing or invalid.",
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
         var effectiveLimit = Math.Clamp(limit <= 0 ? DefaultClicksLimit : limit, 1, MaxClicksLimit);
 
         var clicks = await _clickMetaQueryService.GetRecentAsync(hash, userId, effectiveLimit, cancellationToken);

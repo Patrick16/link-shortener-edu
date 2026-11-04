@@ -39,6 +39,42 @@ public class RabbitMqRetryWorkerTests
     }
 
     [Fact]
+    public async Task PollOnceAsync_RepublishFails_ReleasesTheClaimSoTheNextTickCanRetryItInstead_OfWaitingForStaleClaimThreshold()
+    {
+        // Found in review: without this release, a failed row stayed claimed until
+        // StaleClaimThreshold (2 minutes) aged it out on its own - far slower than the ~15s this
+        // worker otherwise polls at.
+        var message = new FallbackMessage("msg-1", "some.topic", "{}", DateTime.UtcNow);
+        var fallbackStore = new Mock<IMessageFallbackStore>();
+        fallbackStore.Setup(x => x.GetPendingAsync(It.IsAny<CancellationToken>())).ReturnsAsync([message]);
+        var publisher = new Mock<IMessagePublisher>();
+        publisher.Setup(x => x.TryRepublishAsync(message, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        var sut = NewSut(fallbackStore.Object, publisher.Object);
+
+        await sut.PollOnceAsync(CancellationToken.None);
+
+        fallbackStore.Verify(x => x.ReleaseClaimAsync("msg-1", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task PollOnceAsync_RepublishSucceeds_NeverReleasesTheClaim()
+    {
+        // The row is deleted outright on success - releasing a claim on a row that no longer
+        // exists would be pointless, and asserting its absence here guards against the two code
+        // paths (success/failure) ever accidentally both firing.
+        var message = new FallbackMessage("msg-1", "some.topic", "{}", DateTime.UtcNow);
+        var fallbackStore = new Mock<IMessageFallbackStore>();
+        fallbackStore.Setup(x => x.GetPendingAsync(It.IsAny<CancellationToken>())).ReturnsAsync([message]);
+        var publisher = new Mock<IMessagePublisher>();
+        publisher.Setup(x => x.TryRepublishAsync(message, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        var sut = NewSut(fallbackStore.Object, publisher.Object);
+
+        await sut.PollOnceAsync(CancellationToken.None);
+
+        fallbackStore.Verify(x => x.ReleaseClaimAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task PollOnceAsync_NoPendingMessages_DoesNothing()
     {
         var fallbackStore = new Mock<IMessageFallbackStore>();
