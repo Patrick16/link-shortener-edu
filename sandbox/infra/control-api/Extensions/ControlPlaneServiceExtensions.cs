@@ -1,5 +1,7 @@
 using ControlApi.Models;
 using ControlApi.Services;
+using ControlApi.Services.DataSources;
+using ControlApi.Services.K6;
 
 namespace ControlApi.Extensions;
 
@@ -25,6 +27,11 @@ public static class ControlPlaneServiceExtensions
         services.AddSingleton<IMongoTopologyService, MongoTopologyService>();
         services.AddSingleton<IRabbitMqService, RabbitMqService>();
         services.AddSingleton<IInfraToggleService, InfraToggleService>();
+        // K6ContainerRunner/DataPoolFetcher - TrafficService's two collaborators (Docker container
+        // lifecycle, data-pool preload respectively) - see .notes/PLAN.md's Simplification Backlog
+        // item 3.
+        services.AddSingleton<K6ContainerRunner>();
+        services.AddSingleton<DataPoolFetcher>();
         services.AddSingleton<ITrafficService, TrafficService>();
         services.AddSingleton<IContainerLifecycleService, ContainerLifecycleService>();
         services.AddSingleton<IScenarioStore, ScenarioStore>();

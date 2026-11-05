@@ -107,7 +107,10 @@ replica's first request.
 
 | What | Path |
 |---|---|
-| Run orchestration (spins up/tears down the k6 container) | `sandbox/infra/control-api/Services/TrafficRunCoordinator.cs` |
+| One-run-at-a-time gate | `sandbox/infra/control-api/Services/TrafficRunCoordinator.cs` |
+| Run orchestration (resolves steps, builds the k6 command/env) | `sandbox/infra/control-api/Services/TrafficService.cs` |
+| k6 container lifecycle (spins up/tears down the container, streams progress, parses the summary) | `sandbox/infra/control-api/Services/K6/K6ContainerRunner.cs`, `K6ProgressParser.cs`, `K6SummaryParser.cs` |
+| Data-pool preload (so a run can hit varied real records instead of one fixture link) | `sandbox/infra/control-api/Services/DataSources/DataPoolFetcher.cs` |
 | k6 script generation | `sandbox/infra/control-api/k6-scripts/` |
 | Endpoint/data-source definitions the k6 panel picks from | `sandbox/infra/control-api/Endpoints/TrafficEndpoints.cs` |
 | Bottleneck analysis | `sandbox/infra/control-api/Services/BottleneckAdvisor.cs`, tunable via `appsettings.json`'s `BottleneckThresholds` |

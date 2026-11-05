@@ -47,7 +47,7 @@ public record CheckResult(string Name, int Passes, int Fails);
 
 // One HTTP status code (or "0" for a request that never got a response at all - connection
 // refused/reset/timeout) and how many requests landed on it. Only codes k6 was told to track via a
-// threshold show up at all (see TrackedStatusCodes in TrafficService) and only ones that actually
+// threshold show up at all (see TrackedStatusCodes in K6SummaryParser) and only ones that actually
 // occurred (Count > 0) make it into a report.
 public record StatusCount(string Label, long Count);
 

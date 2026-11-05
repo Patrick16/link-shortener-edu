@@ -2,6 +2,7 @@ using ControlApi.Endpoints;
 using ControlApi.Extensions;
 using ControlApi.Hubs;
 using ControlApi.Services;
+using ControlApi.Services.K6;
 using Docker.DotNet.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -46,7 +47,7 @@ app.MapGet("/health/ready", async (IContainerRuntime runtime, IConfiguration con
         {
             Filters = new Dictionary<string, IDictionary<string, bool>>
             {
-                ["reference"] = new Dictionary<string, bool> { [TrafficService.K6Image] = true },
+                ["reference"] = new Dictionary<string, bool> { [K6ContainerRunner.K6Image] = true },
             },
         }, ct);
         checks["k6-image"] = k6Images.Count > 0 ? "ok" : "not pulled yet (pulled on first traffic run)";

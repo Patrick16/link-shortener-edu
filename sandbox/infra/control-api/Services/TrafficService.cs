@@ -1,19 +1,18 @@
-using System.Formats.Tar;
-using System.Globalization;
-using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using ControlApi.Models;
-using Docker.DotNet.Models;
+using ControlApi.Services.DataSources;
+using ControlApi.Services.K6;
 
 namespace ControlApi.Services;
 
+// Orchestrates a traffic run: resolves the request's step sequence against EndpointRegistry,
+// optionally preloads a data pool (DataPoolFetcher), builds the k6 command/env, then hands the
+// actual container lifecycle off to K6ContainerRunner. The container-running and data-pool-preload
+// mechanics used to live directly on this class - split out into Services/K6 and
+// Services/DataSources respectively, pure move, no logic change (see .notes/PLAN.md's
+// Simplification Backlog item 3).
 public sealed class TrafficService : ITrafficService
 {
-    // Internal, not private: Program.cs's /health/ready check reads this too, so the image name
-    // stays defined in exactly one place.
-    internal const string K6Image = "grafana/k6:latest";
-
     // The real routes a traffic run's step sequence can be built from - the server-side source of
     // truth (see EndpointDefinition) so k6-scripts/flow.js stays a generic interpreter with no
     // built-in knowledge of this app's actual routes, and Program.cs can validate a request before
@@ -57,33 +56,13 @@ public sealed class TrafficService : ITrafficService
             "redirect-api.resolve", "redirect-api", "GET", "/{{hash}}",
             null,
             new Dictionary<string, string>(), ["hash"],
-            "Resolve a short link and redirect - uses the hash a Create step earlier in the sequence produced, a preloaded data pool if one was requested (see DataSourceRegistry), or a fixture link if neither ran. Right after Create in the same step, this often 404s: LinkApi returns the hash before ShortenerService has actually persisted it via RabbitMQ - a real eventual-consistency window, not a bug"),
+            "Resolve a short link and redirect - uses the hash a Create step earlier in the sequence produced, a preloaded data pool if one was requested (see DataPoolFetcher.Registry), or a fixture link if neither ran. Right after Create in the same step, this often 404s: LinkApi returns the hash before ShortenerService has actually persisted it via RabbitMQ - a real eventual-consistency window, not a bug"),
         new(
             "reporting-api.stats", "reporting-api", "GET", "/reports/{{hash}}/summary",
             null,
             new Dictionary<string, string>(), ["hash", "token"],
             "Get click statistics for a short link (CQRS read model from ClickHouse) - owner-only, needs a Register+Login earlier in the sequence, same as link-api.delete"),
     ];
-
-    // What a run's optional DataPoolRequest can preload - see DataSourceDefinition for why this is
-    // separate from EndpointRegistry above (a bulk paginated read done once before the run starts,
-    // not a per-iteration call). ProducesVar "hash" is flow.js's own variable name, the same one
-    // link-api.create's Produces entry writes to, so a preloaded pool and a live Create step both
-    // feed the exact same downstream steps without flow.js needing to treat them differently.
-    private static readonly IReadOnlyList<DataSourceDefinition> DataSourceRegistry =
-    [
-        new(
-            "link-api.links", "link-api", "hash",
-            "Existing short links, paged from GET /Links - use this to make a Resolve-only sequence hit varied real records instead of the same one fixture link every iteration"),
-    ];
-
-    // k6 picks the elapsed-time format by the *total configured test duration*, not the current
-    // elapsed value: under a minute it's plain "12.3s" for the whole run, but a run configured for
-    // 60s or more prints "0m01.0s", "1m05.0s", etc. from the very first line onward - confirmed
-    // against real runs at 10s vs 65s (identical scripts, only --duration differed). Groups:
-    // 1=hours (optional), 2=minutes (optional), 3=seconds, 4=active VUs, 5=max VUs, 6=iterations.
-    private static readonly Regex K6ProgressLine =
-        new(@"running \((?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s\), (\d+)/(\d+) VUs, (\d+) complete", RegexOptions.Compiled);
 
     // flow.js reads STEPS_JSON's fields as plain camelCase JS property names (step.serviceId,
     // step.pathTemplate, ...) - .NET's default serializer would emit PascalCase from the record's
@@ -94,35 +73,18 @@ public sealed class TrafficService : ITrafficService
         string Id, string ServiceId, string Method, string PathTemplate, string? BodyTemplate,
         IReadOnlyDictionary<string, string> Produces, double PauseAfterSeconds);
 
-    // Reused across every FetchDataPoolAsync call rather than one-per-call - this instance is
-    // itself a singleton service, so that's exactly the lifetime HttpClient is meant to be used at
-    // (a fresh instance per call risks socket exhaustion under load, which is ironic for a load
-    // testing tool to hit).
-    private readonly HttpClient _httpClient = new();
-    private readonly IContainerRuntime _runtime;
     private readonly IInfraToggleService _infraToggle;
     private readonly string _k6ScriptsDir;
-    private readonly ILogger<TrafficService> _logger;
+    private readonly K6ContainerRunner _containerRunner;
+    private readonly DataPoolFetcher _dataPoolFetcher;
 
-    public TrafficService(IConfiguration configuration, IContainerRuntime runtime, IInfraToggleService infraToggle, ILogger<TrafficService> logger)
+    public TrafficService(
+        IConfiguration configuration, IInfraToggleService infraToggle, K6ContainerRunner containerRunner, DataPoolFetcher dataPoolFetcher)
     {
-        _runtime = runtime;
         _infraToggle = infraToggle;
-        _logger = logger;
+        _containerRunner = containerRunner;
+        _dataPoolFetcher = dataPoolFetcher;
         _k6ScriptsDir = configuration["K6:ScriptsDir"] ?? Path.Combine(AppContext.BaseDirectory, "k6-scripts");
-
-        // LinkApi's GET /Links requires either a per-user Bearer token or this shared secret (see
-        // src/backend/Shared/WebDefaults/InternalApiKeyAuthenticationHandler.cs) - control-api has
-        // no user session/JWT of its own, and the whole point of this call is an unscoped sample
-        // across every user's links, which a per-user token couldn't grant even if control-api
-        // somehow had one. Header name/config key are duplicated as plain strings rather than a
-        // shared reference, deliberately - sandbox/ (this tool) and src/ (the product) are kept
-        // decoupled on purpose (see docs/repository-map.md); the docker-compose.yml internal-api-key anchor
-        // is what actually keeps the two sides' secret value in sync, not a shared constant.
-        if (configuration["Internal:ApiKey"] is { } internalApiKey)
-        {
-            _httpClient.DefaultRequestHeaders.Add("X-Internal-Api-Key", internalApiKey);
-        }
     }
 
     public async Task<TrafficReport?> RunTrafficAsync(TrafficRequest request, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
@@ -154,14 +116,12 @@ public sealed class TrafficService : ITrafficService
             return null;
         }
 
-        await _runtime.EnsureImageAsync(K6Image, ct);
-
         // Read once for the whole run and threaded through as a parameter from here on (into
-        // FetchDataPoolAsync/FetchLinkHashesAsync below, and into the k6 env vars further down) -
-        // not re-read from _infraToggle at each use. The pool preload and the k6 run itself are
-        // minutes apart for a long run; re-reading at each use let a toggle flip mid-run send the
-        // preload through one URL and the actual run through the other, split across the same
-        // request (found during review).
+        // DataPoolFetcher.FetchAsync below, and into the k6 env vars further down) - not re-read
+        // from _infraToggle at each use. The pool preload and the k6 run itself are minutes apart
+        // for a long run; re-reading at each use let a toggle flip mid-run send the preload through
+        // one URL and the actual run through the other, split across the same request (found during
+        // review).
         var nginxBypassed = (await _infraToggle.GetInfraStatusAsync(ct)).NginxBypassed;
 
         // A requested data pool is fetched from the real app now, before k6 even starts, and
@@ -173,10 +133,10 @@ public sealed class TrafficService : ITrafficService
         IReadOnlyList<string>? pool = null;
         if (request.DataPool is { Count: > 0 } poolRequest)
         {
-            var source = DataSourceRegistry.FirstOrDefault(s => s.Id == poolRequest.SourceId);
+            var source = DataPoolFetcher.Registry.FirstOrDefault(s => s.Id == poolRequest.SourceId);
             if (source is not null)
             {
-                pool = await FetchDataPoolAsync(source, poolRequest.Count, nginxBypassed, onProgress, ct);
+                pool = await _dataPoolFetcher.FetchAsync(source, poolRequest.Count, nginxBypassed, onProgress, ct);
                 poolVar = source.ProducesVar;
             }
         }
@@ -187,7 +147,7 @@ public sealed class TrafficService : ITrafficService
         // ramping-vus), or a flat --vus/--duration constant. k6's periodic "running (...), X/Y VUs, N
         // complete" status line keeps the same overall shape in all three (confirmed against real runs
         // of each before relying on it) - only the elapsed-time formatting depends on total duration
-        // (K6ProgressLine above), and only iterations mode has no fixed total duration at all.
+        // (K6ProgressParser), and only iterations mode has no fixed total duration at all.
         var cmd = new List<string> { "run", "--no-color", "--summary-export", "/scripts/summary.json", "--vus", request.Vus.ToString() };
         int totalSeconds;
         int? targetIterations = request.Iterations;
@@ -250,449 +210,12 @@ public sealed class TrafficService : ITrafficService
             env.Add($"POOL_JSON={JsonSerializer.Serialize(pool, StepJsonOptions)}");
         }
 
-        var created = await _runtime.Client.Containers.CreateContainerAsync(new CreateContainerParameters
-        {
-            Image = K6Image,
-            // grafana/k6's image runs as a non-root user by default, which can't write
-            // summary.json into a directory extracted via the Docker API (its permissions don't
-            // survive extraction the way a tar mode would suggest - the daemon applies its own
-            // umask). Root avoids that fight entirely; this is a throwaway, self-removing
-            // container with no docker.sock access, so it's a low-risk place to do it.
-            User = "0:0",
-            Cmd = cmd,
-            Env = env,
-            Labels = new Dictionary<string, string> { ["com.docker.compose.project"] = _runtime.ComposeProject },
-            HostConfig = new HostConfig { NetworkMode = _runtime.ComposeNetwork },
-        }, ct);
+        var stepIds = resolvedSteps.Select(s => s.Id).Distinct().ToList();
 
-        // Everything from here on has a running (or about to run) k6 container on its hands - a
-        // client aborting the request (tab closed, fetch aborted) cancels ct mid-await, or any of
-        // these calls can just throw. Without cleanup on that path, the container is never stopped
-        // or removed: it keeps generating its full --vus/--duration load against the stack after
-        // the request that started it is gone, then lingers as clutter afterward. Every exit from
-        // this point must go through the catch below.
-        try
-        {
-            await using (var tarStream = await BuildScriptTarAsync(scriptPath, ct))
-            {
-                // The destination itself must already exist for the Docker API to accept the
-                // extraction - "/" always does, and the tar entry's own "scripts/scenario.js" path
-                // makes the extraction create that subdirectory as it unpacks.
-                await _runtime.Client.Containers.ExtractArchiveToContainerAsync(
-                    created.ID,
-                    new ContainerPathStatParameters { Path = "/" },
-                    tarStream,
-                    ct);
-            }
-
-            _logger.LogWarning(
-                "Running k6 scenario {Scenario} ({Vus} VUs{Mode}) as {ContainerId}",
-                request.Scenario, request.Vus,
-                targetIterations is { } t ? $", {t} iterations" : request.Stages is { Count: > 0 } s ? $", {totalSeconds}s, {s.Count} stages" : $", {totalSeconds}s",
-                created.ID);
-
-            await _runtime.Client.Containers.StartContainerAsync(created.ID, new ContainerStartParameters(), ct);
-
-            var output = await StreamLogsWithProgressAsync(created.ID, totalSeconds, targetIterations, onProgress, ct);
-
-            var inspect = await _runtime.Client.Containers.InspectContainerAsync(created.ID, ct);
-            var stepIds = resolvedSteps.Select(s => s.Id).Distinct().ToList();
-            var report = await ReadSummaryAsync(created.ID, request.Scenario, stepIds, inspect.State.ExitCode, output, ct);
-            await _runtime.Client.Containers.RemoveContainerAsync(created.ID, new ContainerRemoveParameters(), ct);
-
-            return report;
-        }
-        catch
-        {
-            await TryStopAndRemoveContainerAsync(created.ID);
-            throw;
-        }
-    }
-
-    // Best-effort cleanup for a k6 container abandoned by an exception or cancellation partway
-    // through RunTrafficAsync. Uses CancellationToken.None deliberately - the caller's ct may
-    // itself be the cancellation that got us here, and stopping/removing with an already-cancelled
-    // token would just throw immediately, leaving the container running. Each step is independent
-    // and swallows its own failure (already stopped/removed, or the daemon is unreachable) so a
-    // failed stop doesn't skip the remove attempt.
-    private async Task TryStopAndRemoveContainerAsync(string containerId)
-    {
-        try
-        {
-            await _runtime.Client.Containers.StopContainerAsync(
-                containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 }, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to stop abandoned k6 container {ContainerId} during cleanup", containerId);
-        }
-
-        try
-        {
-            await _runtime.Client.Containers.RemoveContainerAsync(
-                containerId, new ContainerRemoveParameters { Force = true }, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to remove abandoned k6 container {ContainerId} during cleanup", containerId);
-        }
-    }
-
-    // Dispatches on the source id so adding a second DataSourceDefinition later only means adding a
-    // case here, not touching RunTrafficAsync. An id that reaches here without a matching case (only
-    // possible if DataSourceRegistry grows a source this switch hasn't been taught yet) yields an
-    // empty pool rather than throwing - a run should still proceed using the fixture fallback.
-    private Task<IReadOnlyList<string>> FetchDataPoolAsync(DataSourceDefinition source, int count, bool nginxBypassed, Func<TrafficProgress, Task> onProgress, CancellationToken ct) =>
-        source.Id switch
-        {
-            "link-api.links" => FetchLinkHashesAsync(count, nginxBypassed, onProgress, ct),
-            _ => Task.FromResult<IReadOnlyList<string>>([]),
-        };
-
-    // Pages through the real GET /Links (the same nginx-bypass-aware URL k6 itself would use) until
-    // `count` hashes are collected or the app runs out of links, pushing a "preparing" progress
-    // update after every page so a large pool doesn't look like a hang. Fewer real links existing
-    // than requested isn't an error - the pool just ends up smaller, which the caller can see in
-    // PreparedCount ending below PreparedTarget in the final push. nginxBypassed comes in as a
-    // parameter - the same value RunTrafficAsync captured once for the whole run, not a second,
-    // independent read of the toggle that could disagree with it (see RunTrafficAsync's comment).
-    private async Task<IReadOnlyList<string>> FetchLinkHashesAsync(int count, bool nginxBypassed, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
-    {
-        var baseUrl = $"http://{(nginxBypassed ? "link-api:8080" : "nginx:8082")}";
-        var hashes = new List<string>(count);
-        var page = 1;
-
-        while (hashes.Count < count)
-        {
-            HttpResponseMessage response;
-            try
-            {
-                // The default HttpClient request timeout (100s) expires as a TaskCanceledException/
-                // OperationCanceledException, not HttpRequestException - without also catching that,
-                // a partitioned/100%-packet-loss link-api (this app's own chaos "Partition" control)
-                // hangs here for ~100s and then throws uncaught, aborting the entire traffic run
-                // instead of the graceful "pool ends up smaller, run still starts with the fixture
-                // fallback" behavior this method's own design intends.
-                response = await _httpClient.GetAsync($"{baseUrl}/Links?page={page}", ct);
-            }
-            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
-            {
-                _logger.LogWarning(ex, "Fetching link pool page {Page} failed - stopping with {Count} collected", page, hashes.Count);
-                break;
-            }
-
-            using var responseDisposer = response;
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning(
-                    "Fetching link pool page {Page} returned {StatusCode} - stopping with {Count} collected",
-                    page, response.StatusCode, hashes.Count);
-                break;
-            }
-
-            using var doc = JsonDocument.Parse(await response.Content.ReadAsStreamAsync(ct));
-            var items = doc.RootElement.GetProperty("items");
-            if (items.GetArrayLength() == 0)
-            {
-                break;
-            }
-
-            foreach (var item in items.EnumerateArray())
-            {
-                hashes.Add(item.GetProperty("shortenLink").GetString()!);
-                if (hashes.Count >= count)
-                {
-                    break;
-                }
-            }
-
-            await onProgress(new TrafficProgress(
-                0, 0, (int)Math.Min(100, hashes.Count * 100.0 / count), 0, 0, 0,
-                Phase: "preparing", PreparedCount: hashes.Count, PreparedTarget: count));
-
-            if (page >= doc.RootElement.GetProperty("totalPages").GetInt32())
-            {
-                break;
-            }
-
-            page++;
-        }
-
-        return hashes;
-    }
-
-    // Follows the container's combined stdout/stderr as it runs, parsing k6's own once-a-second
-    // "running (Ns), X/X VUs, N complete..." status lines into progress pushes, while also
-    // building up the full text for the raw-output field of the final report. Returns once the
-    // stream hits EOF, which happens when k6 itself exits. targetIterations non-null means an
-    // iteration-count run - there's no fixed total time to measure against, so percent comes from
-    // iterations done/target instead of elapsed/totalSeconds, and the "past the requested duration"
-    // skip below doesn't apply (totalSeconds is 0 in that mode and never meant to bound anything).
-    // A chaos run (high loss/latency, many VUs, up to 600s) makes k6 print a WARN per failed
-    // request - that can reach tens of MB of text, which then gets held in memory for the run's
-    // whole duration, pushed whole over SignalR on completion, and written into the run's JSON
-    // history file. 1MB is far more than anyone reads of a report by hand; progress parsing below
-    // is unaffected since it works off pendingLine, not this capped copy.
-    private const int MaxRawOutputChars = 1_000_000;
-    private const string RawOutputTruncatedMarker = "\n... [output truncated, exceeded 1MB] ...\n";
-
-    private async Task<string> StreamLogsWithProgressAsync(string containerId, int totalSeconds, int? targetIterations, Func<TrafficProgress, Task> onProgress, CancellationToken ct)
-    {
-        using var logStream = await _runtime.Client.Containers.GetContainerLogsAsync(
-            containerId,
-            tty: false,
-            new ContainerLogsParameters { ShowStdout = true, ShowStderr = true, Follow = true },
-            ct);
-
-        var fullOutput = new StringBuilder();
-        var outputTruncated = false;
-        var pendingLine = new StringBuilder();
-        var buffer = new byte[4096];
-        double lastElapsed = 0;
-        long lastIterations = 0;
-
-        while (true)
-        {
-            var result = await logStream.ReadOutputAsync(buffer, 0, buffer.Length, ct);
-            if (result.EOF || result.Count == 0)
-            {
-                break;
-            }
-
-            var chunk = Encoding.UTF8.GetString(buffer, 0, result.Count);
-            if (!outputTruncated)
-            {
-                outputTruncated = AppendCapped(fullOutput, chunk, MaxRawOutputChars);
-            }
-            pendingLine.Append(chunk);
-
-            var lines = pendingLine.ToString().Split('\n');
-            for (var i = 0; i < lines.Length - 1; i++)
-            {
-                var match = K6ProgressLine.Match(lines[i]);
-                if (!match.Success)
-                {
-                    continue;
-                }
-
-                var hours = match.Groups[1].Success ? double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
-                var minutes = match.Groups[2].Success ? double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture) : 0;
-                var seconds = double.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
-                var elapsed = hours * 3600 + minutes * 60 + seconds;
-                if (targetIterations is null && elapsed > totalSeconds)
-                {
-                    // k6 prints one extra status line during its graceful-stop tail, past the
-                    // requested duration - skip it rather than report a misleading rate spike from
-                    // the tiny elapsed delta. Doesn't apply to iteration-count runs, which have no
-                    // requested duration to be "past".
-                    continue;
-                }
-
-                var activeVus = int.Parse(match.Groups[4].Value, CultureInfo.InvariantCulture);
-                var iterations = long.Parse(match.Groups[6].Value, CultureInfo.InvariantCulture);
-                var elapsedDelta = elapsed - lastElapsed;
-                var rate = elapsedDelta > 0 ? (iterations - lastIterations) / elapsedDelta : 0;
-                lastElapsed = elapsed;
-                lastIterations = iterations;
-
-                var percent = targetIterations is { } target
-                    ? (int)Math.Min(100, (double)iterations / target * 100)
-                    : (int)Math.Min(100, elapsed / totalSeconds * 100);
-                await onProgress(new TrafficProgress((int)elapsed, totalSeconds, percent, activeVus, iterations, rate, targetIterations));
-            }
-
-            pendingLine.Clear();
-            pendingLine.Append(lines[^1]);
-        }
-
-        return fullOutput.ToString();
-    }
-
-    // Appends chunk to builder unless/until maxChars is reached, at which point it appends a
-    // truncation marker once and reports "already truncated" from then on - split out from
-    // StreamLogsWithProgressAsync as a pure, static, easily unit-tested piece of an otherwise
-    // heavily Docker-API-coupled method.
-    internal static bool AppendCapped(StringBuilder builder, string chunk, int maxChars)
-    {
-        if (builder.Length >= maxChars)
-        {
-            return true;
-        }
-
-        // >= , not >: a chunk that lands exactly on the boundary must also take this branch. With
-        // a plain >, that chunk fell through to the plain-append path below with the builder now
-        // sitting exactly at maxChars but reported as "not truncated yet" - the *next* call would
-        // then hit the first branch above (builder.Length >= maxChars) and return true immediately,
-        // with the truncation marker never appended at all.
-        if (builder.Length + chunk.Length >= maxChars)
-        {
-            builder.Append(chunk, 0, Math.Max(0, maxChars - builder.Length));
-            builder.Append(RawOutputTruncatedMarker);
-            return true;
-        }
-
-        builder.Append(chunk);
-        return false;
+        return await _containerRunner.RunAsync(request, cmd, env, scriptPath, totalSeconds, targetIterations, stepIds, onProgress, ct);
     }
 
     public IReadOnlyList<EndpointDefinition> ListKnownEndpoints() => EndpointRegistry;
 
-    public IReadOnlyList<DataSourceDefinition> ListDataSources() => DataSourceRegistry;
-
-    private async Task<TrafficReport> ReadSummaryAsync(string containerId, string scenario, IReadOnlyList<string> stepIds, long exitCode, string rawOutput, CancellationToken ct)
-    {
-        try
-        {
-            var response = await _runtime.Client.Containers.GetArchiveFromContainerAsync(
-                containerId, new GetArchiveFromContainerParameters { Path = "/scripts/summary.json" }, false, ct);
-            using var responseStream = response.Stream;
-
-            // Buffer fully before handing to TarReader - it does non-sequential-looking reads via
-            // SubReadStream over each entry's data, which doesn't play well with the raw chunked
-            // HTTP stream the Docker API hands back (hit EndOfStreamException reading directly).
-            using var buffered = new MemoryStream();
-            await responseStream.CopyToAsync(buffered, ct);
-            buffered.Position = 0;
-
-            using var reader = new TarReader(buffered);
-            TarEntry? entry;
-            while ((entry = await reader.GetNextEntryAsync(cancellationToken: ct)) is not null)
-            {
-                if (entry.DataStream is null)
-                {
-                    continue;
-                }
-
-                using var streamReader = new StreamReader(entry.DataStream);
-                var json = await streamReader.ReadToEndAsync(ct);
-                return ParseSummary(json, scenario, stepIds, exitCode, rawOutput);
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not read k6 summary.json for {Scenario} - falling back to raw output only", scenario);
-        }
-
-        return new TrafficReport(scenario, exitCode, 0, 0, 0, 0, 0, 0, 0, null, [], [], rawOutput);
-    }
-
-    // Only status codes k6 was explicitly told to track (via a trivial always-passing threshold on
-    // "http_reqs{status:X}" - see each k6-scripts/*.js) end up as separate entries in the summary
-    // JSON at all; anything not listed here still counts toward the overall http_reqs total, it
-    // just won't be broken out by code. "0" is k6's own status for a request that got no HTTP
-    // response whatsoever (connection refused/reset, or timed out) - genuinely different from a
-    // server responding with an error code, so it gets its own human-readable label instead of "0".
-    private static readonly IReadOnlyList<(string Code, string Label)> TrackedStatusCodes =
-    [
-        ("200", "200 OK"),
-        ("204", "204 No Content"),
-        ("302", "302 Found"),
-        ("401", "401 Unauthorized"),
-        ("403", "403 Forbidden"),
-        ("404", "404 Not Found"),
-        ("409", "409 Conflict"),
-        ("500", "500 Internal Server Error"),
-        ("502", "502 Bad Gateway"),
-        ("503", "503 Service Unavailable"),
-        ("504", "504 Gateway Timeout"),
-        ("0", "No response (connection error / timeout)"),
-    ];
-
-    private static TrafficReport ParseSummary(string json, string scenario, IReadOnlyList<string> stepIds, long exitCode, string rawOutput)
-    {
-        using var doc = JsonDocument.Parse(json);
-        var metrics = doc.RootElement.GetProperty("metrics");
-
-        long GetCount(string metric) =>
-            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("count", out var c) ? c.GetInt64() : 0;
-        double GetRate(string metric) =>
-            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("rate", out var r) ? r.GetDouble() : 0;
-        double GetValue(string metric) =>
-            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("value", out var v) ? v.GetDouble() : 0;
-        // http_req_failed is a k6 Rate metric: "passes" is the count of samples where the request
-        // was considered failed (value 1), not a count of successes - the passes/fails naming is
-        // generic to Rate metrics (also used by "checks", where 1 *does* mean success) and doesn't
-        // flip meaning per-metric, so this needs to be read deliberately rather than by the names.
-        long GetFailedCount(string metric) =>
-            metrics.TryGetProperty(metric, out var m) && m.TryGetProperty("passes", out var p) ? p.GetInt64() : 0;
-
-        LatencyStats? duration = null;
-        if (metrics.TryGetProperty("http_req_duration", out var d))
-        {
-            double Field(string name) => d.TryGetProperty(name, out var v) ? v.GetDouble() : 0;
-            duration = new LatencyStats(Field("avg"), Field("min"), Field("med"), Field("max"), Field("p(90)"), Field("p(95)"));
-        }
-
-        var checks = new List<CheckResult>();
-        if (doc.RootElement.TryGetProperty("root_group", out var rootGroup) && rootGroup.TryGetProperty("checks", out var checksObj))
-        {
-            foreach (var check in checksObj.EnumerateObject())
-            {
-                var passes = check.Value.TryGetProperty("passes", out var p) ? p.GetInt32() : 0;
-                var fails = check.Value.TryGetProperty("fails", out var f) ? f.GetInt32() : 0;
-                checks.Add(new CheckResult(check.Name, passes, fails));
-            }
-        }
-
-        // Each request is tagged with its originating step id (see flow.js), and flow.js declares a
-        // threshold for every (stepId, trackedStatusCode) pair up front - only tag combinations with
-        // a declared threshold get retained/exported by k6 at all, and only ones that actually
-        // occurred (Count > 0) are worth showing.
-        var statusByEndpoint = stepIds
-            .Select(id => new EndpointStatusBreakdown(
-                id,
-                TrackedStatusCodes
-                    .Select(sc => new StatusCount(sc.Label, GetCount($"http_reqs{{step:{id},status:{sc.Code}}}")))
-                    .Where(sc => sc.Count > 0)
-                    .OrderByDescending(sc => sc.Count)
-                    .ToList()))
-            .Where(e => e.StatusCounts.Count > 0)
-            .ToList();
-
-        return new TrafficReport(
-            scenario,
-            exitCode,
-            GetCount("http_reqs"),
-            GetRate("http_reqs"),
-            GetFailedCount("http_req_failed"),
-            GetValue("http_req_failed"),
-            GetCount("iterations"),
-            GetRate("iterations"),
-            (int)GetValue("vus_max"),
-            duration,
-            checks,
-            statusByEndpoint,
-            rawOutput);
-    }
-
-    private static async Task<MemoryStream> BuildScriptTarAsync(string scriptPath, CancellationToken ct)
-    {
-        var tarStream = new MemoryStream();
-        await using (var writer = new TarWriter(tarStream, TarEntryFormat.Pax, leaveOpen: true))
-        {
-            // Without an explicit directory entry, the extraction still creates "scripts/" (to
-            // hold scenario.js) but with a restrictive default mode - grafana/k6 runs as a
-            // non-root user and needs write access on this directory itself to later create
-            // summary.json there, not just read access to the script file inside it.
-            var dirEntry = new PaxTarEntry(TarEntryType.Directory, "scripts/") { Mode = (UnixFileMode)0777 };
-            await writer.WriteEntryAsync(dirEntry, ct);
-
-            // TarEntry doesn't take ownership of/dispose DataStream - PaxTarEntry just holds the
-            // reference and WriteEntryAsync reads from it synchronously within this call, so it's
-            // safe (and necessary) to close the file handle immediately after, rather than leaking
-            // one per traffic run started.
-            using (var scriptStream = File.OpenRead(scriptPath))
-            {
-                var fileEntry = new PaxTarEntry(TarEntryType.RegularFile, "scripts/scenario.js")
-                {
-                    DataStream = scriptStream,
-                    Mode = (UnixFileMode)0644,
-                };
-                await writer.WriteEntryAsync(fileEntry, ct);
-            }
-        }
-
-        tarStream.Position = 0;
-        return tarStream;
-    }
+    public IReadOnlyList<DataSourceDefinition> ListDataSources() => DataPoolFetcher.Registry;
 }
