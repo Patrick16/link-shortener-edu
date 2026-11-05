@@ -12,6 +12,10 @@
 		     above - no separate ".Abstractions" package exists for IMemoryCache, this one package
 		     ships both the interface and the implementation. -->
 		<PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+		<!-- HybridEntityCacheService - the alternative, DI-swappable IEntityCacheService<T>
+		     implementation built on the BCL's own coalescing/L1+L2 cache instead of hand-rolling it
+		     (see EntityCacheService's own comments for what it hand-rolls). -->
+		<PackageReference Include="Microsoft.Extensions.Caching.Hybrid" />
 		<PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" />
 		<!-- FromKeyedServicesAttribute, used on EntityCacheService's/LinkCacheService's circuit-
 		     breaker constructor parameter - abstractions only, no DI container implementation. -->

@@ -1,5 +1,4 @@
 using Common;
-using Common.Models;
 using Infrastructure;
 using ServiceDefaults;
 using ShortenerService;
@@ -11,7 +10,7 @@ builder.AddGrpcKestrelEndpoint();
 
 builder.AddPostgresDbContextFactory<DatabaseContext>();
 builder.AddRedisDistributedCache();
-builder.Services.AddSingleton<IEntityCacheService<Link>, LinkCacheService>();
+builder.AddLinkCacheService();
 builder.AddLinkDeletionMarkerStore();
 builder.AddRabbitMqConsumer();
 builder.AddLinkEventConsumers();

@@ -22,6 +22,12 @@ public static class Constants
     public const string MessagingModeSection = "Messaging:Mode";
     public const string MessagingGrpcTargetUrlSection = "Messaging:Grpc:TargetUrl";
 
+    // Cache backend toggle (hand-rolled EntityCacheService/LinkCacheService vs.
+    // Microsoft.Extensions.Caching.Hybrid's HybridEntityCacheService/HybridLinkCacheService) - read
+    // once at Program.cs startup by LinkApi/RedirectApi/ShortenerService, same "one config value,
+    // nothing downstream branches on it again" shape as MessagingModeSection above.
+    public const string CacheBackendSection = "Cache:Backend";
+
     // Tag on the health checks that /health/ready runs (dependency reachability), as opposed to
     // /health/live, which runs none.
     public const string ReadyHealthCheckTag = "ready";

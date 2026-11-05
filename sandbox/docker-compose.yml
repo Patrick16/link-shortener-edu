@@ -948,6 +948,10 @@ services:
       # nonexistent hashes stops reaching the DB on every repeat miss. Independent of both toggles
       # above.
       Cache__NegativeEnabled: "${NEGATIVE_CACHE_ENABLED:-true}"
+      # Cache backend toggle - legacy (default, hand-rolled EntityCacheService/LinkCacheService) or
+      # hybrid (Microsoft.Extensions.Caching.Hybrid). The three toggles above are legacy-only - see
+      # HybridEntityCacheService's own comment for what hybrid mode gives up.
+      Cache__Backend: "${CACHE_BACKEND:-legacy}"
       # Messaging transport toggle - rabbitmq (default, async) or grpc (sync). TargetUrl points at
       # nginx's internal gRPC fan-out for shortener-service (port 9090, see nginx.conf), not at
       # shortener-service directly - see nginx.conf's own comment for why (replica load-balancing).
@@ -1021,6 +1025,8 @@ services:
       # See link-api's identical comments on these two.
       Cache__L1Enabled: "${L1_CACHE_ENABLED:-true}"
       Cache__NegativeEnabled: "${NEGATIVE_CACHE_ENABLED:-true}"
+      # See link-api's identical comment on this one.
+      Cache__Backend: "${CACHE_BACKEND:-legacy}"
       # appsettings.json's own default (600/60s) is sized for a public deploy's real client mix -
       # see RedirectApiServiceExtensions.AddRedirectRateLimiting. A k6 load test driven through
       # nginx normally fans out across many simulated client IPs (k6's own VU-per-connection
@@ -1131,6 +1137,8 @@ services:
       # benefit when caching is off is correct, not a regression: with caching off, RedirectApi
       # reads Postgres directly anyway, so there is nothing left for the pre-warm to protect against.
       Cache__Enabled: "${CACHE_ENABLED:-true}"
+      # See link-api's identical comment on this one.
+      Cache__Backend: "${CACHE_BACKEND:-legacy}"
     depends_on:
       haproxy:
         condition: service_healthy

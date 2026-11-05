@@ -10,7 +10,7 @@ public static class LinkApiServiceExtensions
 {
     public static WebApplicationBuilder AddLinkServices(this WebApplicationBuilder builder)
     {
-        builder.Services.AddSingleton<IEntityCacheService<Common.Models.Link>, LinkCacheService>();
+        builder.AddLinkCacheService();
         builder.Services.AddSingleton<IHashGenerator, Sha256Base62HashGenerator>();
         builder.AddAliasGrpcClient();
         builder.Services.AddSingleton<ICustomAliasCreator, GrpcAliasCreator>();

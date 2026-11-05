@@ -9,7 +9,7 @@ public static class RedirectApiServiceExtensions
 {
     public static WebApplicationBuilder AddRedirectServices(this WebApplicationBuilder builder)
     {
-        builder.Services.AddSingleton<IEntityCacheService<Common.Models.Link>, LinkCacheService>();
+        builder.AddLinkCacheService();
         return builder;
     }
 

@@ -24,6 +24,8 @@
 		<PackageReference Include="Microsoft.EntityFrameworkCore" />
 		<PackageReference Include="StackExchange.Redis" />
 		<PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
+		<!-- EntityCacheServiceExtensions.AddLinkCacheService's Cache:Backend=hybrid path. -->
+		<PackageReference Include="Microsoft.Extensions.Caching.Hybrid" />
 		<PackageReference Include="MongoDB.Driver" />
 		<PackageReference Include="Microsoft.Extensions.Http" />
 		<!-- GeoIpExtensions' AddResilienceHandler on the ip-api.com HttpClient. -->
