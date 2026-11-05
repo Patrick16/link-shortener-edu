@@ -58,13 +58,16 @@ lower than whatever the primary is currently running with.
 
 A standing "Read replicas (Postgres)" toggle in the architecture-map UI's Topology panel
 starts/stops `postgres-replica1`/`postgres-replica2` together and keeps [PgCat](node:pgcat)'s own
-`servers` list in sync around it — OFF drops both from pgcat's config and stops both containers (in
-that order: config change, then stop); ON is the mirror image. It only ever stops the containers,
-never removes them, so their volume and permanent replication slot (see "How it's implemented
-here" above) survive — a later ON resumes WAL streaming from where it left off instead of a fresh
-`pg_basebackup`. Equivalent API: `POST /api/infra/postgres-replicas {"enabled": bool}`
-(control-api). Always both replicas as a pair — there's no way to toggle just one of them through
-this control.
+`servers` list in sync:
+
+- OFF: drop both from pgcat's config, then stop both containers (config change first).
+- ON: the mirror image.
+- Containers are only ever stopped, never removed — their volume and permanent replication slot
+  (see "How it's implemented here" above) survive, so a later ON resumes WAL streaming from where
+  it left off instead of a fresh `pg_basebackup`.
+- Always both replicas as a pair — no way to toggle just one through this control.
+
+Equivalent API: `POST /api/infra/postgres-replicas {"enabled": bool}` (control-api).
 
 ## Pitfalls
 

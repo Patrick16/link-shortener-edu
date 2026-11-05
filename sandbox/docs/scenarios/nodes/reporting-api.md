@@ -27,12 +27,11 @@ parameterized SQL query against ClickHouse and returns the aggregate. No ORM her
 is the one place in the project meant to show what a real columnar OLAP query looks like, not
 hidden behind a query builder.
 
-**Owner-scoped reports.** The endpoint only ever returns data for hashes the caller owns.
-`ClickHouseClickFactQueryService.GetSummaryAsync` runs the 4 bucket queries filtered
-`AND user_id = callerId` and nothing else — that filter is what actually keeps someone else's click
-data out of the response. The owner travels with the click itself (`RedirectController` already
-holds `link.UserId` when it publishes `ClickTrackedEvent`; `ClickTrackedConsumer` carries it into
-`ClickFact.UserId` — no extra lookup anywhere in the chain), so this is additive, not a new network
+**Owner-scoped reports.** The endpoint only ever returns data for hashes the caller owns, enforced
+by filtering all 4 bucket queries on `AND user_id = callerId`
+(`ClickHouseClickFactQueryService.GetSummaryAsync`). The owner travels with the click itself —
+`RedirectController` already holds `link.UserId` when it publishes `ClickTrackedEvent`,
+`ClickTrackedConsumer` carries it into `ClickFact.UserId` — so this is additive, not a new network
 hop.
 
 ```csharp
@@ -54,17 +53,13 @@ placeholders, resolved by ClickHouse itself — never string-interpolated.
 
 **Always `200`, never a leak oracle — found in review, not designed in from the start.** An earlier
 version ran a 5th scalar query (`count() WHERE hash = ? AND user_id IS NOT NULL AND user_id !=
-callerId`) to tell "owned by someone else" apart from "doesn't exist", turning the former into a
-`404` and leaving the latter (and "owned, zero clicks yet") as an ordinary all-zero `200`. That was
-itself the privacy leak it was meant to prevent: a caller could tell "this hash exists and belongs
-to someone else" apart from "this hash doesn't exist" by which status code came back. The fix
-removed that branch entirely — `GetSummaryAsync` never returns `null`, so a hash that doesn't exist,
-a hash the caller genuinely owns with zero clicks, a hash owned by someone else, and an
-anonymously-created link (`user_id IS NULL` on every one of its click rows, which never matches any
-caller's filter either) are all indistinguishable from the outside: every one of them gets the same
-all-zero `200`. An anonymous link still has no reporting view for anyone, not a shared public one
-either — it's just one more case that quietly falls out of the same filter instead of a case this
-endpoint has to special-case.
+callerId`) to distinguish "owned by someone else" (`404`) from "doesn't exist" (zero-click `200`) —
+which was itself the privacy leak it tried to prevent, since the status code alone revealed whether
+a hash existed at all. The fix removed that branch entirely — `GetSummaryAsync` never returns
+`null`, so a hash that doesn't exist, one the caller genuinely owns with zero clicks, one owned by
+someone else, and an anonymously-created link (`user_id IS NULL` on every click row, never matching
+any caller's filter) are all indistinguishable from the outside: every one of them gets the same
+all-zero `200`.
 
 **Raw click detail (`GET /reports/{hash}/clicks`) — the "flexible document" counterpart to the
 ClickHouse aggregate.** `/summary` answers "how many clicks, bucketed by day/country/device/
@@ -79,25 +74,27 @@ precedent for "one database, two interfaces, one per direction" with ClickHouse
 `IClickMetaQueryService` (ReportingApi only, via `MongoClickMetaQueryService`) adds
 `GetRecentAsync(hash, callerUserId, limit, ct)`. The two stores are genuinely independent Mongo/
 ClickHouse writers fed from the same `ClickTrackedEvent` — they can drift apart transiently (one
-consumer down, the other up), the same CQRS-fan-out caveat that already applies to the rest of this
-pipeline.
+consumer down, the other up), the same CQRS-fan-out caveat as elsewhere in this pipeline.
 
-Owner scoping follows the exact same posture as `/summary`: the query filters on `Hash == hash AND
-UserId == callerUserId` (`ClickTrackedEvent.UserId` now flows into Mongo's `ClickMeta` too, not
-just ClickHouse's `ClickFact`), backed by a compound index `(Hash asc, UserId asc, ClickedAt desc)`
-— equality fields before the sort field, so the filter+sort the query actually runs doesn't fall
-back to a full collection scan. A hash that doesn't exist, belongs to someone else, or just has zero
-clicks all return the same `200` with an empty/partial array; there's no `404` branch, for the same
-reason `/summary` has none. `limit` is optional (default `20`, clamped into `[1, 100]`, never
-rejected with a `400`). The returned `ClickDetail` DTO deliberately omits `IpAddress` — the
-underlying Mongo document keeps the raw IP (TrafficService needs it for geo-IP resolution), but
-handing a visitor's IP to the link owner through this API is a PII exposure this feature has no need
-to take on. Pre-existing Mongo documents from before this endpoint shipped have no `UserId` (the
-field didn't exist yet) and so can never show up here for any real caller — invisible, not errored,
-the same backward-compatible shape `ClickFact.UserId` already has on the ClickHouse side. The
-product dashboard (`src/frontend/app`, `DashboardPage`'s "Recent clicks" panel) now consumes this
-endpoint, fetched independently of the existing ClickHouse-backed "Stats" panel — both panels can be
-on screen at once and can disagree in liveness, since they're fed by two separate consumers
+Owner scoping follows `/summary`'s posture, applied to this endpoint:
+
+- Filters on `Hash == hash AND UserId == callerUserId` (`ClickTrackedEvent.UserId` now flows into
+  Mongo's `ClickMeta` too, not just ClickHouse's `ClickFact`), backed by a compound index
+  `(Hash asc, UserId asc, ClickedAt desc)` — equality fields before the sort field, so the
+  filter+sort doesn't fall back to a full collection scan.
+- No `404` branch, same reason `/summary` has none: a hash that doesn't exist, belongs to someone
+  else, or just has zero clicks all return the same `200` with an empty/partial array.
+- `limit` is optional (default `20`, clamped into `[1, 100]`, never rejected with a `400`).
+- `ClickDetail` deliberately omits `IpAddress` — the underlying Mongo document keeps the raw IP
+  (TrafficService needs it for geo-IP resolution), but handing a visitor's IP to the link owner
+  through this API is a PII exposure this feature has no need to take on.
+- Pre-existing Mongo documents from before this endpoint shipped have no `UserId` (the field didn't
+  exist yet) and so can never show up here for any real caller — invisible, not errored, the same
+  backward-compatible shape `ClickFact.UserId` already has on the ClickHouse side.
+
+The product dashboard (`src/frontend/app`, `DashboardPage`'s "Recent clicks" panel) now consumes
+this endpoint, fetched independently of the existing ClickHouse-backed "Stats" panel — both panels
+can be on screen at once and can disagree in liveness, since they're fed by two separate consumers
 (ReportingService→ClickHouse, TrafficService→Mongo) of the same `ClickTrackedEvent`.
 
 The query itself doesn't go straight to the replica set's driver-picked node: `GetRecentAsync` is
@@ -214,8 +211,8 @@ replica. Fronting it with nginx (a `reporting_api_upstream`, same shape as
 `link_api_upstream`/`redirect_api_upstream`) made scaling mechanically possible, and immediately
 exposed the real SignalR-specific problem: a hub connection negotiates over *two* separate HTTP
 requests (`POST .../negotiate` allocates a `connectionId` server-side, then the actual
-WebSocket/SSE/long-polling upgrade has to reach that *same* replica) — plain round-robin has no
-reason to send both to the same backend, so every connection failed with SignalR's own
+WebSocket/SSE/long-polling upgrade has to reach that *same* replica), and plain round-robin has no
+reason to send both to the same backend — every connection failed with SignalR's own
 "No Connection with that ID" error. Sticky-by-client routing (`hash $remote_addr consistent;` — not
 plain `ip_hash`, which rehashes on every peer-count change; see this node's Pitfalls) fixes that.
 

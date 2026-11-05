@@ -37,9 +37,9 @@ with what was fetched. The `IDistributedCache` plumbing underneath both of these
 
 A "Redis" row in the architecture-map UI's Topology panel starts/stops this container and moves
 `CacheEnabled` with it **in both directions** — unlike most other standing toggles, where a parent
-forces a dependent off but restoring the parent never auto-restores the dependent. A `redis-master`
-nobody's allowed to read from would be a node with no reason to exist, so there's deliberately no
-"up but unusable" state reachable through this control. Turning it OFF also force-disables the
+forces a dependent off but restoring the parent never auto-restores the dependent. Deliberate:
+a `redis-master` nobody's allowed to read from would be a node with no reason to exist, so there's
+no "up but unusable" state reachable through this control. Turning it OFF also force-disables the
 nested [Redis Sentinel (HA)](node:redis-sentinel-1) toggle (nothing left to fail over to); turning
 it back ON does **not** auto-restore Sentinel — that stays its own explicit action. Equivalent API:
 `POST /api/infra/redis {"enabled": bool}`.

@@ -61,10 +61,9 @@ string":
    `mymaster`'s address via DNS again on a later restart — confirmed live, a Sentinel restart with
    stale config can fail over onto a now-dead address and tell the real `redis-master` to demote
    itself to replica. This toggle is the first thing in the stack's *normal* lifecycle that ever
-   restarts the Sentinel containers (previously only a full stack restart or deliberate chaos
-   testing did). Fixed by reclaiming `redis-master`'s role (`REPLICAOF NO ONE`, a no-op if already
-   master) before the HA containers even start, then calling the pre-existing self-heal routine
-   immediately on the ON path instead of waiting for its regular 30-second poll.
+   restarts the Sentinel containers. Fixed by reclaiming `redis-master`'s role (`REPLICAOF NO ONE`,
+   a no-op if already master) before the HA containers even start, then calling the pre-existing
+   self-heal routine immediately on the ON path instead of waiting for its regular 30-second poll.
 3. **Exit codes on the exec calls** — the `min-replicas-to-write` fix's own exec call initially used
    a helper that never checked the exit code, so a `redis-cli` call issued before `redis-master` had
    finished its own ~10-second Sentinel-discovery startup delay looked like a successful `CONFIG SET`
@@ -95,26 +94,27 @@ flowchart TD
 Not specific to the Sentinel toggle above - any `docker compose up` can hit this, including the
 very first one after opening Docker Desktop with no containers running yet. Three Sentinel
 instances only protect against *Sentinel itself* disagreeing with *Sentinel itself* (the quorum
-vote in "How it works" above); they do nothing to stop two completely separate memories - this
-node's own `sentinel.conf` (rewritten on every failover, persisted in a named volume, never
-overwritten again once it carries a `CONFIG REWRITE` marker) and a Redis data node's own
-`STATE_FILE` (its last Sentinel-confirmed role, persisted the same way) - from each independently
-resurrecting on a restart and pointing at two different, no-longer-accurate pictures of who's
-master, if either volume survived from an earlier session. `redis-master.md`'s own split-brain
-fencing (`min-replicas-to-write`) limits the damage (an isolated node refuses writes) but doesn't
-prevent the two-masters state itself; [this toggle's own reclaim-ordering
-fix](pitfall:sentinel-toggle-reclaim-causes-two-masters) prevents one specific trigger (the ON path
-manufacturing a second master) but not this one, since this one isn't triggered by the toggle at
-all - it's any restart, the toggle included only incidentally.
+vote in "How it works" above) — they do nothing to stop two completely separate memories from
+resurrecting on restart and independently pointing at two different, no-longer-accurate pictures of
+who's master, if either volume survived from an earlier session:
+
+- This node's own `sentinel.conf` — rewritten on every failover, persisted in a named volume, never
+  overwritten again once it carries a `CONFIG REWRITE` marker.
+- A Redis data node's own `STATE_FILE` — its last Sentinel-confirmed role, persisted the same way.
+
+`redis-master.md`'s own split-brain fencing (`min-replicas-to-write`) limits the damage (an isolated
+node refuses writes) but doesn't prevent the two-masters state itself; [this toggle's own
+reclaim-ordering fix](pitfall:sentinel-toggle-reclaim-causes-two-masters) only prevents one specific
+trigger (the ON path manufacturing a second master), not this one — this one isn't triggered by the
+toggle at all, it's any restart.
 
 Hostname-based monitoring (`resolve-hostnames`/`announce-hostnames`, so Sentinel re-resolves
-`redis-master` by DNS instead of caching a frozen IP) looks like the obvious textbook fix and was
-tried - and reverted, live-verified: Docker's embedded DNS doesn't return a fresh IP when a
-container dies, it stops resolving the name at all, and Sentinel's hostname-resolution path
-blocking on that kept re-triggering its own self-protective "tilt mode" every cycle, so failover
-never completed. IP-based monitoring (what's actually running - see `sentinel.conf`'s own comment)
-hits a clean, fast "connection refused" instead, which is why it was kept despite the staleness
-risk above.
+`redis-master` by DNS instead of caching a frozen IP) looks like the obvious textbook fix, and was
+tried and reverted: Docker's embedded DNS doesn't return a fresh IP when a container dies, it stops
+resolving the name at all, and Sentinel's hostname-resolution path blocking on that kept
+re-triggering its own self-protective "tilt mode" every cycle, so failover never completed.
+IP-based monitoring (what's actually running - see `sentinel.conf`'s own comment) hits a clean, fast
+"connection refused" instead, which is why it was kept despite the staleness risk above.
 
 The only thing that actually guarantees a blank slate for both memories together is
 `sandbox/scripts/stop-stack.ps1 -Wipe` (`docker compose down -v`) - it drops every Sentinel and

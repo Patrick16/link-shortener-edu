@@ -42,27 +42,26 @@ servers = [["postgres", 5432, "primary"], ["postgres-replica1", 5432, "replica"]
 ```
 
 `pgcat.toml` itself (not the `.example`) is gitignored — the control panel's pool-size control
-rewrites it live (`PgcatService.RenderPgcatToml`), so the checked-in file would just be stale the
-moment anyone touches that control; because all 3 replicas mount this one file read-only, rewriting
-it once already means "change all 3 replicas," with no separate fan-out step. `ban_time = 3` (how
-long a server that failed a healthcheck stays excluded) is short on purpose: a 200-VU/20-replica
-load test showed a transient Docker-DNS lookup failure against a replica turning into a ~20s stall
-at the old default (`ban_time = 20`). `pool_size` is **20**, not the 40 a single-instance PgCat
-would use — see [Pooler scaling](pattern:pooler-scaling) for the exact connection-count math behind
-that number.
+rewrites it live (`PgcatService.RenderPgcatToml`); since all 3 replicas mount this one file
+read-only, one rewrite already updates all of them, with no separate fan-out step. `ban_time = 3`
+(how long a server that failed a healthcheck stays excluded) is short on purpose: a 200-VU/
+20-replica load test showed a transient Docker-DNS lookup failure against a replica turning into a
+~20s stall at the old default (`ban_time = 20`). `pool_size` is **20**, not the 40 a single-instance
+PgCat would use — see [Pooler scaling](pattern:pooler-scaling) for the exact connection-count math
+behind that number.
 
 **Scales with the HAProxy toggle.** This node's replica count isn't user-selectable on its own —
-it's always exactly 1 or 3, driven entirely by whether [HAProxy](node:haproxy) is on or off.
-Turning HAProxy off runs `docker compose up -d --scale pgcat=1 --no-recreate --no-deps pgcat`;
-turning it back on scales to 3 the same way. The point isn't resource savings, it's keeping the
-graph's `×N` badge honest: with HAProxy down, nothing is actually load-balancing across whatever
-`pgcat` replicas exist (every DB-touching service still dials `haproxy:6432` specifically, not
-pgcat's own DNS name), so the badge collapsing to `×1` reflects that truthfully instead of implying
-load-balancing that isn't happening. `pgcat` stays deliberately out of the generic per-service scale
-control for this reason — see [Pooler scaling](pattern:pooler-scaling) for why an arbitrary replica
-count isn't safe here the way it is for a stateless API service. The same coupling also runs the
-other direction: disabling pgcat itself forces HAProxy off and collapses this node back to 1
-replica.
+always exactly 1 or 3, driven entirely by whether [HAProxy](node:haproxy) is on or off.
+
+- Toggling HAProxy runs `docker compose up -d --scale pgcat=1|3 --no-recreate --no-deps pgcat`.
+- The point is accuracy, not resource savings: with HAProxy down, nothing actually load-balances
+  across pgcat replicas (every DB-touching service dials `haproxy:6432` directly, not pgcat's own
+  DNS name), so the graph's `×N` badge collapsing to `×1` reflects that truthfully.
+- `pgcat` stays out of the generic per-service scale control for the same reason — see
+  [Pooler scaling](pattern:pooler-scaling) for why an arbitrary replica count isn't safe here the
+  way it is for a stateless API service.
+- The coupling runs both directions: disabling pgcat itself forces HAProxy off and collapses this
+  node back to 1 replica.
 
 ## Pitfalls
 

@@ -69,11 +69,10 @@ closes the window a tombstone-only check would otherwise leave open for up to th
 
 The gone/not-found pages are plain inline HTML (`ContentResult`, explicit status code), the first
 HTML response anywhere in `src/backend` - a short-link redirect is followed by a browser's
-top-level navigation, not a script reading JSON, so a human needs something readable here instead
-of the usual `{type,title,status,detail}` shape. Written with the body already populated
-specifically so `UseApiExceptionHandling`'s `UseStatusCodePages` callback - which only fires on a
-response that's still empty - leaves it alone; verified against the running stack, not just
-assumed from the ASP.NET Core docs.
+top-level navigation, not a script reading JSON, so a human needs something readable instead of the
+usual `{type,title,status,detail}` shape. The body is populated up front specifically so
+`UseApiExceptionHandling`'s `UseStatusCodePages` callback - which only fires on a response that's
+still empty - leaves it alone.
 
 Two separate consumers process `ClickTrackedEvent` downstream, for different reasons:
 `ShortenerService` maintains `Links.ClickCount` as a fast display counter, `TrafficService` writes
@@ -124,8 +123,8 @@ The same shared `RedisRateLimitFilter` [AuthApi](node:auth-api) uses also guards
 `RedirectToOrigin`, keyed purely by client IP — **not** `userId`, even though a link has a known
 owner: `RedirectToOrigin` never authenticates its caller (a short-link click is an anonymous
 browser navigation), and the `userId` a `ClickTrackedEvent` carries is the *link's owner*, set when
-the link was created, not whoever is clicking it now. There was never a caller `userId` available
-on this path to key on. Default 600 requests/60s, overridable without a rebuild via
+the link was created, not whoever is clicking it now — there's no caller `userId` available on this
+path to key on. Default 600 requests/60s, overridable without a rebuild via
 `REDIRECT_RATE_LIMIT_PERMIT`/`REDIRECT_RATE_LIMIT_WINDOW_SECONDS` in `docker-compose.yml` — useful
 for demoing a live `429` on purpose, since the default is sized high enough that normal load-test
 traffic through nginx rarely trips it on its own.
@@ -133,18 +132,15 @@ traffic through nginx rarely trips it on its own.
 Unlike AuthApi, **RedirectApi fails open on a Redis outage** — Redis is already a critical
 dependency on this exact path (the link cache, the deletion-marker lookup above), and this
 project's established rule for this hot path is that a Redis outage degrades gracefully rather
-than blocking it; adding a third reason for Redis to block redirects would contradict that
-existing pattern.
+than blocking it.
 
 This feature is also what added `app.UseForwardedHeaders(...)` to this service for the first time
 (`ForwardedHeaders.XForwardedFor`, `ForwardLimit = 1`, placed first in the pipeline, before
 anything reads `RemoteIpAddress`) — needed because every request here already arrives via `nginx`,
 so the real client address is in `X-Forwarded-For`, not the socket peer. `ForwardLimit = 1` trusts
-only the *last* entry in that header; since nginx's own `$proxy_add_x_forwarded_for` always appends
-the real socket peer to whatever a client sent, trusting only the last hop means a client that
-prepends fake entries before nginx ever sees them gets ignored, not trusted. Safe specifically
-because this service has no host port mapping — nginx is the only way in, so there's no second,
-unproxied entry point a spoofed header could abuse.
+only the *last* entry in that header: nginx's own `$proxy_add_x_forwarded_for` always appends the
+real socket peer, so a client that prepends fake entries before nginx ever sees them gets ignored.
+Safe specifically because this service has no host port mapping — nginx is the only way in.
 
 ## Pitfalls
 
