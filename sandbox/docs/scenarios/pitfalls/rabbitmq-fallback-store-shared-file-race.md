@@ -89,6 +89,12 @@ worker, internal API-key auth). The snippets above are the isolated hunk, not th
 
 (fixed in `3c79e80`)
 
+**See also** this same claim mechanism's own, separate gap on the failure side: a merely-failed
+(not crashed) republish attempt used to hold its claim until the full 2-minute stale threshold aged
+it out, instead of releasing it right away — see
+[a claim-based queue needs an explicit release path for "tried and failed," not just "crashed" and "succeeded"](pitfall:fallback-queue-failed-retry-waits-full-stale-threshold),
+a different angle on the same `ClaimedAt` column (double-processing here vs. slow recovery there).
+
 ## Relatives
 
 ### Nodes

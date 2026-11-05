@@ -169,6 +169,8 @@ at all where `x-max-priority` reordering would have any effect.)
   (concurrency) — fixed
 - ⚠️ [A last-resort fallback write needs its own protection — it has no fallback of its own](pitfall:sqlite-fallback-save-no-busy-timeout-unprotected)
   (resilience-gap) — fixed
+- ⚠️ [A claim-based queue needs an explicit release path for "tried and failed," not just "crashed" and "succeeded"](pitfall:fallback-queue-failed-retry-waits-full-stale-threshold)
+  (resilience-gap) — fixed
 
 ## Relatives
 

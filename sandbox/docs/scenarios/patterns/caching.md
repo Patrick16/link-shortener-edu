@@ -140,6 +140,40 @@ cache write (see [LinkApi](node:link-api)) — that entry now resolves to 54-66s
 60s, harmless since it's normally overwritten by the durable 3600s write within sub-second-to-low-
 seconds, well before either TTL would matter.
 
+### An alternative backend: `Microsoft.Extensions.Caching.Hybrid`
+
+Everything above describes `EntityCacheService<T>`, a hand-rolled implementation that exists partly
+as a *teaching* piece: it spells out L1/L2 layering, single-flight coalescing, negative caching, and
+TTL jitter explicitly, in code a reader can step through. A second, swappable implementation,
+`HybridEntityCacheService<T>`/`HybridLinkCacheService` (`src/backend/Shared/Common/
+HybridEntityCacheService.cs`), wraps the BCL's own `Microsoft.Extensions.Caching.Hybrid` package
+instead — the same `IEntityCacheService<T>` contract, same Redis key format (`link:{id}`), selected
+per-service at startup via `Cache:Backend` (`legacy` default, `hybrid` opt-in,
+`EntityCacheServiceExtensions.AddLinkCacheService`, mirroring the existing `Messaging:Mode` toggle's
+fail-loudly-on-a-typo shape). `LinkApi`, `RedirectApi`, and `ShortenerService` each select it
+independently.
+
+The point isn't "hybrid is better" — it's the opposite: having both side by side, one env var apart,
+lets a reader see exactly what ~280 lines of hand-rolled cache-aside logic buys over the BCL
+primitive, and exactly where the two diverge in observable behavior. `HybridCache.GetOrCreateAsync`
+gives `GetOrFetch` per-key single-flight coalescing for free (no `ConcurrentDictionary<string,
+Lazy<Task<T?>>>` needed), but the scope is deliberately **not full parity**:
+
+- No negative-cache TTL, no Polly circuit breaker, no `Cache:L1Enabled`/`Cache:NegativeEnabled`
+  sub-toggles — `HybridEntityCacheService` is always "on" once selected, with no equivalent demo
+  switches.
+- **The null-caching TTL surprise.** HybridCache *does* cache a `null` `GetOrFetch` result — the
+  factory isn't re-invoked on the next call for the same id, so it provides negative caching "for
+  free." But it uses the exact same TTL as a positive entry (3600s, jittered), not
+  `EntityCacheService`'s deliberately short, separate 10-second negative-cache window (see "Negative
+  caching" above). A hash that doesn't exist yet but is about to be created stays "not found" for up
+  to an hour under the hybrid backend, instead of 10 seconds under the legacy one — a real
+  behavioral difference between the two backends, not a missing feature on either side.
+
+`Cache:Backend=hybrid` has been unit-tested against a real in-process `HybridCache` (no mock) but
+not yet exercised against the real Docker/Redis stack — a known, deliberate gap at the time of
+writing, not an oversight.
+
 ## Pitfalls
 
 - 🐛 [Redis outage used to 500 every link read](pitfall:cache-read-no-error-handling)
@@ -162,6 +196,8 @@ seconds, well before either TTL would matter.
   (race-condition) — known limitation
 - 🐛 [A new cache tier can forget to honor the flag that's supposed to disable every tier](pitfall:negative-cache-tier-not-gated-on-overall-cache-toggle)
   (architecture-bug) — fixed
+- ⚠️ [A second cache-backend implementation quietly dropped a jitter detail the first one got right](pitfall:hybrid-cache-backend-missing-ttl-jitter)
+  (performance) — fixed
 
 ## Relatives
 
