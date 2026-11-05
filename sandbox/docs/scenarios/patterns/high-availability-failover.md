@@ -34,12 +34,11 @@ a split brain. See Pitfalls for how this bit Redis specifically here, and
 it can't see enough replicas acknowledging them, which is also what keeps a *not-yet-detected*
 split brain from silently diverging too much data before Sentinel finishes failing over).
 
-A rejoining old primary isn't the only way to reach that same two-masters state, for Redis
-specifically — a plain restart onto volumes that survived from an earlier session can resurrect two
-*independently persisted* memories (this node's own last-confirmed role, Sentinel's own learned
-`mymaster` address) that each come back believing something different, with neither side doing
-anything wrong by its own lights. See [Redis Sentinel 1](node:redis-sentinel-1)'s "Known trade-off"
-section for the full mechanism and why hostname-based monitoring isn't the fix here.
+A plain restart onto stale volumes can reach the same two-masters state a different way for Redis:
+the node's own persisted role and Sentinel's learned `mymaster` address can each come back
+remembering something different, with neither side doing anything wrong by its own lights. See
+[Redis Sentinel 1](node:redis-sentinel-1)'s "Known trade-off" section for the full mechanism and
+why hostname-based monitoring isn't the fix here.
 
 ```mermaid
 stateDiagram-v2
@@ -72,17 +71,17 @@ ConnectionStrings__Redis: "${REDIS_CONN:-redis-sentinel-1:26379,redis-sentinel-2
 `ConnectionMultiplexer.Connect` throws the moment Sentinel can't be reached yet (e.g. at boot),
 taking the whole host down instead of retrying in the background.
 
-**Live demo controls for this pattern.** Both implementations now have a standing toggle in the
+**Live demo controls for this pattern.** Both implementations have a standing toggle in the
 architecture-map UI's Topology panel that stops/starts their real HA containers and re-renders the
 graph to match — previously the only way to see either story degrade was chaos-killing a container
-by hand and watching the system cope, with no clean "turn HA off, see a plain single node, turn it
-back on" path. Redis: a "Redis" toggle (the node itself) with a nested "Redis Sentinel (HA)" toggle
-underneath — see [Redis (master)](node:redis-master) and
-[Redis Sentinel 1](node:redis-sentinel-1)'s own "Standing toggle" sections. MongoDB: a "Replicas
-(MongoDB)" toggle — see [Mongo 1](node:mongo1)'s own "Standing toggle" section, including the
-voting-configuration quirk that makes Mongo's version of this control structurally harder than
-Redis's or Postgres's (a plain container stop here would leave the one remaining member unable to
-reach a voting majority, unlike either other store).
+by hand. No clean "turn HA off, see a plain single node, turn it back on" path existed before this.
+
+- **Redis**: a "Redis" toggle (the node itself) with a nested "Redis Sentinel (HA)" toggle
+  underneath — see [Redis (master)](node:redis-master) and
+  [Redis Sentinel 1](node:redis-sentinel-1)'s own "Standing toggle" sections.
+- **MongoDB**: a "Replicas (MongoDB)" toggle — see [Mongo 1](node:mongo1)'s own "Standing toggle"
+  section. Structurally harder than Redis's or Postgres's: a plain container stop would leave the
+  one remaining member unable to reach a voting majority.
 
 ## Pitfalls
 

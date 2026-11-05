@@ -93,11 +93,11 @@ Hedging has to avoid racing against the replica set's **primary** (querying it a
 serving writes, for no latency benefit a secondary doesn't already give). The naive way to find "the
 other two" is to assume a fixed position in the host list is always the primary — this project's own
 replica set [doesn't have a fixed primary](node:mongo1) (a fresh stack has come up with `mongo3`
-primary; a real failover has left `mongo2` primary). `MongoExtensions.IsCurrentPrimary` runs a
-synchronous `hello` command (checking `isWritablePrimary`, MongoDB 5.0+'s replacement for the legacy
-`ismaster` field) against each candidate node once, at host startup, and excludes whichever one
-answers true — see [this pitfall](pitfall:mongo-hedge-static-primary-assumption) for the real bug
-the positional shortcut caused and how the live check replaced it.
+primary; a real failover has left `mongo2` primary). `MongoExtensions.IsCurrentPrimary` instead runs
+a synchronous `hello` command against each candidate node once, at host startup, and excludes
+whichever one answers `isWritablePrimary` — see
+[this pitfall](pitfall:mongo-hedge-static-primary-assumption) for the real bug the positional
+shortcut caused and how the live check replaced it.
 
 This check runs once, at startup — not per request. If the replica set's primary changes *after*
 ReportingApi has already started, the hedge pool keeps using the primary it detected at boot until

@@ -4,11 +4,11 @@ Postgres's own built-in primitive for application-level mutual exclusion:
 [advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS) —
 `pg_try_advisory_lock(key)` (non-blocking: returns immediately, `true`/`false`) and
 `pg_advisory_unlock(key)`, each keyed by a 64-bit integer that means whatever the application
-decides. "Advisory" because Postgres enforces nothing about what the key refers to — it never
-checks the key against any table or row, only that two sessions can't hold the same key at the
-same time. A sibling function, `pg_advisory_xact_lock`, auto-releases at transaction end instead of
-session end — not used here, since this project's critical section spans more than one statement
-and needs the lock held across all of them, not just one transaction.
+decides. "Advisory" because Postgres never checks the key against any table or row — it only
+enforces that two sessions can't hold the same key at once. A sibling function,
+`pg_advisory_xact_lock`, auto-releases at transaction end instead of session end — not used here,
+since this project's critical section spans more than one statement and needs the lock held across
+all of them.
 
 ## What it solves
 
@@ -33,14 +33,14 @@ ways that don't exist for a plain SQL query:
 
 - **A transaction-mode connection pooler breaks it outright.** [pgcat](node:pgcat) here runs in
   `pool_mode = "transaction"` (`sandbox/infra/pgcat/pgcat.toml.example`) — it only guarantees your
-  statements land on *some* backend connection, not the same one across calls. Acquire and release
-  can silently land on two different physical sessions, so this
-  implementation bypasses pgcat entirely and connects straight to the primary (same reasoning as
-  this project's DDL migrations — see [Read-replica routing](pattern:read-replica-routing)'s own
-  Pitfalls for the general "DDL through a query-classifying pooler is inherently fragile" rule).
-- **An ORM that implicitly opens/closes a connection per command breaks it too**, for the same
-  underlying reason one level up the stack: EF Core's default "closed" just returns the connector
-  to Npgsql's own client-side pool, with no guarantee the next open gets that same connector back.
+  statements land on *some* backend connection, not the same one across calls, so acquire and
+  release can silently land on two different physical sessions. This implementation bypasses pgcat
+  entirely and connects straight to the primary (same reasoning as this project's DDL migrations —
+  see [Read-replica routing](pattern:read-replica-routing)'s own Pitfalls for the general "DDL
+  through a query-classifying pooler is inherently fragile" rule).
+- **An ORM that implicitly opens/closes a connection per command breaks it too**, one level up the
+  stack: EF Core's default "closed" just returns the connector to Npgsql's own client-side pool,
+  with no guarantee the next open gets that same connector back.
 
 ```mermaid
 sequenceDiagram

@@ -72,25 +72,21 @@ scaling proportionally with the replica count.
 ### A real design correction, not the first shape shipped
 
 The first version of this feature used 3 separately-named Compose services (`pgcat-1`/`pgcat-2`/
-`pgcat-3`) instead of one scaled service. On the architecture-map graph, that meant drawing one
-"representative instance" with the real downstream edges to Postgres and leaving the other two
-without any — the same convention already used for Mongo's 3-node replica set. For PgCat
-specifically, that made `pgcat-2`/`pgcat-3` look broken or unused rather than identical peers, since
-nothing about PgCat's own role suggested "one of these is special" the way a replica set's primary
-is. The fix was switching to one scaled service with the graph's own existing `×N` badge
-(`ServiceNode.tsx`, the same way `link-api`/`redirect-api`/etc. show their own replica counts) —
-using an established pattern instead of inventing a situation-specific one. This also simplified the
-backend: `IContainerRuntime.ListAsync` (list every container for one service, not just the primary)
-replaced the per-instance route design the 3-named-services version would have needed.
+`pgcat-3`) instead of one scaled service. That forced the same graph convention used for Mongo's
+replica set — one "representative instance" with the real edges, the other two left without any —
+but for PgCat it made `pgcat-2`/`pgcat-3` look broken rather than identical peers, since nothing
+about PgCat's role suggests "one of these is special" the way a replica set's primary does. The
+fix: one scaled service using the graph's existing `×N` badge (`ServiceNode.tsx`, same as
+`link-api`/`redirect-api`'s own replica counts), which also simplified the backend —
+`IContainerRuntime.ListAsync` (list every container for one service) replaced the per-instance
+routes the 3-named-services version would have needed.
 
 **Why PgCat still isn't in control-api's generic scale control**, unlike the services the `×N`
-badge pattern is borrowed from: not because HAProxy's backend list can't track a replica-count
-change (it can — `server-template`, see [HAProxy](node:haproxy), re-resolves the `pgcat` DNS name
-at runtime and would pick up a scale-up automatically, up to its reserved slot count). It's because
-`pool_size` above is hand-calibrated for exactly 3 replicas against Postgres's `max_connections` —
-scaling through the generic control without also recalculating and reapplying `pool_size` would
-silently risk exhausting real Postgres connections, not just fail loudly the way a missing route
-would.
+badge pattern is borrowed from: not because HAProxy can't track a replica-count change (it can —
+`server-template`, see [HAProxy](node:haproxy), re-resolves the `pgcat` DNS name at runtime). It's
+because `pool_size` above is hand-calibrated for exactly 3 replicas against Postgres's
+`max_connections` — scaling through the generic control without also recalculating `pool_size`
+would silently risk exhausting real Postgres connections, not just fail loudly.
 
 **A live failure-demo control for this pattern.** Beyond the pgcat-bypass standing toggle (which
 reroutes DB-touching services around the whole pooler layer, replicas included), there's a separate

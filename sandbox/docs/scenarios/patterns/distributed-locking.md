@@ -74,15 +74,12 @@ window. A session-scoped lock sidesteps the guessing entirely, at the cost of ne
 pinned connection for as long as the lock is held.
 
 **The Redis side has two different sub-flavors of the same primitive, not one.**
-`TopLinksPushService` takes a **one-shot claim**: acquire, do a short bit of work, let the TTL
-expire, done — the TTL is both "how long I hold it" and "how long until the next attempt can
-succeed" in one number. `LinkExpiryWorker` takes a **sustained lease**: claim once, then keep
-renewing the same key indefinitely for as long as this replica wants to stay leader, via a
-separate, much-more-frequent renewal loop that runs independently of the work loop it's gating.
-The "Yes, but only once the TTL elapses" failure-recovery row above applies to both the same way —
-a dead leader's lease still has to expire before anyone else can take over — but the *renewal*
-machinery (a conditional-extend script, not just "set it again") only exists for the lease variant.
-See [Distributed locking: Redis claims](pattern:distributed-locking-redis) for both, side by side.
+`TopLinksPushService` takes a **one-shot claim** — acquire, work briefly, let the TTL expire, done.
+`LinkExpiryWorker` takes a **sustained lease** — claim once, then keep renewing the same key on a
+faster, independent heartbeat for as long as it wants to stay leader. Both still need the TTL to
+elapse before a dead holder's slot frees up; only the lease variant needs renewal machinery (a
+conditional-extend script, not just re-setting the key) on top. See
+[Distributed locking: Redis claims](pattern:distributed-locking-redis) for both, side by side.
 
 ## How it's implemented here
 

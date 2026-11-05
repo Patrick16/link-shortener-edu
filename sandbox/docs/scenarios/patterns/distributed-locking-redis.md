@@ -83,11 +83,9 @@ to every replica pushing independently — this service's own pre-backplane beha
 dashboard might see one duplicate update" is strictly better than "no replica pushes anything at
 all." A different call site with higher stakes makes the opposite call with the exact same
 primitive: `AuthApi`'s Redis-backed rate limiter
-(`src/backend/Shared/WebDefaults/RateLimitPolicy.cs:14-15`)
-fails **closed** instead — an open window during a Redis outage on register/login would mean
-unlimited brute-force attempts, so there "never block the hot path on a dependency outage" is the
-wrong default. Same atomic claim, opposite failure-mode decision, chosen per call site by what a
-false "proceed" would actually cost.
+(`src/backend/Shared/WebDefaults/RateLimitPolicy.cs:14-15`) fails **closed** instead — an open
+window during a Redis outage on register/login would mean unlimited brute-force attempts, so
+"never block the hot path on a dependency outage" is the wrong default there.
 
 ## How it's implemented here
 
@@ -116,9 +114,8 @@ private static string PushClaimKey(Guid userId) => $"clicks:user:{userId:N}:push
 
 No library dependency beyond the `StackExchange.Redis` client this project already uses for
 caching — no Redlock package, no separate lock abstraction. The same `SET ... NX PX` idiom also
-backs `RedisLinkDeletionMarkerStore`'s deletion tombstone and `IdempotencyStore`'s replay claim
-elsewhere in this codebase, though those two are write-once markers (never contested on purpose),
-not a lock guarding a repeated critical section the way this one is.
+backs two write-once markers elsewhere (`RedisLinkDeletionMarkerStore`'s deletion tombstone,
+`IdempotencyStore`'s replay claim) — never contested on purpose, so not a lock in the same sense.
 
 ## Sustained lease: `LinkExpiryWorker`'s leader election
 
@@ -197,15 +194,9 @@ catch (Exception ex) when (ex is not OperationCanceledException)
 }
 ```
 
-Same primitive, opposite choice of what to assume when the *coordination mechanism itself* breaks.
-`TopLinksPushService` fails open because a missed de-dup there just costs one stale dashboard
-update — "proceed anyway" is strictly better than "push nothing." Here, "proceed anyway" (assume
-still-leader) would mean every replica racing the same sweep `UPDATE` the instant Redis recovers —
-not a correctness bug (the sweep's own `WHERE ... DeletedAt IS NULL` guard is idempotent, same as
-the general pattern-doc's point about this project's two singleton jobs needing no fairness), but
-still wasted, duplicated work for no benefit over just waiting out a transient blip. Whichever
-default is chosen per call site, by what a wrong guess would actually cost — not a library default
-applied uniformly.
+Opposite default from `TopLinksPushService`'s fail-open above, for the reason the code comment
+gives: here "proceed anyway" costs wasted duplicate work on every replica, not one stale dashboard
+update, so the better guess when Redis itself is unreachable flips.
 
 `LeaseDuration` (15s) is deliberately 3x `RenewInterval` (5s), so one missed renewal (a slow Redis
 round trip, a GC pause) doesn't immediately cost leadership — only a leader that's actually gone
