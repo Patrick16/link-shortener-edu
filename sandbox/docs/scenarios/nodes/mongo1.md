@@ -52,15 +52,14 @@ A "Replicas (MongoDB)" row in the architecture-map UI's Topology panel drops `mo
 of `rs0`'s voting configuration and stops their containers (OFF), or starts them back up and
 `rs.add()`s them back in (ON) — equivalent API: `POST /api/infra/mongo-replicas {"enabled": bool}`.
 
-Unlike Postgres/Redis, a plain container stop here is actively dangerous, not just incomplete:
-`mongo1`/`mongo2`/`mongo3` were baked into `rs0`'s own voting configuration by the one-shot
-`mongo-init` job's `rs.initiate()` call. Simply stopping `mongo2`/`mongo3` without first removing
-them from that configuration would leave `mongo1` able to see only 1 of 3 *configured* voting
-members — not a majority — so `mongo1` would step down to SECONDARY and refuse writes entirely, the
-opposite of "simplify to one working instance." OFF therefore reconfigures `rs0` down to a 1-member
-set *before* stopping the containers; ON starts the containers first (MongoDB gates a freshly added
-member's eligibility to vote/serve reads until its initial sync completes, so there's no window of
-routing to a member that isn't ready), then `rs.add()`s each one back.
+Unlike Postgres/Redis, a plain container stop here is actively dangerous: `mongo1`/`mongo2`/
+`mongo3` were baked into `rs0`'s own voting configuration by the one-shot `mongo-init` job's
+`rs.initiate()` call. Stopping `mongo2`/`mongo3` without first removing them would leave `mongo1`
+able to see only 1 of 3 *configured* voting members — not a majority — so it would step down to
+SECONDARY and refuse writes entirely, the opposite of "simplify to one working instance." OFF
+therefore reconfigures `rs0` down to a 1-member set *before* stopping the containers; ON starts the
+containers first (MongoDB gates a freshly added member's eligibility to vote/serve reads until its
+initial sync completes), then `rs.add()`s each one back.
 
 Three real, live-discovered quirks this toggle has to handle:
 

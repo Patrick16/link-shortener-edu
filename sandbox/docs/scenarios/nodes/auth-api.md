@@ -45,11 +45,11 @@ services reference.
 (`[ServiceFilter(typeof(RedisRateLimitFilter))]` on `AuthController`), keyed purely by
 `RemoteIpAddress` — these endpoints are unauthenticated, so there's no logged-in caller to key on.
 The counter itself (`RedisRateLimiter`, see [Async messaging](pattern:async-messaging)'s neighbor,
-[Redis](node:redis-master)) is a fixed window, not sliding: `INCR` a per-key counter and, only on
-the very first hit in a fresh window, `PEXPIRE` it — both inside one Lua script (`EVAL`), not two
-separate round trips, so a crash between the two can't leave a key incremented but never expiring.
-Default 100 requests/60s (`RateLimiting` in `appsettings.json`); request 101+ gets a `429` with the
-same `ProblemDetails` shape as every other error here.
+[Redis](node:redis-master)) is a fixed window, not sliding: `INCR` and, only on the first hit in a
+fresh window, `PEXPIRE`, both inside one Lua script (`EVAL`) so a crash between the two can't leave
+a key incremented but never expiring. Default 100 requests/60s (`RateLimiting` in
+`appsettings.json`); over that gets a `429` with the same `ProblemDetails` shape as every other
+error here.
 
 ```mermaid
 flowchart TD
@@ -65,16 +65,14 @@ flowchart TD
     I -- No --> G
 ```
 
-This replaced AuthApi's prior rate limiting outright — a per-process, in-memory fixed-window
-counter — because AuthApi wasn't in `control-api`'s `ScalableServices` list, so "scale it past one
-replica" would have silently turned the configured limit into `limit × replicas`. Moving the
-counter into Redis (which AuthApi didn't depend on at all before this) fixes that, at the cost of a
-new dependency on the hot auth path — which is why **AuthApi fails closed on a Redis outage**
-(`503 Service Unavailable`, not a silently-open gate): these endpoints guard against
-brute-forcing, so an open window during an outage would mean unlimited login attempts. This is a
-deliberate exception to this project's usual "never block on a dependency outage" default used
-elsewhere (caching, the request budget) — the right call here specifically because the thing being
-protected is login, not a read.
+This replaced AuthApi's prior per-process, in-memory fixed-window counter, which silently became
+`limit × replicas` once scaled past one instance (AuthApi wasn't in `control-api`'s
+`ScalableServices` list). Moving the counter into Redis fixes that, at the cost of a new dependency
+on the hot auth path — which is why **AuthApi fails closed on a Redis outage** (`503 Service
+Unavailable`, not a silently-open gate). That's a deliberate exception to this project's usual
+"never block on a dependency outage" default (caching, the request budget), justified because
+these endpoints guard against brute-forcing: an open window during an outage would mean unlimited
+login attempts.
 
 AuthApi sits on a direct host port (8081), not behind `nginx` like `LinkApi`/`RedirectApi` — so
 unlike `RedirectApi`'s rate limiter (see [RedirectApi](node:redirect-api)), it has no
@@ -83,19 +81,16 @@ address here. Its limit also has no docker-compose override knob (unlike `Redire
 100/60s default was already easy to trip in a demo, so there was no equivalent need to lower it
 live.
 
-The rate limiter's Redis dependency is a raw `AddRedisMultiplexer` connection (`AbortOnConnectFail=
-false`), deliberately not `AddRedisDistributedCache` — AuthApi has no actual cache to warm, so
-pulling in the full cache abstraction plus its memory-cache/warmup bundle just for the multiplexer
-would be dead weight. That deliberate choice had left a real gap: no health check and no connection
-warmup for that same multiplexer, so a cold first login/register paid the Redis connect cost on the
-request path itself (`RateLimitFailureMode.LocalFallback`'s fail-open window covered it in the
-meantime, but didn't make the cold hit free). Fixed by making `RedisWarmupService`'s
-`IDistributedCache` dependency optional (resolved via `IServiceProvider.GetService<T>()`, same
-pattern as its already-optional `IConnectionMultiplexer`) — when no `IDistributedCache` is
-registered, as here, the cache half of the warmup is a no-op and only the multiplexer gets warmed.
-`/health/ready` gained `.AddRedisHealthCheck()` (needs only the multiplexer, already registered),
-and `RedisWarmupService` is now registered as a hosted service alongside the rate limiter, without
-ever pulling in the cache bundle this service deliberately never needed.
+The rate limiter's Redis dependency is a raw `AddRedisMultiplexer` connection
+(`AbortOnConnectFail=false`), deliberately not the full `AddRedisDistributedCache` bundle — AuthApi
+has no actual cache to warm, so pulling in the cache abstraction plus its memory-cache/warmup
+bundle just for the multiplexer would be dead weight. That choice left a real gap: no health check
+and no connection warmup, so a cold first login/register paid Redis's connect cost on the request
+path itself. Fixed by making `RedisWarmupService`'s `IDistributedCache` dependency optional (same
+pattern as its already-optional `IConnectionMultiplexer`) — here it's a no-op and only the
+multiplexer gets warmed. `/health/ready` gained `.AddRedisHealthCheck()`, and `RedisWarmupService`
+now runs as a hosted service alongside the rate limiter, without ever pulling in the cache bundle
+this service never needed.
 
 ## Pitfalls
 

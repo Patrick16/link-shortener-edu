@@ -21,9 +21,8 @@ capacity — add more replicas, reads get faster, without touching the primary a
 4. A read gets load-balanced across the primary and every replica
    (`primary_reads_enabled = true` — the primary isn't excluded from read traffic, just not the
    *only* place reads can go).
-5. Replicas replicate from the primary continuously via Postgres's own streaming WAL replication —
-   not something PgCat is involved in at all; PgCat only decides where to *route* a query, the
-   actual data replication is entirely between Postgres instances.
+5. Replicas replicate from the primary continuously via Postgres's own streaming WAL replication,
+   entirely independent of PgCat — it only routes queries, not data.
 
 ```mermaid
 sequenceDiagram

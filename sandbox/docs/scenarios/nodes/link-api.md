@@ -45,7 +45,7 @@ synchronous-return/async-persist split possible in the first place.
 
 `DispatchAsync` goes through `IEventDispatcher`, not a direct publisher call — see
 [Async messaging](pattern:async-messaging) for the RabbitMQ/gRPC transport toggle this abstracts
-over. The cache write only happens after it succeeds, not before (see this node's Pitfalls).
+over.
 
 A Bearer token is read *optionally* — `CreateLink` has no `[Authorize]`, so anonymous callers work
 identically to authenticated ones; the only difference is whether `Link.UserId` ends up populated
@@ -61,26 +61,27 @@ even though the plain-hash path deliberately never makes it.
 
 **`DELETE /Links/{hash}` is owner-only and publishes through the same `IEventDispatcher` as
 `CreateLink`** - no forced transport the way custom aliases force sync gRPC; delete respects
-whichever messaging mode is active. Anonymous links (`UserId == null`) can never be deleted by
-anyone, and a caller who isn't the link's own owner gets `403`, not `404` - the hash is already in
-their hands (they're asking to delete it), so there's nothing extra to protect by pretending it
-doesn't exist. An already-deleted hash returns `204` idempotently instead of erroring. The handler
-dispatches `LinkDeletedEvent` first and only then writes an optimistic "deleted" marker to a
-*separate* Redis key (`link:deleted:{hash}`, not the main `link:{hash}` cache entry) via
-`ILinkDeletionMarkerStore` - mirroring `CreateLink`'s own dispatch-before-optimistic-write ordering
-above, in the opposite direction; see this node's Pitfalls for the review-caught bug this ordering
-fixes (writing the tombstone first left a false 60s "Gone" page behind for a link whose delete had
-actually failed, under `Messaging:Mode=grpc`). See [RedirectApi](node:redirect-api) for why that
-key is checked first on every resolve, and [ShortenerService](node:shortener-service) for how the
-marker gets confirmed. `CreateLink` also
-accepts an optional `TtlSeconds`, converted once to an absolute `ExpiresAt` and carried on
-`LinkCreatedEvent` for both the plain-hash and custom-alias paths - see ShortenerService's
-`LinkExpiryWorker` for what actually acts on it. `GetLinks` filters out deleted and expired links
-by default; there's no "show them anyway" toggle, since nothing in this feature calls for one.
-`GetLink` (the single-hash lookup) applies the identical live check and returns `410 Gone` for a
-deleted/expired hash instead of its stale metadata — it didn't always; see this node's Pitfalls for
-the review-caught inconsistency that left it disagreeing with `GetLinks` about whether a gone link
-still existed.
+whichever messaging mode is active.
+
+- Anonymous links (`UserId == null`) can never be deleted by anyone, and a caller who isn't the
+  link's own owner gets `403`, not `404` - the hash is already in their hands, so there's nothing
+  extra to protect by pretending it doesn't exist.
+- An already-deleted hash returns `204` idempotently instead of erroring.
+- The handler dispatches `LinkDeletedEvent` first and only then writes an optimistic "deleted"
+  marker to a *separate* Redis key (`link:deleted:{hash}`, not the main `link:{hash}` cache entry)
+  via `ILinkDeletionMarkerStore` - mirroring `CreateLink`'s own dispatch-before-optimistic-write
+  ordering above, in reverse. Writing the tombstone first left a false 60s "Gone" page behind a
+  delete that had actually failed, under `Messaging:Mode=grpc` - see this node's Pitfalls. See
+  [RedirectApi](node:redirect-api) for why that key is checked first on every resolve, and
+  [ShortenerService](node:shortener-service) for how the marker gets confirmed.
+
+`CreateLink` also accepts an optional `TtlSeconds`, converted once to an absolute `ExpiresAt` and
+carried on `LinkCreatedEvent` for both the plain-hash and custom-alias paths - see
+ShortenerService's `LinkExpiryWorker` for what actually acts on it. `GetLinks` filters out deleted
+and expired links by default, with no "show them anyway" toggle. `GetLink` (the single-hash
+lookup) applies the identical live check and returns `410 Gone` for a deleted/expired hash instead
+of its stale metadata — it didn't always; see this node's Pitfalls for the review-caught
+inconsistency that left it disagreeing with `GetLinks` about whether a gone link still existed.
 
 ### `Idempotency-Key`: replaying a retry instead of minting a second link
 
@@ -137,9 +138,9 @@ per key at `idempotency:links-create:{key}`, with the same two-tier TTL shape as
 completed-record TTL that a finished response replays from. **Every** outcome — success, or any
 `Problem()` result — is cached and replayed identically; only an unhandled exception evicts the
 claim instead, since that's not a deterministic, safe-to-replay outcome. No header → no behavior
-change at all, same at-least-once semantics as before this feature existed. Fails open on a Redis
-error, same spirit as every other Redis-backed store in this codebase — a Redis outage silently
-degrades back to at-least-once for the duration, it never fails the request.
+change at all. Fails open on a Redis error, same spirit as every other Redis-backed store in this
+codebase — a Redis outage silently degrades back to at-least-once for the duration, it never fails
+the request.
 
 There is deliberately no `control-api`/`architecture-map` toggle for this — it's per-request client
 behavior (a header), not a standing infra on/off switch with persistent state for a panel to show.

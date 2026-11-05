@@ -4,18 +4,17 @@ The textbook fix for a non-transactional dual-write (two independent systems, no
 transaction across them): instead of writing to System A then System B directly, write to System A
 *plus a row describing the System B write* in one local transaction, then let a separate relay
 worker read those rows and apply the System B write later, marking each row done once it succeeds.
-The relay is at-least-once (it can re-apply a row it already applied), so the System B write has to
-be idempotent either way - the outbox doesn't remove that requirement, it just moves *when* the
-write happens from "inline, best-effort" to "guaranteed eventually, from a durable local record."
+The relay is at-least-once (it can re-apply a row it already applied), so the System B write still
+has to be idempotent - the outbox just moves *when* that write happens, from "inline, best-effort"
+to "guaranteed eventually, from a durable local record."
 
 ## What it solves
 
 A plain dual-write (write A, then write B, no coordination) has one structural gap no amount of
 retry logic inside the same request can close: if the process dies, is killed, or simply never gets
-to the second write for any reason, after the first write has already committed, nothing durable
-remembers that the second write still needs to happen. The outbox closes that specific gap by making
-the "needs doing" fact itself durable and transactional with the first write - either both the real
-write and the outbox row land together, or neither does.
+to the second write, after the first write has already committed, nothing durable remembers that
+the second write still needs to happen. The outbox closes that specific gap by making the
+"needs doing" fact itself durable and transactional with the first write.
 
 **Considered and deliberately not built in this project** for
 [TrafficService](node:traffic-service)'s `Clicks` (Postgres) + `ClickMeta` (Mongo) dual-write - see
@@ -96,31 +95,28 @@ await context.SaveChangesAsync(cancellationToken);
 
 Only `newClicks` get an outbox row here, unlike the real consumer's Mongo write today, which
 unconditionally re-attempts for *every* deduped click in the batch, redelivered or not (the fix for
-`traffic-mongo-write-skipped-on-redelivery` - see this node's Pitfalls). That defense-in-depth is
-no longer needed for this mode: because the `Click` row and its outbox row commit atomically in the
-*same* `SaveChangesAsync` above, an already-stored `Click` is guaranteed to already have its outbox
-row too, written back when it was first inserted - there's no independent-failure window left to
-re-attempt against. That guarantee is exactly what the outbox buys over the current scheme, not a
-dropped safeguard.
+`traffic-mongo-write-skipped-on-redelivery` - see this node's Pitfalls). That defense-in-depth
+isn't needed here: because the `Click` row and its outbox row commit atomically in the same
+`SaveChangesAsync` above, an already-stored `Click` is guaranteed to already have its outbox row
+too - there's no independent-failure window left to re-attempt against. That guarantee is exactly
+what the outbox buys over the current scheme, not a dropped safeguard.
 
 `ClickMetaOutboxRow` would be a plain EF entity (`Id`, `Payload`, `CreatedAt`, `PublishedAt`)
 mapped to `click_meta_outbox` via a new `DbSet<ClickMetaOutboxRow> ClickMetaOutbox` on
 `DatabaseContext`, migrated the same way `Clicks` already is (`TrafficService` stays the one owner
 of `clicks_db` either way).
 
-and a relay worker polling it. Shaped like this project's other periodic workers
-(`ClickCountFlushWorker`, `RabbitMqRetryWorker`) - a `PeriodicTimer` loop, one tick's own failure
-logged and left for the next tick rather than crashing the host - so it'd live as its own file,
+and a relay worker polling it, shaped like this project's other periodic workers
+(`ClickCountFlushWorker`, `RabbitMqRetryWorker`): a `PeriodicTimer` loop that logs and skips a
+failed tick rather than crashing the host. It would live at
 `src/backend/Services/TrafficService/ClickMetaOutboxRelayWorker.cs`, registered unconditionally in
-`TrafficServiceExtensions.AddTrafficServices` (`builder.Services.AddHostedService<
-ClickMetaOutboxRelayWorker>()`) next to `ClickTrackedConsumer` - "unconditionally" because an empty
-table is a cheap no-op poll, the same reasoning `RabbitMqRetryWorker` already runs regardless of
-whether its own SQLite fallback currently has anything queued. Unlike `ClickCountFlushWorker`
-(which needed a `StopAsync` override - see backlog item 8 - specifically because its buffered
-counts only ever live in-process, in `ClickCountAggregator`), this worker deliberately skips one:
-its "pending work" is already durable in `click_meta_outbox` itself (`published_at IS NULL`), so a
-graceful stop just defers those rows to the next tick, this replica's restart, or another replica -
-no data loss, only a latency bump bounded by `PollInterval`.
+`TrafficServiceExtensions.AddTrafficServices` next to `ClickTrackedConsumer` - an empty table is a
+cheap no-op poll, the same reasoning `RabbitMqRetryWorker` already uses regardless of whether its
+SQLite fallback has anything queued. Unlike `ClickCountFlushWorker` (which needs a `StopAsync`
+override - see backlog item 8 - because its buffered counts live only in-process, in
+`ClickCountAggregator`), this worker doesn't need one: its pending work is already durable in
+`click_meta_outbox` (`published_at IS NULL`), so a graceful stop just defers those rows to the next
+tick or another replica - no data loss, only a latency bump bounded by `PollInterval`.
 
 ```csharp
 public sealed class ClickMetaOutboxRelayWorker(
@@ -208,33 +204,30 @@ public sealed class ClickMetaOutboxRelayWorker(
 ## Why it isn't built here
 
 The obvious demo for a toggle like this is a deterministic fault hook (e.g.
-`FAULT_INJECT_AFTER_PG_COMMIT=1`) that kills the process mid-dual-write, with dual-write mode
-expected to show permanent drift and outbox mode expected to show none. Worked through in detail
-instead of built, because that specific demo doesn't actually show anything against *this*
-consumer:
+`FAULT_INJECT_AFTER_PG_COMMIT=1`) that kills the process mid-dual-write, expecting dual-write mode
+to show permanent drift and outbox mode to show none. Worked through in detail instead of built,
+because that specific demo doesn't actually show anything against *this* consumer:
 
-`RabbitMqConsumer` only acks a batch *after* `HandleBatchAsync` returns `BatchOutcome.Success` -
-both the Postgres and Mongo writes have to complete first (see
-[Async messaging](pattern:async-messaging)). A fault hook that kills the process right after the
-Postgres commit, before the Mongo write, leaves that delivery **unacked**. On restart, RabbitMQ
-redelivers the whole batch; the redelivered Postgres inserts are skipped (already stored), but the
-Mongo write is unconditionally re-attempted for every click in the batch and succeeds this time.
-Dual-write mode self-heals via the exact same broker-redelivery mechanism an outbox relay would
-also need a restart to recover through - no drift ever becomes observable, in either mode, for
-this fault.
+- `RabbitMqConsumer` only acks a batch *after* `HandleBatchAsync` returns `BatchOutcome.Success` -
+  both the Postgres and Mongo writes have to complete first (see
+  [Async messaging](pattern:async-messaging)). A fault hook that kills the process right after the
+  Postgres commit, before the Mongo write, leaves that delivery **unacked**.
+- On restart, RabbitMQ redelivers the whole batch. The redelivered Postgres inserts are skipped
+  (already stored), but the Mongo write is unconditionally re-attempted for every click in the
+  batch and succeeds this time. Dual-write mode self-heals via the exact same broker-redelivery
+  mechanism an outbox relay would also need a restart to recover through - no drift ever becomes
+  observable, in either mode, for this fault.
 
 To make the two modes genuinely diverge, the fault would have to bypass the broker's own
 redelivery safety net entirely - e.g. a standalone test harness calling the write path directly for
 one click, with no RabbitMQ consumption around it at all. There, dual-write mode really would show
-a Postgres row with no matching `ClickMeta`
-forever (nothing left to redeliver it), while outbox mode would still have a durable,
-same-transaction outbox row a relay could eventually pick up. That's a true, demonstrable property
-of the pattern in isolation - but it isn't a gap in *this consumer's* actual, already-
-redelivery-safe pipeline. Building the toggle to re-discover that live wouldn't change the
-conclusion `traffic-service.md`'s own "Why no transactional outbox here" note already reaches: an
-outbox here would close the same narrow "stuck thread, no dropped connection" gap that note already
-names as not meaningfully improved by one anyway (it would hang the relay just as easily) - at the
-cost of a new table, a new worker, and extra latency on the enrichment write.
+a Postgres row with no matching `ClickMeta` forever, while outbox mode would still have a durable,
+same-transaction outbox row a relay could eventually pick up - a true, demonstrable property of the
+pattern in isolation, but not a gap in *this consumer's* actual, already-redelivery-safe pipeline.
+That matches `traffic-service.md`'s own "Why no transactional outbox here" conclusion: an outbox
+here would close the same narrow "stuck thread, no dropped connection" gap that note already names
+as not meaningfully improved by one anyway (it would hang the relay just as easily) - at the cost
+of a new table, a new worker, and extra latency on the enrichment write.
 
 ## Pitfalls
 
