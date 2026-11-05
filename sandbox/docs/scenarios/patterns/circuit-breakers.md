@@ -8,21 +8,19 @@ and lets exactly one probe call through — success closes the breaker again, fa
 
 ## What it solves
 
-Every dependency call in this project already degrades gracefully when it fails — a Redis miss
-falls through to Postgres, a RabbitMQ publish failure spills into the SQLite fallback queue (see
+Every dependency call here already degrades gracefully on failure — a Redis miss falls through to
+Postgres, a RabbitMQ publish failure spills into the SQLite fallback queue (see
 [Caching](pattern:caching) and [Async messaging](pattern:async-messaging)). That's fail-*open*, not
-fail-*fast*: a plain `try`/`catch` can only react once the failing call actually fails, which means
-every single request still pays that dependency's full connect/timeout cost first. If a dependency
-isn't just erroring occasionally but is genuinely dead (container stopped, network partition), that
-cost is paid on *every* request, even though the eventual outcome never changes. A circuit breaker
-short-circuits that: once it's learned a dependency is down, it rejects calls immediately instead of
-letting each one time out on its own, and periodically re-tests on its own schedule so recovery is
+fail-*fast*: a plain `try`/`catch` only reacts once a call actually fails, so every request still
+pays the dependency's full connect/timeout cost first. If a dependency is genuinely dead (container
+stopped, network partition) rather than just occasionally erroring, that cost is paid on *every*
+request for no benefit. A circuit breaker short-circuits that: once it's learned a dependency is
+down, it rejects calls immediately and periodically re-tests on its own schedule, so recovery is
 detected without flooding the dependency with probes.
 
-This is a pure latency/throughput optimization layered on top of existing fail-open behavior — it
-does not change what happens on an isolated, non-systemic failure, and for most of this project's
-call sites it doesn't even change the response shape, since the fail-open `try`/`catch` underneath
-is unchanged.
+This is a pure latency/throughput optimization on top of existing fail-open behavior — it doesn't
+change the outcome of an isolated, non-systemic failure, and for most call sites it doesn't even
+change the response shape, since the fail-open `try`/`catch` underneath is unchanged.
 
 ## How it works
 
@@ -73,12 +71,12 @@ In `Open`, every call fails immediately with `BrokenCircuitException` — the re
 never touched until the breaker transitions to `HalfOpen` and lets one probe through.
 
 **Keyed DI, one breaker instance per dependency per process.** Each wrapped dependency gets its own
-`ResiliencePipeline` registered as a *keyed* singleton, keyed by a constant
-(`Constants.RedisCircuitBreakerKey`/`GrpcCircuitBreakerKey`/`RabbitMqCircuitBreakerKey`) rather than
-a plain singleton — a single process can host more than one of these (a service that both caches in
-Redis and dispatches over gRPC needs two independent breakers, not one type-keyed registration
-fighting over which dependency it represents). Registration sits next to each dependency's own
-extension method, so the breaker's lifetime matches the dependency's.
+`ResiliencePipeline` registered as a *keyed* singleton (keyed by
+`Constants.RedisCircuitBreakerKey`/`GrpcCircuitBreakerKey`/`RabbitMqCircuitBreakerKey`), not a
+plain singleton — a process that both caches in Redis and dispatches over gRPC needs two
+independent breakers, not one registration fighting over which dependency it represents.
+Registration sits next to each dependency's own extension method, so the breaker's lifetime
+matches the dependency's.
 
 ## How it's implemented here
 
@@ -123,12 +121,11 @@ public const string RabbitMqCircuitBreakerKey = "rabbitmq";
 
 A circuit breaker only reacts to a **failure ratio** — it does nothing if a dependency is merely
 *slow* rather than down. TrafficService and ReportingService's ip-api.com geo-IP lookups (the fifth
-dependency above, point 5) sit behind a second, independent Polly v8 strategy that covers exactly
-that gap: a concurrency limiter (`AddRateLimiter`) capping how many `ip-api.com` calls either
-service can have in flight at once, rejecting anything over the limit immediately instead of
-letting it queue. It's named "bulkhead" after the shipbuilding term — sealing off one slow
-compartment so it can't flood and starve everything else sharing the same process (HttpClient
-connections, thread-pool work).
+dependency above) sit behind a second, independent Polly v8 strategy that covers exactly that gap:
+a concurrency limiter (`AddRateLimiter`) capping how many `ip-api.com` calls either service can
+have in flight at once, rejecting anything over the limit immediately rather than queuing it.
+Named "bulkhead" after the shipbuilding term — sealing off one slow compartment so it can't flood
+and starve everything else sharing the same process (HttpClient connections, thread-pool work).
 
 ```csharp
 // src/backend/Shared/Infrastructure/GeoIpExtensions.cs:49-93 (shape, trimmed)
@@ -168,12 +165,12 @@ flowchart LR
     catchAll --> noGeo["GeoLocation(null, null)<br/>click still recorded"]
 ```
 
-- **Ordering is deliberate: the rate limiter is added *before* the circuit breaker in the same
-  pipeline.** A call rejected by the concurrency limiter never reaches the breaker, so a burst of
-  concurrency rejections never counts against the breaker's own `FailureRatio` — the two strategies
-  protect against two independent failure modes (slow vs. down) and shouldn't contaminate each
-  other's statistics. Reversing the order would let pure concurrency pressure trip the breaker open,
-  with nothing enforcing the correct order beyond the sequence of two method calls.
+- **Ordering is deliberate: the rate limiter comes before the circuit breaker in the same
+  pipeline.** A call rejected by the limiter never reaches the breaker, so concurrency rejections
+  never count against the breaker's own `FailureRatio` — the two strategies guard against
+  independent failure modes (slow vs. down) and shouldn't contaminate each other's statistics.
+  Reversing the order would let pure concurrency pressure trip the breaker open, with nothing
+  enforcing the correct order beyond the sequence of two method calls.
 - **`AddRateLimiter(RateLimiterStrategyOptions)`, not the simpler `AddConcurrencyLimiter` overload** —
   the simple overload only accepts the BCL's own `ConcurrencyLimiterOptions`, which has no rejection
   callback; the lower-level overload adds `OnRejected` for logging/metrics while keeping identical
@@ -200,13 +197,12 @@ flowchart LR
 
 ## Turning it off
 
-Every breaker above is **always on in production code**, but for an educational sandbox whose whole
-point is to let someone *feel* the difference a pattern makes, that's a real gap: there was no way
-to see the "without a circuit breaker" baseline live — only read about it. A live on/off switch
-closes that gap: with it, stop a dependency (e.g. RabbitMQ), watch a breaker open and every
-subsequent call fail fast, flip breakers off, repeat the same outage, and watch every call instead
-pay the dependency's full timeout again before falling back to whatever fail-open behavior already
-existed underneath (the SQLite queue, a cache miss, ...).
+Every breaker above is **always on in production code** — but for an educational sandbox whose
+point is to let someone *feel* the difference a pattern makes, there was no way to see the
+"without a circuit breaker" baseline live, only read about it. A live on/off switch closes that
+gap: stop a dependency (e.g. RabbitMQ), watch a breaker open and calls fail fast; flip it off,
+repeat the same outage, and watch every call pay the dependency's full timeout before falling back
+to whatever fail-open behavior already existed underneath (the SQLite queue, a cache miss, ...).
 
 **A DI-time no-op swap, not an if/else in the call path** — matching this project's own standing
 convention for behavior toggles. `ResiliencePipelines.BuildCircuitBreaker` takes a third parameter,
@@ -232,24 +228,21 @@ public static bool CircuitBreakersEnabled(IConfiguration configuration) =>
 
 The three `TryAddKeyedSingleton` call sites (`RedisExtensions.cs`, `GrpcMessagingExtensions.cs`,
 `RabbitMqExtensions.cs`) all pass `ResiliencePipelines.CircuitBreakersEnabled(configuration)` as the
-new argument. The ip-api.com breaker (built differently, via
-`Microsoft.Extensions.Http.Resilience`'s `AddResilienceHandler`, not this shared builder — see "How
-it's implemented here" above) can't return an empty pipeline the same way, so `GeoIpExtensions.cs`
-instead just skips chaining `.AddCircuitBreaker(...)` onto that pipeline when the flag reads false;
-the bulkhead concurrency limiter earlier in that same pipeline is a separate toggle and is
-unaffected either way.
+new argument. The ip-api.com breaker (built via `Microsoft.Extensions.Http.Resilience`, not this
+shared builder — see "How it's implemented here" above) can't return an empty pipeline the same
+way, so `GeoIpExtensions.cs` instead skips chaining `.AddCircuitBreaker(...)` onto that pipeline
+when the flag reads false; the bulkhead concurrency limiter earlier in that same pipeline is a
+separate toggle, unaffected either way.
 
 **The toggle recreates six containers, not one.** `InfraToggleService` tracks
 `_circuitBreakersEnabled` as in-memory standing state (default `true`, lost on a control-api
-restart like every other toggle here), exposed via the `circuit-breaker-toggle` capability
-(`GET`/`POST /api/infra/circuit-breakers`) and `CIRCUIT_BREAKERS_ENABLED` in `CurrentStandingEnv()`.
-Flipping it force-recreates every service that registers at least one breaker —
-`auth-api`/`link-api`/`redirect-api`/`shortener-service`/`traffic-service`/`reporting-service` —
-via `sandbox/docker-compose.yml`'s `Resilience__CircuitBreakersEnabled:
-"${CIRCUIT_BREAKERS_ENABLED:-true}"` on each of those six. `reporting-api` is deliberately excluded:
-it only touches Redis through `AddRedisMultiplexer` for SignalR pub/sub, which registers no breaker
-of its own. The architecture-map control (`CircuitBreakerControl.tsx`, registered under the
-`circuit-breaker-toggle` capability name on all six affected nodes) can be opened from any one of
+restart like every other toggle here), exposed via the `circuit-breaker-toggle` capability and
+`CIRCUIT_BREAKERS_ENABLED` in `CurrentStandingEnv()`. Flipping it force-recreates every service
+that registers at least one breaker —
+`auth-api`/`link-api`/`redirect-api`/`shortener-service`/`traffic-service`/`reporting-service`.
+`reporting-api` is deliberately excluded: it only touches Redis through `AddRedisMultiplexer` for
+SignalR pub/sub, which registers no breaker of its own. The control
+(`CircuitBreakerControl.tsx`, registered on all six affected nodes) can be opened from any one of
 them — there's exactly one shared flag, not six independent ones, so toggling from any node's panel
 affects all six together.
 
@@ -262,18 +255,18 @@ flowchart LR
     Pipeline -- "false" --> Empty["ResiliencePipeline.Empty\n(every call just runs the delegate)"]
 ```
 
-Because the flag is read once per process at startup, toggling it is "recreate six containers" (a
-few seconds), not an instant in-process flip — the same "recreate, don't hot-reload" shape every
-other `InfraToggleService` toggle already uses in this project. Disabling the breaker also doesn't
-touch the ip-api.com pipeline's separate bulkhead/concurrency limiter (see "A related pattern" above)
-— that stays active either way, since it's a different toggle covering a different failure mode.
+Because the flag is read once per process at startup, toggling it means recreating six containers
+(a few seconds), not an instant in-process flip — the same "recreate, don't hot-reload" shape every
+other `InfraToggleService` toggle already uses in this project. Disabling the breaker doesn't touch
+the ip-api.com pipeline's separate bulkhead/concurrency limiter (see "A related pattern" above) —
+that stays active regardless, since it's a different toggle covering a different failure mode.
 
 ## Pitfalls
 
-No pitfall-docs recorded for this pattern yet — the tuning duplication between the shared builder
-and ip-api.com's hand-copied `HttpClient` values (see "How it works") is a real drift risk worth
-watching, but nothing has actually drifted yet, so there's no before/after to show. The same applies
-to the rate-limiter-before-breaker ordering rule above: nothing enforces it beyond code review.
+No pitfall-docs recorded for this pattern yet. Two drift risks worth watching but with no
+before/after to show: the tuning duplication between the shared builder and ip-api.com's
+hand-copied `HttpClient` values (see "How it works"), and the rate-limiter-before-breaker ordering
+rule above — nothing enforces either beyond code review.
 
 ## Relatives
 

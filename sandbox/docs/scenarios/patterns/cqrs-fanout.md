@@ -9,13 +9,13 @@ read model in a store picked for querying, not for writing — [ClickHouse](node
 
 ## What it solves
 
-The per-link stats panel ([ReportingApi](node:reporting-api) serves it) wants aggregate, filterable
-queries — clicks by day, by country, by device, by browser — over a dataset that only grows. Running
-those queries against `clicks_db` (Postgres, [TrafficService](node:traffic-service)'s audit-trail
-store) would mean every stats request competing with real click-tracking write traffic for the same
-table, and Postgres row-store scans aren't what a `GROUP BY day, country` over millions of rows wants
-in the first place. Splitting the query workload onto a store built for exactly that — and a
-consumer that writes to it independently — means neither side has to compromise for the other.
+The per-link stats panel ([ReportingApi](node:reporting-api)) wants aggregate, filterable queries —
+clicks by day, country, device, browser — over a dataset that only grows. Running those against
+`clicks_db` (Postgres, [TrafficService](node:traffic-service)'s audit-trail store) would mean every
+stats request competing with click-tracking write traffic for the same table, and Postgres
+row-store scans aren't what a `GROUP BY day, country` over millions of rows wants anyway. Splitting
+the query workload onto a store built for exactly that — with its own independent writer — means
+neither side has to compromise for the other.
 
 ## How it works
 
@@ -59,15 +59,12 @@ sequenceDiagram
     end
 ```
 
-Both consumers bind their own queue to the same `click.tracked` routing key — RabbitMQ fans the
-same message out to each, neither consumer waits on or is aware of the other.
-
-**What this isn't.** A textbook CQRS setup usually also means a command bus, a distinct write model
-object graph, and often eventual-consistency tooling (an event store, a projection framework). None
-of that exists here — "the read side" is one extra consumer and one extra table. The segregation
-that matters for the lesson (independent read/write models, independently scalable, independently
-query-shaped) is present; the ceremony around it isn't, deliberately, since this project's own event
-sourcing already comes for free from RabbitMQ's fan-out rather than needing to be built.
+**What this isn't.** A textbook CQRS setup usually also means a command bus, a distinct write-model
+object graph, and eventual-consistency tooling (an event store, a projection framework). None of
+that exists here — "the read side" is one extra consumer and one extra table. The segregation that
+matters for the lesson (independent read/write models, independently scalable and query-shaped) is
+present; the ceremony isn't, since this project's own event sourcing already comes for free from
+RabbitMQ's fan-out rather than needing to be built.
 
 ## How it's implemented here
 

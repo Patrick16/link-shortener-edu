@@ -60,11 +60,11 @@ two real bugs found in this exact code path.
 
 ### Two tiers: an in-process L1 ahead of Redis
 
-Even a Redis hit still pays a real network round trip — measured live at ~79ms per hit in this
-stack. `EntityCacheService<T>` checks a per-process `IMemoryCache` ("L1") *before* Redis ("L2," the
-tier described above): an L1 hit returns with zero network round trips, measured live dropping a
-repeated read from ~79ms (Redis) to ~1.9ms (L1). A Redis hit populates L1 before returning, so the
-*next* read of that key is an L1 hit; a full miss populates both tiers once the DB fetch returns.
+Even a Redis hit still pays a real network round trip. `EntityCacheService<T>` checks a per-process
+`IMemoryCache` ("L1") *before* Redis ("L2," the tier described above): an L1 hit returns with zero
+network round trips, measured live dropping a repeated read from ~79ms (Redis) to ~1.9ms (L1). A
+Redis hit populates L1 before returning, so the *next* read of that key is an L1 hit; a full miss
+populates both tiers once the DB fetch returns.
 
 L1's TTL is a fixed, short 2 seconds — deliberately much shorter than Redis's own per-entity TTL
 (default 3600s), because L1 has no cross-process invalidation. `InvalidateCacheAsync` evicts the L1
@@ -78,44 +78,37 @@ graph, so it isn't staged there).
 
 ### Negative caching: memoizing a miss, not just a hit
 
-A cache-aside read only shields the database from repeat *hits* by default — a caller scanning
-hashes that don't exist (a bot probing random short codes, or any sustained wave of 404 traffic)
-sends every single miss straight through to Postgres, every time, forever. `GetOrFetch` also checks
-a short-TTL (10s) "this id doesn't exist" marker, stored under a separate key namespace
-(`neg:{key}`, never the same key a positive entry would use) in both L1 and Redis, checked *after*
-both positive-cache checks and *before* the real DB fetch.
+A cache-aside read only shields the database from repeat *hits* — a caller scanning hashes that
+don't exist (a bot probing random short codes, or sustained 404 traffic) sends every miss straight
+through to Postgres, forever. `GetOrFetch` also checks a short-TTL (10s) "this id doesn't exist"
+marker, stored under a separate key namespace (`neg:{key}`) in both L1 and Redis, checked *after*
+the positive-cache checks and *before* the real DB fetch.
 
-**No explicit eviction on write, by design.** The textbook fix for "an entity gets created right
-after being negatively cached" is to evict the negative marker on every positive write — this
-pattern doesn't do that. Correctness instead falls out of two structural facts holding together:
-positive and negative entries live under different keys, so a positive write can never race a
-negative one for the same slot; and `GetOrFetch` always checks positive before negative, with no
-exception. The instant a real entity is written anywhere, the very next read for that id finds the
-positive key first and never reaches the negative check again — a stale negative marker left behind
-just ages out unread over its remaining TTL, not "cleaned up in time by a race that happened to
-resolve correctly." Gated independently via `Cache:NegativeEnabled` (same per-node, immediate-apply
-control shape as L1's toggle).
+**No explicit eviction on write, by design.** The textbook fix — evict the negative marker on
+every positive write — isn't needed here: positive and negative entries live under different keys
+(no race for the same slot), and `GetOrFetch` always checks positive before negative, with no
+exception. The instant a real entity is written anywhere, the very next read finds the positive key
+first and never reaches the negative check again — a stale negative marker left behind just ages
+out unread, not "cleaned up in time by a race that happened to resolve correctly." Gated
+independently via `Cache:NegativeEnabled` (same per-node, immediate-apply control shape as L1's
+toggle).
 
 Both L1 and negative caching are only wired into `link-api`/`redirect-api`; `ShortenerService` also
-uses `EntityCacheService<Link>` (to pre-warm the cache after persisting, plus
-`RedisLinkDeletionMarkerStore.ConfirmAsync`'s tombstone write) but still always runs with
-`Cache:L1Enabled`/`Cache:NegativeEnabled` at their hardcoded `true` defaults, regardless of what
-either control-panel toggle shows for LinkApi/RedirectApi — those two sub-flags were never extended
-to it. The main `Cache:Enabled` on/off switch is different: it was missing from this node's env entirely
-until an external-review pass found the gap (toggling caching off left this node still
-warming/writing to Redis) — see [ShortenerService](node:shortener-service)'s own note on the fix.
-`Cache:Enabled` now reaches `shortener-service` the same way it reaches LinkApi/RedirectApi; only
-the L1/negative sub-flags remain link-api/redirect-api-only.
+uses `EntityCacheService<Link>` (to pre-warm the cache after persisting, plus the deletion
+tombstone write) but always runs with `Cache:L1Enabled`/`Cache:NegativeEnabled` hardcoded `true`,
+regardless of what either control-panel toggle shows — those sub-flags were never extended to it.
+The main `Cache:Enabled` switch is different and does reach it (a gap where toggling caching off
+left this node still warming/writing to Redis, found and fixed by an external review — see
+[ShortenerService](node:shortener-service)); only the L1/negative sub-flags remain
+link-api/redirect-api-only.
 
 ### TTL jitter: avoiding a synchronized expiry wave
 
-`CacheAsync`'s default TTL is a flat 3600s, used by every write unless the caller overrides it —
-most importantly `ShortenerService`'s `LinkCreatedConsumer`, which caches every newly-created link.
-A burst of link creations (10k links in one minute, a realistic launch-traffic or load-test
-scenario) would all expire in the same one-second window an hour later, causing a synchronized wave
-of cache misses against Postgres at that moment — a correlated load spike exactly one cache
-lifetime after a traffic burst, and a non-obvious failure mode if you don't already know to look
-for it.
+`CacheAsync`'s default TTL is a flat 3600s, used by every write unless overridden — most
+importantly `ShortenerService`'s `LinkCreatedConsumer`, which caches every newly-created link. A
+burst of link creations (10k in one minute, a realistic launch-traffic or load-test scenario) would
+all expire in the same one-second window an hour later — a correlated miss wave against Postgres, a
+non-obvious failure mode if you don't already know to look for it.
 
 ```csharp
 // src/backend/Shared/Common/EntityCacheService.cs
@@ -125,39 +118,36 @@ private static double ApplyTtlJitter(int ttlSeconds) =>
 ```
 
 This is **bounded** jitter (`Uniform(ttlSeconds * 0.9, ttlSeconds * 1.1)`), not full jitter — the
-opposite shape from [the retry-polling jitter in Async messaging](pattern:async-messaging), and
-deliberately so. Full jitter on a TTL
-(`random(0, ttl)`) would roughly halve the *expected* cache lifetime, directly hurting hit rate for
-no corresponding benefit; for a retry delay that cost is worth paying because decorrelation matters
-far more than cadence predictability, but for a cache TTL, average-lifetime predictability (and
-thus hit rate) matters far more than maximal spread. A ±10% spread already turns a one-second-wide
-expiry spike into a window roughly 10% of the TTL wide (about 12 minutes on the default 3600s TTL)
-— enough to prevent a synchronized DB-miss wave while keeping the *expected* lifetime exactly equal
-to the requested `ttlSeconds`.
+opposite shape from [the retry-polling jitter in Async messaging](pattern:async-messaging),
+deliberately: full jitter on a TTL (`random(0, ttl)`) would roughly halve the *expected* cache
+lifetime, hurting hit rate for no benefit. A retry delay cares more about decorrelation than
+cadence predictability; a cache TTL cares more about predictable average lifetime. A ±10% spread
+already turns a one-second-wide expiry spike into a window roughly 10% of the TTL wide (~12 minutes
+on the default 3600s TTL) — enough to prevent a synchronized miss wave while keeping the *expected*
+lifetime exactly equal to `ttlSeconds`.
 
-This applies to every call to `CacheAsync`, including `LinksController`'s own 60s optimistic
-cache write (see [LinkApi](node:link-api)) — that entry now resolves to 54-66s instead of exactly
-60s, harmless since it's normally overwritten by the durable 3600s write within sub-second-to-low-
-seconds, well before either TTL would matter.
+This applies to every call to `CacheAsync`, including `LinksController`'s own 60s optimistic cache
+write (see [LinkApi](node:link-api)) — that entry now resolves to 54-66s instead of exactly 60s,
+harmless since it's normally overwritten by the durable 3600s write within seconds, well before
+either TTL would matter.
 
 ### An alternative backend: `Microsoft.Extensions.Caching.Hybrid`
 
-Everything above describes `EntityCacheService<T>`, a hand-rolled implementation that exists partly
-as a *teaching* piece: it spells out L1/L2 layering, single-flight coalescing, negative caching, and
-TTL jitter explicitly, in code a reader can step through. A second, swappable implementation,
+Everything above describes `EntityCacheService<T>`, a hand-rolled implementation that doubles as a
+*teaching* piece: it spells out L1/L2 layering, single-flight coalescing, negative caching, and TTL
+jitter explicitly, in code a reader can step through. A second, swappable implementation,
 `HybridEntityCacheService<T>`/`HybridLinkCacheService` (`src/backend/Shared/Common/
 HybridEntityCacheService.cs`), wraps the BCL's own `Microsoft.Extensions.Caching.Hybrid` package
-instead — the same `IEntityCacheService<T>` contract, same Redis key format (`link:{id}`), selected
-per-service at startup via `Cache:Backend` (`legacy` default, `hybrid` opt-in,
-`EntityCacheServiceExtensions.AddLinkCacheService`, mirroring the existing `Messaging:Mode` toggle's
-fail-loudly-on-a-typo shape). `LinkApi`, `RedirectApi`, and `ShortenerService` each select it
-independently.
+instead — same contract, same Redis key format (`link:{id}`), selected per-service at startup via
+`Cache:Backend` (`legacy` default, `hybrid` opt-in, mirroring the existing `Messaging:Mode`
+toggle's fail-loudly-on-a-typo shape). `LinkApi`, `RedirectApi`, and `ShortenerService` each select
+it independently.
 
 The point isn't "hybrid is better" — it's the opposite: having both side by side, one env var apart,
 lets a reader see exactly what ~280 lines of hand-rolled cache-aside logic buys over the BCL
-primitive, and exactly where the two diverge in observable behavior. `HybridCache.GetOrCreateAsync`
-gives `GetOrFetch` per-key single-flight coalescing for free (no `ConcurrentDictionary<string,
-Lazy<Task<T?>>>` needed), but the scope is deliberately **not full parity**:
+primitive, and where the two diverge in observable behavior. `HybridCache.GetOrCreateAsync` gives
+per-key single-flight coalescing for free (no `ConcurrentDictionary<string, Lazy<Task<T?>>>`
+needed), but the scope is deliberately **not full parity**:
 
 - No negative-cache TTL, no Polly circuit breaker, no `Cache:L1Enabled`/`Cache:NegativeEnabled`
   sub-toggles — `HybridEntityCacheService` is always "on" once selected, with no equivalent demo

@@ -57,22 +57,19 @@ sequenceDiagram
 
 ### Why a conflict could no longer be silently dropped
 
-`HandleBatchAsync` pre-dates aliases — its redelivery-safety logic (skip an insert if the hash is
-already stored) was written for a world where "same hash, different attempt" could only mean a
-RabbitMQ redelivery or a losing replica re-inserting its own copy of the *same* message, never two
-genuinely different links. Aliases break that assumption: a losing racer's row is a **different**
-link (a different `OriginalLink`), not a duplicate of the winner's. The fix compares the existing
+`HandleBatchAsync` pre-dates aliases — its redelivery-safety logic (skip an insert if the hash
+already exists) assumed "same hash, different attempt" could only mean a RabbitMQ redelivery or a
+losing replica re-inserting the *same* message, never two genuinely different links. Aliases break
+that: a losing racer's row is a **different** link, not a duplicate. The fix compares the existing
 row's content, not just its presence — matching content is still silently skipped (a real
-redelivery, unchanged behavior); a mismatch is now reported as a poison message instead
-(`BatchOutcome.WithPoison`, which now carries a reason string per message, not just a bare id). The
-gRPC path turns that into `RpcException(AlreadyExists)` → `409`; the RabbitMQ path (not reachable
-for aliases today, since they're always synchronous, but sharing the same handler) would
-dead-letter with the same reason in its `x-dead-reason` header. The comparison applies uniformly to
-random hashes too — a genuine hash collision there is astronomically unlikely, but it's no longer
-silently discarded on the rare chance it happens; the reason text says which kind of conflict it
-was (`existing.HasCustomAlias` — persisted on `Link` specifically so the *existing*, winning row can
-answer that question, since by the time a conflict is detected, the losing message is all the
-consumer has to go on for the loser's side).
+redelivery); a mismatch is now reported as a poison message (`BatchOutcome.WithPoison`, which
+carries a reason string per message, not just a bare id). The gRPC path turns that into
+`RpcException(AlreadyExists)` → `409`; the RabbitMQ path (unreachable for aliases today, since
+they're always synchronous, but sharing the same handler) would dead-letter with the same reason in
+`x-dead-reason`. The comparison applies to random hashes too — a collision there is astronomically
+unlikely but no longer silently discarded; the reason text records which kind of conflict it was
+(`existing.HasCustomAlias`, persisted on `Link` so the winning row can answer that question, since
+the losing message is all the consumer has for the loser's side).
 
 ### Why this doesn't need an application-level lock
 
@@ -81,48 +78,42 @@ Postgres's unique constraint on `Hash` is the only thing enforcing uniqueness �
 in `HandleBatchAsync` (originally written for redelivery/competing-consumer races — ShortenerService
 is one of the services `control-api` can scale to N replicas) already re-queries Postgres after a
 conflict; by the time that query runs, the winning row is guaranteed already committed (a
-unique-violation only fires once the conflicting transaction has committed — otherwise the insert
-just blocks waiting for it), so there's no race on the re-check itself, and no new locking needed on
-top of what already existed. Verified live against the real running stack, not just unit tests: 10
-concurrent requests for the same alias produced exactly one success and nine `409`s, with exactly
-one row in Postgres.
+unique-violation only fires once the conflicting transaction has committed), so there's no race on
+the re-check itself and no new locking needed on top of what already existed. Verified live against
+the real running stack, not just unit tests: 10 concurrent requests for the same alias produced
+exactly one success and nine `409`s, with exactly one row in Postgres.
 
 ### Why synchronous gRPC, not an async claim-based approach
 
-An async design was designed in detail before this one and deliberately not built — worth recording
-both, since this is exactly the kind of trade-off this project exists to make visible.
+An async design was worked out in detail before this one and deliberately not built — worth
+recording, since this is exactly the kind of trade-off this project exists to make visible.
 
-**The rejected design:** `LinkApi` takes a Redis claim (`SET NX alias:claim:{name}`, a TTL as the
-only crash-recovery backstop) before publishing a `LinkCreatedEvent` to RabbitMQ as usual, the same
-way a random hash already does. A 7-day read-cache, populated after the consumer's real persist (and
-refreshed on any positive existence check, not just after a persist), would let repeat lookups of a
-popular/contested name skip Postgres. The SQLite fallback-queue worker (the one that already retries
-a stuck publish roughly every 15s, jittered, up to 30s, during a broker outage) would renew the
-claim on every retry tick, so a
-long broker outage wouldn't let the claim expire while the message was still in flight — with a
-`pending`/`published` marker and a reconciliation pass on `LinkApi` startup to clean up orphaned
-claims from a crash between claiming and publishing. The consumer-side conflict handling (the
-content-comparison fix above) is identical either way — it isn't specific to the chosen transport.
+**The rejected design:** `LinkApi` takes a Redis claim (`SET NX alias:claim:{name}`, TTL as the
+only crash-recovery backstop) before publishing `LinkCreatedEvent` to RabbitMQ as usual, the same
+way a random hash already does. The SQLite fallback-queue worker (the one that already retries a
+stuck publish roughly every 15s, jittered, up to 30s, during a broker outage) would renew the claim
+on every retry tick so a long broker outage couldn't let it expire mid-flight, with a
+`pending`/`published` marker and a startup reconciliation pass to clean up orphaned claims from a
+crash between claiming and publishing. The consumer-side conflict handling (the content-comparison
+fix above) would be identical either way — it isn't specific to the chosen transport.
 
-**Why it loses:** it works for anonymous callers (this project ended up requiring login for aliases
-anyway, closing that advantage) and never blocks the HTTP response on ShortenerService's
-availability — but the cost is a second, hand-built consistency mechanism layered on top of
-Postgres's own constraint, not a replacement for it (the DB is still the final arbiter either way).
-Every piece of that mechanism — claim TTL, renewal, the `pending`/`published` handshake, startup
-reconciliation — exists only to approximate, imperfectly, a guarantee the synchronous path gets for
-free from one RPC call. The approximation has a real gap, too: if `LinkApi` loses the claim before
-the message is actually persisted (Redis restarting mid-flight, or a TTL shorter than how long the
-message was genuinely stuck) and a second request grabs the same name in that window, the race
-happens in seconds, not hours — the renewal story only helps with the *broker*-outage case, not a
-*Redis*-outage one, and nothing closes that second window without adding yet another layer.
+**Why it loses:** it would work for anonymous callers (moot — this project ended up requiring login
+for aliases anyway) and wouldn't block the HTTP response on ShortenerService's availability, but at
+the cost of a second, hand-built consistency mechanism layered on top of Postgres's own constraint,
+not a replacement for it (the DB is still the final arbiter either way). Every piece of it — claim
+TTL, renewal, the pending/published handshake, startup reconciliation — exists only to approximate,
+imperfectly, a guarantee the synchronous path gets for free from one RPC call. The approximation has
+a real gap, too: if `LinkApi` loses the claim before the message is actually persisted (Redis
+restarting mid-flight, or too short a TTL) and a second request grabs the same name in that window,
+the race happens in seconds, not hours — the renewal story only helps with the *broker*-outage case,
+not a *Redis*-outage one.
 
-**What's common to both:** the strong guarantee (a definite yes/no before the HTTP response returns)
+**What's common to both:** a strong guarantee (a definite yes/no before the HTTP response returns)
 can only come from a synchronous round trip to wherever uniqueness is actually enforced — Postgres.
-An async design can make that round trip fast to *not* need in the common case, and can serve
-anonymous callers, but can't make the guarantee itself cheaper, only hide where it's paid. For this
-project, with aliases already gated to logged-in users and ShortenerService's gRPC endpoint already
-always listening regardless of `Messaging:Mode`, that round trip was cheap enough to just take
-directly.
+An async design can avoid that round trip in the common case and serve anonymous callers, but can't
+make the guarantee itself cheaper, only hide where it's paid. With aliases already gated to
+logged-in users and ShortenerService's gRPC endpoint already always listening regardless of
+`Messaging:Mode`, that round trip was cheap enough to just take directly.
 
 ## How it's implemented here
 
@@ -168,11 +159,11 @@ if (existing.OriginalLink == item.Payload.OriginalLink)
 poisonMessages.Add(new PoisonMessage(item.MessageId, ConflictReason(item.Payload.Hash, existing.HasCustomAlias)));
 ```
 
-The same comparison also had to be applied to the intra-batch dedup step itself
-(`batch.GroupBy(x => x.Payload.Hash)`, not just the two against-Postgres checks above) — the first
+The same comparison also had to be applied to the intra-batch dedup step
+(`batch.GroupBy(x => x.Payload.Hash)`), not just the two against-Postgres checks above — the first
 pass of this fix only caught the pre-check and the `DbUpdateException` recovery; a losing message
 sharing a hash with another message in the *same* batch still vanished untraced until a follow-up
-fix compared it against the batch's own surviving item the same way.
+fix applied the same comparison there.
 
 `GrpcAliasCreator`/`ICustomAliasCreator`'s DI registration (`AddAliasGrpcClient`,
 `Shared/Infrastructure/GrpcMessagingExtensions.cs`) is deliberately separate from the standing

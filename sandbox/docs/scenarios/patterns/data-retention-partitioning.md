@@ -17,13 +17,12 @@ useful index), not a hypothetical one, so each store needs an actual retention s
 ## How it works
 
 **Postgres (`clicks_db.clicks`) — native declarative partitioning**, monthly
-(`PARTITION BY RANGE ("ClickedAt")`). Retention here means dropping a whole partition
-(`DROP TABLE`) instead of a `DELETE ... WHERE` that has to find and remove matching rows one at a
-time — at scale, a `DROP` is near-instant regardless of how many rows were in that partition, while
-a row-at-a-time `DELETE` gets slower as the matching set grows and leaves dead tuples behind for
-`VACUUM` to clean up. Partitioning also narrows which partition(s) a time-bounded query even has to
-look at (see "Partition pruning" below) — a retention mechanism and a query-performance mechanism,
-from the same feature.
+(`PARTITION BY RANGE ("ClickedAt")`). Retention means dropping a whole partition (`DROP TABLE`),
+not a `DELETE ... WHERE` that finds and removes rows one at a time — at scale a `DROP` is
+near-instant, while a row-at-a-time `DELETE` slows as the matching set grows and leaves dead tuples
+for `VACUUM` to clean up. Partitioning also narrows which partition(s) a time-bounded query has to
+scan (see "Partition pruning" below) — a retention mechanism and a query-performance mechanism from
+the same feature.
 
 **Mongo (`clicks_meta_db.clicks`) — a TTL index** on `ClickedAt`. Mongo's own background TTL monitor
 (runs roughly once a minute) deletes expired documents on its own — no partitions, no maintenance
@@ -96,16 +95,16 @@ on startup and then every 24 hours:
   partition whose name doesn't match the expected `clicks_yYYYYmMM` shape is left alone rather than
   guessed at — a differently-named partition someone created by hand shouldn't get silently dropped.
 
-`TrafficService` can run as several replicas (see [Async messaging](pattern:async-messaging) for
-why it's scalable at all), and every replica runs this same 24-hour timer independently — without
-coordination, N replicas would all try the same `CREATE`/`DROP` at once on the same tick. The DDL
-itself is idempotent (`IF NOT EXISTS`/`IF EXISTS`), so a race wouldn't corrupt anything, just spam
-duplicate log lines and duplicate DDL attempts. A Postgres **advisory lock**
+`TrafficService` can run as several replicas, and every replica runs this same 24-hour timer
+independently — without coordination, N replicas would all try the same `CREATE`/`DROP` at once.
+The DDL itself is idempotent (`IF NOT EXISTS`/`IF EXISTS`), so a race wouldn't corrupt anything,
+just spam duplicate log lines and duplicate DDL attempts. A Postgres **advisory lock**
 (`pg_try_advisory_lock(hashtext('traffic-service:partition-maintenance'))`) makes "one replica does
 the work, the rest skip this tick" the normal case — see
 [Distributed locking: Postgres advisory locks](pattern:distributed-locking-postgres-advisory) for
-the general mechanism (session-scoped release, the pgcat-bypass reasoning, the EF Core connection-
-pinning requirement); this section covers only how it's wired into this specific maintenance job:
+the general mechanism (session-scoped release, the pgcat-bypass reasoning, the EF Core
+connection-pinning requirement); this section covers only how it's wired into this specific
+maintenance job:
 
 ```csharp
 // src/backend/Services/TrafficService/PartitionMaintenanceWorker.cs:84
