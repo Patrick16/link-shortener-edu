@@ -27,6 +27,13 @@ public abstract class HybridEntityCacheService<T>(HybridCache cache) : IEntityCa
     // silently change the effective TTL for a caller relying on this parameter's default.
     private const int DefaultTtlSeconds = 3600;
 
+    // Same +-10% spread as EntityCacheService.ApplyTtlJitter, for the same reason (see that
+    // method's own comment): without it, a burst of same-time writes - a k6 load test, or
+    // ShortenerService pre-warming the cache on a batch consume - would all expire in lockstep and
+    // reproduce the exact synchronized DB-miss spike jitter exists to avoid. Found missing by
+    // review (.notes/review-reports/2026-11-05-1420-hybridcache-backend-toggle.md, F1).
+    private const double TtlJitterFraction = 0.1;
+
     protected abstract string Key(string id);
 
     public async Task CacheAsync(T entity, string id, CancellationToken cancellationToken, int ttlSeconds = DefaultTtlSeconds)
@@ -45,6 +52,13 @@ public abstract class HybridEntityCacheService<T>(HybridCache cache) : IEntityCa
         // GetOrCreateAsync's coalescing instead) - a factory that always throws on an actual miss
         // is the documented way to get that behavior back: it only ever runs when nothing is
         // cached yet, and since it throws instead of returning, nothing gets written either.
+        // CAUTION: this uses the same cache key as GetOrFetch below, and HybridCache's single-
+        // flight coalescing is per-key, not per-caller - a concurrent GetOrFetch call for the same
+        // id could coalesce onto this method's throwing factory and wrongly receive null instead of
+        // running the real DB fetch. No production caller does this today (only GetOrFetch/
+        // CacheAsync/InvalidateCacheAsync are used) - flagged by review (see F2 in
+        // .notes/review-reports/2026-11-05-1420-hybridcache-backend-toggle.md) so a future caller
+        // doesn't trip over it.
         try
         {
             return await cache.GetOrCreateAsync<T?>(
@@ -73,7 +87,13 @@ public abstract class HybridEntityCacheService<T>(HybridCache cache) : IEntityCa
     }
 
     private static HybridCacheEntryOptions EntryOptions(int ttlSeconds) =>
-        new() { Expiration = TimeSpan.FromSeconds(ttlSeconds) };
+        new() { Expiration = TimeSpan.FromSeconds(ApplyTtlJitter(ttlSeconds)) };
+
+    // Random.Shared, not a seeded/injected instance - same reasoning as EntityCacheService's own
+    // copy of this method: a fixed seed would defeat the entire point of decorrelating
+    // concurrently-created entries.
+    private static double ApplyTtlJitter(int ttlSeconds) =>
+        ttlSeconds * (1 + ((Random.Shared.NextDouble() * 2) - 1) * TtlJitterFraction);
 
     private sealed class CacheMissException : Exception;
 }
