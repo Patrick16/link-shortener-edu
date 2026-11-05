@@ -13,7 +13,7 @@ import { SharedArray } from 'k6/data';
 // preset), not an oversight.
 //
 // POOL_JSON is a second, optional input: real values control-api preloaded from the app itself
-// (see TrafficService.FetchDataPoolAsync) before this container ever started, e.g. a few thousand
+// (see DataPoolFetcher.FetchAsync) before this container ever started, e.g. a few thousand
 // real link hashes. Without it, a sequence that only resolves a link (no Create step of its own)
 // hits the exact same fixture link every iteration - fine for checking the route works at all, but
 // useless for exercising cache/DB behavior across many different rows. SharedArray is k6's own
@@ -32,7 +32,7 @@ const POOL_MODE = __ENV.POOL_MODE || 'sequential';
 const POOL_VUS_HINT = Math.max(1, Number(__ENV.POOL_VUS_HINT || 1));
 const POOL = new SharedArray('dataPool', () => JSON.parse(__ENV.POOL_JSON || '[]'));
 
-// Must match TrafficService.TrackedStatusCodes exactly (the codes, not the labels). Every request is
+// Must match K6SummaryParser.TrackedStatusCodes exactly (the codes, not the labels). Every request is
 // tagged with which step it came from (below), so status codes can be broken down per endpoint in
 // the report instead of one pooled total - but k6 only retains/exports a tag combination that a
 // threshold explicitly references, and the set of step ids is only known at runtime (whatever

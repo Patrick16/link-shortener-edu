@@ -16,6 +16,12 @@ public sealed class K6ContainerRunner(IContainerRuntime runtime, ILogger<K6Conta
     // stays defined in exactly one place.
     internal const string K6Image = "grafana/k6:latest";
 
+    // Exposed so TrafficService can pull/check the image before the (potentially slow) data-pool
+    // preload, matching the pre-split ordering - RunAsync below still checks it again right before
+    // actually using it, but EnsureImageAsync no-ops once the image is already present (see
+    // ContainerRuntime.EnsureImageAsync), so the repeat call is cheap, not a double pull.
+    public Task EnsureImageReadyAsync(CancellationToken ct) => runtime.EnsureImageAsync(K6Image, ct);
+
     public async Task<TrafficReport?> RunAsync(
         TrafficRequest request,
         List<string> cmd,

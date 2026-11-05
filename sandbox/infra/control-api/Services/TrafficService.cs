@@ -116,6 +116,12 @@ public sealed class TrafficService : ITrafficService
             return null;
         }
 
+        // Checked/pulled here, before the data-pool preload below, so a missing image fails fast on
+        // a cold environment instead of only surfacing after the preload has already spent time
+        // hitting the real app (restores the pre-split ordering - see .notes/PLAN.md's
+        // Simplification Backlog item 3 and the review report that caught this).
+        await _containerRunner.EnsureImageReadyAsync(ct);
+
         // Read once for the whole run and threaded through as a parameter from here on (into
         // DataPoolFetcher.FetchAsync below, and into the k6 env vars further down) - not re-read
         // from _infraToggle at each use. The pool preload and the k6 run itself are minutes apart
