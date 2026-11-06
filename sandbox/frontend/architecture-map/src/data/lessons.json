@@ -25,8 +25,8 @@
         "kind": "load-test",
         "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
         "vus": 300,
-        "durationSeconds": 60,
-        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+        "durationSeconds": 30,
+        "description": "POST /Links via nginx · 300 virtual users · 30 seconds"
       },
       "watch": {
         "metrics": ["p95Ms", "errorRatePct"],
@@ -68,11 +68,11 @@
           "body": "{\"originalLink\":\"https://example.com/lesson-1-2\"}",
           "extractField": "shortenLink"
         },
-        "description": "One redirect against a link created moments earlier, cold cache"
+        "description": "One deliberate redirect (not a load test - we're inspecting a single trace), against a link created moments earlier, cold cache"
       },
       "watch": {
         "metrics": ["latencyMs"],
-        "hints": [{ "kind": "trace-link", "label": "View this request's trace", "note": "See the Postgres span the cache miss triggered" }]
+        "hints": [{ "kind": "trace-link", "label": "View this request's trace", "note": "Open the trace and check its span list: a Postgres/Npgsql span means this redirect fell through to the database - that's the cold-cache cost. No such span next run means Redis served it." }]
       },
       "conclusion": {
         "afterRun1": "{{latencyMs}}ms - the trace shows a real Postgres round trip on a single redirect.",
@@ -101,11 +101,11 @@
         "serviceId": "redirect-api",
         "method": "GET",
         "path": "/lesson-unknown-hash",
-        "description": "One redirect against a hash that was never created"
+        "description": "One deliberate redirect (not a load test - we're inspecting a single trace), against a hash that was never created"
       },
       "watch": {
         "metrics": ["latencyMs"],
-        "hints": [{ "kind": "trace-link", "label": "View this request's trace", "note": "Check whether a Postgres lookup still happens for a hash that can never exist" }]
+        "hints": [{ "kind": "trace-link", "label": "View this request's trace", "note": "Open the trace and check its span list: a Postgres/Npgsql span here means a lookup ran for a hash that will never exist. No such span next run means the negative-cache marker answered first." }]
       },
       "conclusion": {
         "afterRun1": "{{latencyMs}}ms - the trace shows Postgres gets queried even though this hash will never exist.",
@@ -133,8 +133,8 @@
         "kind": "load-test",
         "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
         "vus": 300,
-        "durationSeconds": 60,
-        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+        "durationSeconds": 30,
+        "description": "POST /Links via nginx · 300 virtual users · 30 seconds"
       },
       "watch": {
         "metrics": ["p95Ms", "errorRatePct", "timeoutCount"],
@@ -166,8 +166,8 @@
         "kind": "load-test",
         "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
         "vus": 300,
-        "durationSeconds": 60,
-        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+        "durationSeconds": 30,
+        "description": "POST /Links via nginx · 300 virtual users · 30 seconds"
       },
       "watch": {
         "metrics": ["p95Ms", "errorRatePct", "timeoutCount"],
@@ -202,8 +202,8 @@
           { "endpointId": "redirect-api.resolve", "pauseAfterSeconds": 0 }
         ],
         "vus": 20,
-        "durationSeconds": 60,
-        "description": "Mixed create + redirect via nginx · 20 virtual users · 60 seconds"
+        "durationSeconds": 30,
+        "description": "Mixed create + redirect via nginx · 20 virtual users · 30 seconds"
       },
       "watch": {
         "metrics": ["p95Ms"],
@@ -235,8 +235,8 @@
         "kind": "load-test",
         "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
         "vus": 300,
-        "durationSeconds": 60,
-        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+        "durationSeconds": 30,
+        "description": "POST /Links via nginx · 300 virtual users · 30 seconds"
       },
       "watch": {
         "metrics": ["p95Ms"],
@@ -269,8 +269,8 @@
         "kind": "load-test",
         "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
         "vus": 300,
-        "durationSeconds": 60,
-        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+        "durationSeconds": 30,
+        "description": "POST /Links via nginx · 300 virtual users · 30 seconds"
       },
       "watch": {
         "metrics": ["queueDepth"],
@@ -303,8 +303,8 @@
         "kind": "load-test",
         "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
         "vus": 300,
-        "durationSeconds": 60,
-        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+        "durationSeconds": 30,
+        "description": "POST /Links via nginx · 300 virtual users · 30 seconds"
       },
       "watch": {
         "metrics": ["queueDepth"],
