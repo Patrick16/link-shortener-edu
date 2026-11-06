@@ -552,6 +552,21 @@ export interface TracedRequestResult {
   traceId: string
 }
 
+// Lesson Mode's chaos-trigger probe - see ChaosProbeInput/LessonProbeService on the backend.
+export interface ChaosProbeInput {
+  endpointId: string
+  count: number
+  intervalMs?: number
+}
+
+export interface ChaosProbeResult {
+  totalRequests: number
+  successCount: number
+  failureCount: number
+  errorRatePct: number
+  p95Ms: number
+}
+
 // Lightweight row for the history list - see RunSummary on the backend for why it's separate from
 // RunSnapshot (avoids pulling every run's full raw k6 output just to render a list).
 export interface RunSummary {

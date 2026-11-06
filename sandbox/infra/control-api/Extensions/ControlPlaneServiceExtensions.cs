@@ -38,6 +38,7 @@ public static class ControlPlaneServiceExtensions
         // factory, no named client needed for a single ad-hoc call per request.
         services.AddHttpClient();
         services.AddSingleton<ILessonTraceService, LessonTraceService>();
+        services.AddSingleton<ILessonProbeService, LessonProbeService>();
         services.AddSingleton<IContainerLifecycleService, ContainerLifecycleService>();
         services.AddSingleton<IScenarioStore, ScenarioStore>();
         services.AddSingleton<IPresetStore, PresetStore>();

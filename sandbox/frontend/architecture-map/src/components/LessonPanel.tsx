@@ -75,13 +75,32 @@ async function runTracedRequest(trigger: Extract<Trigger, { kind: 'traced-reques
 }
 
 // Chaos actions are the only trigger kind this panel resolves itself end-to-end (load-test defers
-// to the shared useTrafficRun/SignalR flow - see the effect below) - stop/degrade, then poll for
-// recovery, then heal a `stop` back (a `degrade` already expires on its own durationSeconds).
+// to the shared useTrafficRun/SignalR flow - see the effect below) - stop/degrade, then either
+// probe real traffic (when the lesson declares probeEndpointId) or poll for reachability, then
+// heal a `stop` back (a `degrade` already expires on its own durationSeconds).
+//
+// Two different lesson shapes share this one trigger kind, and need two different signals:
+// - "did a request succeed against the degraded dependency" (4.1/4.4/4.7's own story - a circuit
+//   breaker, a messaging-mode switch, a pooler instance) needs a REAL request fired during the
+//   outage window - container reachability has nothing to do with it (found live 2026-11-06:
+//   isReachableAgain doesn't even know shortener-service/pgcat, so these three lessons always
+//   reported a flat 100%/100%, never showing their own fix actually working). That's probeEndpointId.
+// - "did a replacement get elected" (4.6's own story - an un-sentineled Mongo set has nothing to
+//   fail over to) genuinely IS about container/role reachability, not request traffic - no probe
+//   needed, isReachableAgain's existing redis-master/mongo1 checks are the right signal as-is.
 async function runChaos(trigger: Extract<Trigger, { kind: 'chaos' }>): Promise<RunResult> {
   if (trigger.action === 'stop') {
     await controlApi.stop(trigger.targetServiceId)
   } else {
     await controlApi.degrade(trigger.targetServiceId, { type: 'Partition', amount: 100, durationSeconds: Math.round(RECOVERY_WINDOW_MS / 1000) })
+  }
+
+  if (trigger.probeEndpointId) {
+    const probe = await controlApi.chaosProbe({ endpointId: trigger.probeEndpointId, count: trigger.probeCount ?? 5, intervalMs: 1000 })
+    if (trigger.action === 'stop') {
+      await controlApi.start(trigger.targetServiceId).catch(() => {})
+    }
+    return { metrics: { errorRatePct: probe.errorRatePct, p95Ms: Math.round(probe.p95Ms) } }
   }
 
   const recoveredAfterSec = await observeRecovery(trigger.targetServiceId, RECOVERY_WINDOW_MS)

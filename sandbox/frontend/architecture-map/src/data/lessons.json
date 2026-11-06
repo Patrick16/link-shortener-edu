@@ -336,6 +336,8 @@
         "kind": "chaos",
         "action": "degrade",
         "targetServiceId": "redis-master",
+        "probeEndpointId": "link-api.create",
+        "probeCount": 8,
         "description": "Degrade redis-master's network for the duration of the run"
       },
       "watch": {
@@ -424,7 +426,7 @@
         "start": { "infra": { "messagingMode": "grpc" } },
         "target": { "infra": { "messagingMode": "rabbitmq" } }
       },
-      "trigger": { "kind": "chaos", "action": "stop", "targetServiceId": "shortener-service", "description": "Stop the shortener-service container" },
+      "trigger": { "kind": "chaos", "action": "stop", "targetServiceId": "shortener-service", "probeEndpointId": "link-api.create", "probeCount": 5, "description": "Stop the shortener-service container" },
       "watch": {
         "metrics": ["errorRatePct"],
         "hints": [{ "kind": "node-link", "nodeId": "link-api", "linkLabel": "SQLite fallback", "note": "In rabbitmq mode, POST /Links keeps succeeding - the event just waits for a consumer" }]
@@ -496,7 +498,7 @@
         "start": { "infra": { "pgcatEnabled": true, "haproxyEnabled": false } },
         "target": { "infra": { "haproxyEnabled": true } }
       },
-      "trigger": { "kind": "chaos", "action": "degrade", "targetServiceId": "pgcat", "description": "Degrade the pgcat container's network" },
+      "trigger": { "kind": "chaos", "action": "degrade", "targetServiceId": "pgcat", "probeEndpointId": "auth-api.register", "probeCount": 8, "description": "Degrade the pgcat container's network" },
       "watch": {
         "metrics": ["errorRatePct"],
         "hints": [{ "kind": "node-link", "nodeId": "haproxy", "linkLabel": "HAProxy stats", "note": "Watch one backend server marked down while the others (once there are others) keep serving" }]

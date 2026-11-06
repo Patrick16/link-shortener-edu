@@ -34,6 +34,8 @@ import type {
   SentinelConfig,
   TracedRequestInput,
   TracedRequestResult,
+  ChaosProbeInput,
+  ChaosProbeResult,
   TrafficRequest,
 } from '../types/controlApi'
 
@@ -105,6 +107,7 @@ export const controlApi = {
   // isn't just a 1-VU/1-iteration scenario (control-api issues the call itself so the result
   // carries a real trace id to link into Jaeger/Aspire Dashboard).
   tracedRequest: (input: TracedRequestInput) => request<TracedRequestResult>('/api/lessons/traced-request', 'POST', input),
+  chaosProbe: (input: ChaosProbeInput) => request<ChaosProbeResult>('/api/lessons/chaos-probe', 'POST', input),
 
   listEndpoints: () => request<EndpointDefinition[]>('/api/endpoints'),
   listDataSources: () => request<DataSourceDefinition[]>('/api/data-sources'),

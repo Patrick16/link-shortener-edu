@@ -25,7 +25,19 @@ export type Trigger =
   // up in the user-facing Presets/Scenarios picker.
   | { kind: 'load-test'; steps: FlowStep[]; vus: number; durationSeconds: number; description: string }
   | { kind: 'traced-request'; serviceId: string; method: string; path: string; setup?: TracedRequestSetup; description: string }
-  | { kind: 'chaos'; action: 'stop' | 'degrade'; targetServiceId: string; description: string }
+  // probeEndpointId is required for a chaos lesson whose point is request-level behavior
+  // (errorRatePct/p95Ms) - it's what actually gets called during the outage window. Omitted only
+  // for a lesson whose real signal IS container reachability (e.g. "did a new primary get
+  // elected"), where runChaos falls back to isReachableAgain/recoverySec instead - see
+  // LessonPanel.tsx's own comment on runChaos.
+  | {
+      kind: 'chaos'
+      action: 'stop' | 'degrade'
+      targetServiceId: string
+      description: string
+      probeEndpointId?: string
+      probeCount?: number
+    }
 
 export type WatchHint =
   // Resolved against utils/quickLink.ts's getQuickLinks(component) for nodeId, matched by label -

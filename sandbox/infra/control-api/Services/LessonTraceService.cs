@@ -18,25 +18,6 @@ namespace ControlApi.Services;
 // browser request would have produced, control-api just never exports a span of its own into it.
 public class LessonTraceService(IHttpClientFactory httpClientFactory, IInfraToggleService infra) : ILessonTraceService
 {
-    // Mirrors TrafficService's own LINK_API_URL/REDIRECT_API_URL/AUTH_API_URL env-var mapping
-    // exactly (see TrafficService.cs) - duplicated rather than shared because that one is baked
-    // into k6 process env-var strings, not exposed as a reusable lookup.
-    private static readonly IReadOnlyDictionary<string, string> DirectBaseUrls = new Dictionary<string, string>
-    {
-        ["auth-api"] = "http://auth-api:8080",
-        ["link-api"] = "http://link-api:8080",
-        ["redirect-api"] = "http://redirect-api:8080",
-        ["reporting-api"] = "http://reporting-api:8080",
-    };
-
-    // Only link-api/redirect-api sit behind nginx - same two services TrafficService's own nginx-
-    // bypass branch touches.
-    private static readonly IReadOnlyDictionary<string, string> NginxRoutedBaseUrls = new Dictionary<string, string>
-    {
-        ["link-api"] = "http://nginx:8082",
-        ["redirect-api"] = "http://nginx:8083",
-    };
-
     public async Task<TracedRequestResult> RunAsync(TracedRequestInput input, CancellationToken ct)
     {
         var status = await infra.GetInfraStatusAsync(ct);
@@ -48,7 +29,7 @@ public class LessonTraceService(IHttpClientFactory httpClientFactory, IInfraTogg
         var path = input.Path;
         if (input.Setup is { } setup)
         {
-            var setupUrl = $"{ResolveBaseUrl(setup.ServiceId, status.NginxBypassed)}{setup.Path}";
+            var setupUrl = $"{ServiceBaseUrls.Resolve(setup.ServiceId, status.NginxBypassed)}{setup.Path}";
             using var setupRequest = new HttpRequestMessage(new HttpMethod(setup.Method), setupUrl);
             if (setup.Body is not null)
             {
@@ -61,7 +42,7 @@ public class LessonTraceService(IHttpClientFactory httpClientFactory, IInfraTogg
             path = path.Replace("{{value}}", value);
         }
 
-        var baseUrl = ResolveBaseUrl(input.ServiceId, status.NginxBypassed);
+        var baseUrl = ServiceBaseUrls.Resolve(input.ServiceId, status.NginxBypassed);
 
         // A fresh, random W3C trace context (version-traceId-parentId-flags) - ActivityTraceId/
         // ActivitySpanId are part of System.Diagnostics (no extra package needed) and already
@@ -79,10 +60,4 @@ public class LessonTraceService(IHttpClientFactory httpClientFactory, IInfraTogg
 
         return new TracedRequestResult((int)response.StatusCode, stopwatch.Elapsed.TotalMilliseconds, traceId.ToHexString());
     }
-
-    private static string ResolveBaseUrl(string serviceId, bool nginxBypassed) =>
-        !nginxBypassed && NginxRoutedBaseUrls.TryGetValue(serviceId, out var routed)
-            ? routed
-            : DirectBaseUrls.GetValueOrDefault(serviceId)
-                ?? throw new ArgumentOutOfRangeException(nameof(serviceId), serviceId, "Unknown serviceId for a traced request.");
 }
