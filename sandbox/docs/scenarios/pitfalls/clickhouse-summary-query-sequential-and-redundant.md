@@ -17,11 +17,8 @@ one makes the other's fix cheaper:
    same filter by date; summing its counts gives the identical total without a second scan.
 
 Together: 5 sequential round trips to answer one summary request, one of which did work the other
-four had already done. Running the four real queries concurrently (via `IHttpClientFactory`-pooled
-connections — see [the ClickHouse connection-pooling
-pitfall](pitfall:clickhouse-unpooled-httpclient-per-call) this fix depended on being safe first) and
-deriving the total from `byDay` in memory cuts this to 4 concurrent round trips with no `total`
-query at all.
+four had already done. Running the four real queries concurrently and deriving the total from
+`byDay` in memory cuts this to 4 concurrent round trips with no `total` query at all.
 
 **No real before/after diff exists for this one** — caught and fixed in the same uncommitted
 working-tree session the feature was built in, before the first commit. Reconstructed from the
@@ -68,8 +65,9 @@ return new ClickSummary(hash, total, byDay, await byCountryTask, await byDeviceT
 
 Running four queries concurrently against the same underlying connection factory is only safe
 because each call opens its own `ClickHouseConnection` wrapper (ADO.NET connections can't be
-shared across concurrent calls) over a shared, pooled `HttpMessageHandler` — see the
-connection-pooling pitfall linked above; this fix would have been unsafe to make before that one.
+shared across concurrent calls) over a shared, pooled `HttpMessageHandler` — see [the ClickHouse
+connection-pooling pitfall](pitfall:clickhouse-unpooled-httpclient-per-call) this fix depended on
+being safe first.
 
 (see review-reports/2026-10-05-2356-cqrs-reporting-clickhouse.md, F7+F8 — fixed before first
 commit, no diffable hash; see note above)

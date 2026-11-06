@@ -2,14 +2,13 @@
 
 **Category:** resilience-gap **Status:** fixed
 
-A cache is an optimization, not a dependency — it should never be able to take down a read path
-that has a working source of truth behind it. Wiring a cache client straight into the read path
-with no fallback turns an availability problem that should be invisible (Redis blips, the whole
-cache falls over) into a hard outage: if `GetCachedAsync` calls `IDistributedCache` directly with
-no try/catch, any `RedisConnectionException` propagates as an unhandled exception instead of
-falling back to the database, even though the database had the answer the whole time. Watch for
-this any time a cache-aside layer is introduced — the degrade-on-failure path has to be designed in
-from the start, not bolted on after the first outage.
+A cache is an optimization, not a dependency — it should never take down a read path that has a
+working source of truth behind it. Wiring a cache client straight into the read path with no
+fallback does exactly that: if `GetCachedAsync` calls `IDistributedCache` directly with no
+try/catch, a `RedisConnectionException` propagates as an unhandled exception instead of falling
+back to the database, even though the database had the answer the whole time. Watch for this any
+time a cache-aside layer is introduced — the degrade-on-failure path has to be designed in from the
+start, not bolted on after the first outage.
 
 ⚠️ **Mistake** — `src/backend/Shared/Common/EntityCacheService.cs`, `GetCachedAsync`:
 

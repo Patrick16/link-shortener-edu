@@ -15,9 +15,8 @@ On a genuinely fresh volume (first `start-stack.ps1` run, or after `-Wipe`), thi
 answer "healthy" while the init script was still mid-run, so `reporting-service`'s first consumed
 batch (or `reporting-api`'s first query) could hit "table `reports_db.clicks` doesn't exist" —
 exactly once, on cold start, hard to reproduce once the volume already has data. This project had
-already hit the identical shape of bug once before with Postgres streaming replicas (a healthcheck
-that proves the process is up, not that the thing it's gating on is actually ready) — same lesson,
-a different component this time.
+already hit the identical shape of bug once before with Postgres streaming replicas — same lesson,
+a different component.
 
 **No real before/after diff exists for this one** — caught and fixed in the same uncommitted
 working-tree session the feature was built in, before the first commit, so there's no prior commit

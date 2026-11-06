@@ -7,11 +7,10 @@ it wraps is actually shared." `ClickHouseClickFactStore`/`ClickHouseClickFactQue
 write/read sides of the ClickHouse read model — see [CQRS fan-out](pattern:cqrs-fanout)) are both
 registered as singletons, but every method (`InsertManyAsync`, `PingAsync`, `GetSummaryAsync`)
 originally constructed a brand-new `ClickHouseClient`/`ClickHouseConnection` straight from the
-connection string, on every single call — which, under the hood, built its own one-off `HttpClient`
-each time rather than reusing anything the singleton held. The singleton registration gave no
-actual pooling: under any real request rate, every query or insert opened and tore down a fresh
-HTTP connection to ClickHouse's port 8123, churning sockets/TCP handshakes on a path that looked
-pooled but wasn't.
+connection string on every call — each one building its own one-off `HttpClient` underneath rather
+than reusing anything the singleton held. Under any real request rate, this churned a fresh TCP
+connection/handshake to ClickHouse's port 8123 per query or insert — a path that looked pooled but
+wasn't.
 
 **No real before/after diff exists for this one** — it was caught and fixed in the same
 uncommitted working-tree session the feature was built in (review happened before the first

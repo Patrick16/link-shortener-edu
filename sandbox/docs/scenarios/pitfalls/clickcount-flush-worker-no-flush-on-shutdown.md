@@ -4,29 +4,27 @@
 
 Watch for this any time an in-memory buffer is drained periodically by a `BackgroundService`'s own
 timer loop, and the design comment accepts "data buffered right before a crash is lost" as a known
-tradeoff. That framing quietly assumes the *only* way the loop stops is a crash. In a system with a
-control plane that routinely restarts, scales down, or redeploys services — all ordinary, frequent
-operations, not rare failures — `PeriodicTimer.WaitForNextTickAsync` throws as soon as the host
-cancels its token during an *ordinary* graceful shutdown too. If nothing hooks that shutdown path
-to run one last drain, every routine stop silently loses however much was buffered — not the narrow
-"one crash, one batch" window the design comment described, but a deterministic loss on every
-single restart.
+tradeoff — that framing quietly assumes the *only* way the loop stops is a crash. In a system whose
+control plane routinely restarts, scales down, or redeploys services (ordinary operations, not
+rare failures), `PeriodicTimer.WaitForNextTickAsync` throws just as readily on an ordinary graceful
+shutdown. Without a shutdown hook to run one last drain, every routine stop silently loses whatever
+was buffered — not the narrow "one crash, one batch" window the design comment described, but a
+deterministic loss on every restart.
 
 **Concrete instance in this project:** `ClickCountAggregator`/`ClickCountFlushWorker` buffer
-click-count increments in-process and flush them to Postgres every 500ms, specifically to collapse
-however many `ClickTrackedEvent` batches land for the same hot hash within that window into one
-`UPDATE` instead of one per batch (see [ShortenerService](node:shortener-service)'s click-tracking
-split). The aggregator's own comment named "the process crashes or is force-killed" as the loss
-window — accurate as far as it went, but `ClickCountFlushWorker.ExecuteAsync` had no `try/finally`,
+click-count increments in-process and flush them to Postgres every 500ms, collapsing however many
+`ClickTrackedEvent` batches land for the same hot hash within that window into one `UPDATE` instead
+of one per batch (see [ShortenerService](node:shortener-service)'s click-tracking split). The
+aggregator's own comment named "the process crashes or is force-killed" as the loss window —
+accurate as far as it went, but `ClickCountFlushWorker.ExecuteAsync` had no `try/finally`,
 `StopAsync` override, or shutdown-lifetime hook draining the aggregator before the worker's loop
 exited. A rolling redeploy, the control plane's "restart" button, or a scale-down from N replicas
-to N-1 (all routine, frequently-exercised actions in this project) discarded whatever was buffered
-for every hash that had received a click in the last (up to) 500ms — permanently: RabbitMQ had
-already acked the batches that produced those counts, so nothing could redeliver them, and there
-was no persistence or WAL to recover from. Before this buffering was introduced, the ack only
-happened *after* the synchronous `ExecuteUpdateAsync` had durably applied the count, so a graceful
-shutdown lost nothing at all — this change turned a rare, crash-only, single-batch loss window into
-a routine, every-restart, whole-flush-interval loss.
+to N-1 discarded whatever was buffered for every hash clicked in the last (up to) 500ms —
+permanently, since RabbitMQ had already acked the batches that produced those counts and there was
+no persistence or WAL to recover from. Before this buffering was introduced, the ack only happened
+*after* the synchronous `ExecuteUpdateAsync` had durably applied the count, so a graceful shutdown
+lost nothing at all — this change turned a rare, crash-only, single-batch loss window into a
+routine, every-restart, whole-flush-interval loss.
 
 ⚠️ **Mistake** — `src/backend/Services/ShortenerService/ClickCountFlushWorker.cs` (before commit
 `1780bc7`):
