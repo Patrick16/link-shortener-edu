@@ -21,7 +21,7 @@ public class LessonTraceService(IHttpClientFactory httpClientFactory, IInfraTogg
     public async Task<TracedRequestResult> RunAsync(TracedRequestInput input, CancellationToken ct)
     {
         var status = await infra.GetInfraStatusAsync(ct);
-        var client = httpClientFactory.CreateClient();
+        var client = httpClientFactory.CreateClient("lessons");
 
         // Untraced on purpose - a setup call (e.g. "create a link") is scaffolding for the lesson,
         // not the request the lesson is actually about, so it shouldn't show up as the trace root

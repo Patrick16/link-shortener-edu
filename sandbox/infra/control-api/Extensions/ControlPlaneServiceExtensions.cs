@@ -33,10 +33,18 @@ public static class ControlPlaneServiceExtensions
         services.AddSingleton<K6ContainerRunner>();
         services.AddSingleton<DataPoolFetcher>();
         services.AddSingleton<ITrafficService, TrafficService>();
-        // Lesson Mode's traced-request endpoint is the only thing in this app that calls another
-        // backend service directly over HTTP (everything else shells out to Docker) - default
-        // factory, no named client needed for a single ad-hoc call per request.
-        services.AddHttpClient();
+        // Lesson Mode's traced-request/chaos-probe endpoints are the only things in this app that
+        // call another backend service directly over HTTP (everything else shells out to Docker).
+        // AllowAutoRedirect=false is load-bearing, not cosmetic: redirect-api's whole job is
+        // returning a 302 to an external URL (https://example.com/... in every lesson that creates
+        // its own test link) - the default HttpClient follows that redirect out to the real
+        // internet, which answers 404 for an arbitrary path, and THAT became the reported result
+        // instead of redirect-api's own 302 (found live, 2026-11-06: lesson 1.2 "Cold Reads" always
+        // reported 404 even though redirect-api's own access log showed 302 for every single
+        // request). k6/flow.js already gets this right on purpose (`redirects: 0`); this client
+        // needs the same.
+        services.AddHttpClient("lessons")
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
         services.AddSingleton<ILessonTraceService, LessonTraceService>();
         services.AddSingleton<ILessonProbeService, LessonProbeService>();
         services.AddSingleton<IContainerLifecycleService, ContainerLifecycleService>();

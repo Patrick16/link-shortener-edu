@@ -17,7 +17,7 @@ public class LessonProbeService(ITrafficService traffic, IHttpClientFactory http
 
         var status = await infra.GetInfraStatusAsync(ct);
         var baseUrl = ServiceBaseUrls.Resolve(endpoint.ServiceId, status.NginxBypassed);
-        var client = httpClientFactory.CreateClient();
+        var client = httpClientFactory.CreateClient("lessons");
         // A degraded dependency (100% packet loss/partition) can hang a request far past
         // HttpClient's own 100s default - a single probe call waiting that long would make the
         // whole lesson feel frozen, not just slow. Counting a timeout as a failure this fast is
