@@ -9,10 +9,13 @@ row, checked `RevokedAt` in memory, and only afterwards wrote `RevokedAt = DateT
 issued a new token — a classic check-then-act race. Two requests presenting the identical raw
 refresh token concurrently (each with its own `DbContext`/DB connection) could both read
 `RevokedAt == null` before either had saved, so both would proceed to revoke-and-reissue. Depending
-on timing, this either forked the token family (two independent new refresh tokens live for the
-same lineage, silently defeating reuse detection — exactly the attacker-races-the-legitimate-client
-scenario the mechanism exists to catch) or produced a false-positive full logout (whichever save
-landed second re-read the now-already-revoked row and burned every session for that user).
+on timing, this produced one of two outcomes:
+
+- **forked token family** — two independent new refresh tokens live for the same lineage, silently
+  defeating reuse detection (exactly the attacker-races-the-legitimate-client scenario the
+  mechanism exists to catch)
+- **false-positive full logout** — whichever save landed second re-read the now-already-revoked row
+  and burned every session for that user
 
 This had a real, non-adversarial trigger too: the frontend's session-restore effect could itself
 fire two concurrent `/refresh` calls with the same cookie under React StrictMode's dev-mode

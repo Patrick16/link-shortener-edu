@@ -15,13 +15,15 @@ against `clicks_db` would mean competing with TrafficService's own write traffic
 
 ## How it works
 
-Binds its own queue (`reporting-service.click-tracked`) to the same `click.tracked` routing key
-TrafficService already consumes — RabbitMQ fan-out, not a chain: [RedirectApi](node:redirect-api)'s
-publish side is completely unaware this consumer exists. Each batch is deduplicated by event `Id`
-(last-write-wins within the batch, matching TrafficService's own redelivery-safety reasoning), geo-
-IP resolution runs with bounded parallelism (same `ip-api.com` rate-limit concern as TrafficService,
-resolved **independently** — see this node's Pitfalls for the cost that doubling up had before it
-was caught), and the whole batch is written with one bulk insert, never per-row.
+- Binds its own queue (`reporting-service.click-tracked`) to the same `click.tracked` routing key
+  TrafficService already consumes — true RabbitMQ fan-out: [RedirectApi](node:redirect-api)'s
+  publisher is unaware this consumer exists.
+- Dedups each batch by event `Id` (last-write-wins within the batch, matching TrafficService's own
+  redelivery-safety reasoning).
+- Resolves geo-IP with bounded parallelism, **independently** of TrafficService's own resolver/cache
+  (same `ip-api.com` rate-limit concern — see this node's Pitfalls for the cost of not isolating
+  this before it was caught).
+- Writes the whole batch with one bulk insert, never per-row.
 
 **Why no row-level dedup against what's already in ClickHouse.** A redelivered event would normally
 risk a duplicate row, but `reports_db.clicks` is a `ReplacingMergeTree` table ordered by
@@ -40,9 +42,8 @@ flowchart TD
 ```
 
 Contrast with [ShortenerService](node:shortener-service)/[TrafficService](node:traffic-service)'s
-Postgres writes, which pre-check and skip an insert for an `Id`/`Hash` already stored — ClickHouse
-has no unique-constraint equivalent to check against cheaply, so this consumer trades a point-in-
-time dedup guarantee for never paying a per-row lookup against a store that's bad at them.
+Postgres writes, which pre-check and skip an insert for an already-stored `Id`/`Hash` — a guarantee
+ClickHouse has no cheap equivalent for.
 
 ## How it's implemented here
 

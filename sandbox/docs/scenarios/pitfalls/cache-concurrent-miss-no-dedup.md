@@ -4,11 +4,10 @@
 
 Watch for a cache-aside implementation with no coordination between concurrent callers that miss
 on the *same* key at the *same* time — a classic cache-stampede/thundering-herd gap. Without an
-in-flight lock or singleflight mechanism, every concurrent caller for the same key independently
-runs `fetchFromDb` and independently re-writes the same cache entry. A burst of concurrent requests
-for the same just-expired key each hits Postgres independently, instead of one request populating
-the cache for the rest — redundant DB load proportional to concurrent request count on every cold
-key, worse the more popular the link.
+in-flight lock or singleflight mechanism, every concurrent caller independently runs `fetchFromDb`
+and re-writes the same entry: a burst of requests for a just-expired key each hits Postgres
+independently instead of one populating the cache for the rest — redundant DB load proportional to
+concurrent request count on every cold key, worse the more popular the link.
 
 ✅ **Do this instead** — `GetOrFetch` (`src/backend/Shared/Common/EntityCacheService.cs`) coalesces
 concurrent misses on the same key through a `ConcurrentDictionary<string, Lazy<Task<T?>>>` of
@@ -24,13 +23,16 @@ Worth knowing if this is ever demonstrated live: joiners share the first caller'
 The coalescing fix above closed the double-fetch problem, but its own cleanup step had a narrower
 follow-on race, found by a later review pass: `GetOrFetch`'s `finally` block did
 `_inFlightFetches.TryRemove(key, out _)` — an *unconditional* remove that deletes whatever `Lazy`
-currently sits at that key, not necessarily the one this call itself awaited. Under contention this
-can evict a different caller's fresh in-flight entry: caller A's fetch completes and starts its
-`finally`, but before it runs, caller B's own request for the same key (after a quick expire/re-miss)
-has already published a *third*, brand-new `Lazy` via its own `GetOrAdd`. A's unconditional
-`TryRemove` then deletes B's fresh entry — degrading single-flight coalescing back into independent
-DB fetches, under precisely the high-contention load this dictionary exists to protect against.
-Correctness is unaffected either way (cache-aside is idempotent), only the stampede protection
+currently sits at that key, not necessarily the one this call itself awaited. Under contention:
+
+1. Caller A's fetch completes and starts its `finally`.
+2. Before it runs, caller B's request for the same key (after a quick expire/re-miss) publishes a
+   *third*, brand-new `Lazy` via its own `GetOrAdd`.
+3. A's unconditional `TryRemove` deletes B's fresh entry — degrading single-flight coalescing back
+   into independent DB fetches, under precisely the high-contention load this dictionary exists to
+   protect against.
+
+Correctness is unaffected either way (cache-aside is idempotent); only the stampede protection
 degrades.
 
 🐛 **Mistake** — `src/backend/Shared/Common/EntityCacheService.cs` (before `5c8475b`):

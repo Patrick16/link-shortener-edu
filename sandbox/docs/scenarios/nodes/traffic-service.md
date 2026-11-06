@@ -47,16 +47,19 @@ flowchart TD
 ```
 
 **Why no transactional outbox here.** The textbook answer to a non-transactional dual-write is an
-outbox table plus a relay worker, so this is a deliberate choice, not an oversight. Three things
-already in place cover the failure modes an outbox would also cover: the Postgres write runs first
-and is retried-safe (skipped if the `Id` is already stored), the Mongo write is unconditional *and*
-idempotent (upsert by `Id`, see this node's Pitfalls), and RabbitMQ itself requeues a message whose
-consumer connection drops before it's acked — so "the process dies between the two writes" already
-results in redelivery, not loss, via the broker rather than app code. The only gap an outbox would
-still close is a consumer that hangs *without* dropping its AMQP connection (e.g. a stuck thread) —
-rare, and not meaningfully improved by adding an outbox either, since that scenario would hang the
-outbox relay just as easily. Net: here, ordering + idempotency + broker redelivery already buy what
-an outbox buys, without the extra table, relay worker, and latency.
+outbox table plus a relay worker — this is a deliberate choice, not an oversight. Three things
+already in place cover the failure modes an outbox would also cover:
+
+- the Postgres write runs first and is retried-safe (skipped if the `Id` is already stored)
+- the Mongo write is unconditional *and* idempotent (upsert by `Id`, see this node's Pitfalls)
+- RabbitMQ itself requeues a message whose consumer connection drops before it's acked — so "the
+  process dies between the two writes" already results in redelivery, not loss, via the broker
+  rather than app code
+
+The only gap an outbox would still close is a consumer that hangs *without* dropping its AMQP
+connection (e.g. a stuck thread) — rare, and not meaningfully improved by adding an outbox either,
+since that scenario would hang the outbox relay just as easily. Net: ordering + idempotency + broker
+redelivery already buy what an outbox buys, without the extra table, relay worker, and latency.
 
 A later backlog pass considered building this as a live, DI-swapped toggle specifically to demo
 dual-write vs. outbox side by side with a deterministic fault hook — see
@@ -90,9 +93,6 @@ internal async Task<BatchOutcome> HandleBatchAsync(
     await _clickMetaStore.SaveManyAsync(metas, cancellationToken);
 }
 ```
-
-The Mongo write is independently idempotent (`MongoClickMetaStore` upserts by `Id`), which is what
-makes "always attempt it, even on a Postgres-side redelivery" safe rather than duplicating data.
 
 ## Pitfalls
 

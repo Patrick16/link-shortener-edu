@@ -48,11 +48,13 @@ catch (DbUpdateException)
 return poisonMessages.Count > 0 ? BatchOutcome.WithPoison(poisonMessages) : BatchOutcome.Success;
 ```
 
-`ClassifyAgainstExisting` is what actually implements the redelivery-safety rule: a hash with no
-existing row is new; an existing row with the SAME `OriginalLink` is a true duplicate (silently
-skipped); an existing row with a DIFFERENT `OriginalLink` is a genuine conflict, appended to
-`poisonMessages` with a reason read off the *existing* (winning) row's `HasCustomAlias` - see
-[Custom aliases](pattern:custom-aliases) for why that distinction has to live on the winning side.
+`ClassifyAgainstExisting` is what actually implements the redelivery-safety rule:
+
+- no existing row for the hash → new
+- existing row with the SAME `OriginalLink` → true duplicate, silently skipped
+- existing row with a DIFFERENT `OriginalLink` → genuine conflict, appended to `poisonMessages`
+  with a reason read off the *existing* (winning) row's `HasCustomAlias` — see
+  [Custom aliases](pattern:custom-aliases) for why that distinction has to live on the winning side
 
 As a `BackgroundService` (no per-request DI scope), it takes `IDbContextFactory<DatabaseContext>`
 rather than the request-scoped `DatabaseContext` pattern the two web APIs use — see this node's
@@ -148,9 +150,7 @@ direct-to-primary, pgcat-bypassing connection at all (that requirement was only 
 Postgres advisory lock being pinned to one physical session) — it now goes through the normal
 pooled `IDbContextFactory<DatabaseContext>`, the same as `ClickCountFlushWorker` below. Its
 `UPDATE ... RETURNING "Hash"` both flips `DeletedAt` and tells the worker exactly which hashes it
-just touched, so it can confirm a `DeletedReason.Expired` tombstone for each - the `DeletedAt IS
-NULL` guard in its `WHERE` clause means a hash a manual delete reached first simply isn't among the
-rows returned, so the two triggers can never double-process the same row.
+just touched, so it can confirm a `DeletedReason.Expired` tombstone for each.
 
 A read-only control-api capability (`GET /api/infra/link-expiry-leader`, `link-expiry-leader` on
 this node's panel in architecture-map) surfaces the current leader hostname and remaining lease TTL
