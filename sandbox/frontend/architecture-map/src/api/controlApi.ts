@@ -32,6 +32,8 @@ import type {
   RunSummary,
   ScaleResult,
   SentinelConfig,
+  TracedRequestInput,
+  TracedRequestResult,
   TrafficRequest,
 } from '../types/controlApi'
 
@@ -99,6 +101,11 @@ export const controlApi = {
 
   flushRedisCache: () => request<{ flushed: string }>('/api/containers/redis/flush-cache', 'POST'),
 
+  // Lesson Mode's single-request trigger - see LessonTraceService on the backend for why this
+  // isn't just a 1-VU/1-iteration scenario (control-api issues the call itself so the result
+  // carries a real trace id to link into Jaeger/Aspire Dashboard).
+  tracedRequest: (input: TracedRequestInput) => request<TracedRequestResult>('/api/lessons/traced-request', 'POST', input),
+
   listEndpoints: () => request<EndpointDefinition[]>('/api/endpoints'),
   listDataSources: () => request<DataSourceDefinition[]>('/api/data-sources'),
 
@@ -126,6 +133,9 @@ export const controlApi = {
   getPgcatConnections: () => request<PgcatInstanceConnections[]>('/api/containers/pgcat/connections'),
   getPostgresConnections: () => request<PostgresConnectionStats>('/api/containers/postgres/connections'),
   getDlqStats: () => request<DeadLetterQueueStats>('/api/infra/dlq-stats'),
+  // GET, not POST - a plain read, safe to poll as often as Lesson Mode wants.
+  getQueueDepth: (queueName: string) =>
+    request<{ queue: string; messages: number }>(`/api/infra/queue-depth/${encodeURIComponent(queueName)}`),
   getLinkExpiryLeader: () => request<LinkExpiryLeaderStatus>('/api/infra/link-expiry-leader'),
   clearDlq: () => request<{ cleared: number }>('/api/infra/dlq-clear', 'POST'),
   // GET, not POST - this only peeks (non-destructive on the backend), safe to call repeatedly.

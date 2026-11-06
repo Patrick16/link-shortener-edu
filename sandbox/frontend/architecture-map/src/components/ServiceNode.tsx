@@ -16,6 +16,10 @@ export interface ServiceNodeData {
   // Which capability-driven job(s) this node is currently doing - see utils/roleBadges.ts. Empty
   // for every node except nginx today.
   roleBadges?: string[]
+  // Lesson Mode: true while this node is one of the open lesson's highlightNodeIds - gets the
+  // exact same visual treatment as a clicked/selected node (see the className below), just driven
+  // by the open lesson instead of react-flow's own single-node selection.
+  lessonHighlighted?: boolean
   // How many distinct Handles to render per side, spread evenly across the node's height instead
   // of every edge converging on one shared point - see Diagram.tsx's outgoing/incoming grouping.
   // Always at least 1 so a node with no edges on a side still has its default attachment point.
@@ -41,7 +45,7 @@ export function ServiceNode({ data, selected }: NodeProps) {
   const targetOffsets = handleOffsets(nodeData.targetHandleCount ?? 1)
   const sourceOffsets = handleOffsets(nodeData.sourceHandleCount ?? 1)
   return (
-    <div className={selected ? 'service-node selected' : 'service-node'}>
+    <div className={selected || nodeData.lessonHighlighted ? 'service-node selected' : 'service-node'}>
       {targetOffsets.map((top, i) => (
         <Handle key={`target-${i}`} type="target" position={Position.Left} id={`target-${i}`} style={{ top: `${top}%` }} />
       ))}

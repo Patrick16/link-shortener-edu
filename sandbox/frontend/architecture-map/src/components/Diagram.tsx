@@ -28,6 +28,9 @@ interface Props {
   resourceHistoryByContainer: Record<string, ResourceSample[]>
   onUnpinMetric: (componentId: string) => void
   edgeLabels: EdgeLabelsApi
+  // Lesson Mode: node ids to give the shared "selected" visual treatment while a lesson is open -
+  // see ServiceNode.tsx's lessonHighlighted. Undefined/empty outside Lesson Mode, same as today.
+  highlightedNodeIds?: ReadonlySet<string>
 }
 
 const nodeTypes = { service: ServiceNode, region: RegionNode }
@@ -76,6 +79,7 @@ function DiagramInner({
   resourceHistoryByContainer,
   onUnpinMetric,
   edgeLabels,
+  highlightedNodeIds,
 }: Props) {
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
   const { fitView } = useReactFlow()
@@ -152,10 +156,11 @@ function DiagramInner({
             roleBadges: getRoleBadges(component.id, infraStatus),
             sourceHandleCount: edgesByNode.outgoing.get(component.id)?.length ?? 1,
             targetHandleCount: edgesByNode.incoming.get(component.id)?.length ?? 1,
+            lessonHighlighted: highlightedNodeIds?.has(component.id) ?? false,
           } satisfies ServiceNodeData,
         }
       }),
-    [visible.components, containers, knownServiceIds, layout, roles, infraStatus, edgesByNode],
+    [visible.components, containers, knownServiceIds, layout, roles, infraStatus, edgesByNode, highlightedNodeIds],
   )
 
   const computedNodes: Node[] = useMemo(() => [...regionNodes, ...serviceNodes], [regionNodes, serviceNodes])

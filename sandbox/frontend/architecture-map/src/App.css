@@ -3023,3 +3023,247 @@ button:disabled {
   font-weight: 600;
   cursor: pointer;
 }
+
+/* Lesson Mode - LessonsModal (list, mirrors the .presets-modal pattern) + LessonPanel (open
+   lesson, mounted in app-sidebar-left the same way NodePanel/K6ConfigPanel are). See
+   .notes/PLAN.md's "Feature: Lesson Mode" entry. */
+
+.lessons-modal {
+  max-width: 640px;
+}
+
+.lessons-list-scroll {
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+
+.lessons-chapter-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.04em;
+  margin: 18px 0 8px;
+}
+
+.lessons-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.lessons-row-current {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.lessons-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lessons-row-status {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.lessons-row-status-done {
+  border: none;
+  background: #22c55e;
+  color: #0b1a12;
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lessons-row-current-label {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 11px;
+}
+
+.lessons-row-title {
+  font-size: 13px;
+}
+
+.lessons-row-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.lessons-row-open:disabled {
+  opacity: 0.5;
+}
+
+.lesson-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.lesson-panel-toprow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.lesson-back-link {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  cursor: pointer;
+}
+
+.lesson-panel-problem {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.lesson-panel-doclink {
+  font-size: 11px;
+  color: var(--text);
+  font-family: var(--mono);
+  margin-top: -4px;
+}
+
+.lesson-config-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.lesson-value-badge {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--text-h);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lesson-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--bg);
+}
+
+.lesson-card-label {
+  font-size: 11px;
+  color: var(--text);
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+
+.lesson-card-mono {
+  font-size: 12px;
+  font-family: var(--mono);
+  line-height: 1.6;
+}
+
+.lesson-watch-hint {
+  margin-top: 6px;
+}
+
+.lesson-hint-note {
+  font-size: 12px;
+  color: var(--text);
+  margin: 4px 0 0;
+}
+
+.lesson-hint {
+  font-size: 11px;
+  color: var(--text);
+  margin-top: 6px;
+}
+
+.lesson-run-button {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.lesson-conclusion {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.lesson-fix-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--text);
+  letter-spacing: 0.03em;
+}
+
+.lesson-fix-card p {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-h);
+  margin: 8px 0;
+}
+
+.lesson-metric-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.lesson-metric-row span:first-child {
+  color: var(--text);
+}
+
+.lesson-comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 5px 8px;
+  font-size: 12px;
+}
+
+.lesson-comparison-head {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lesson-comparison-head-accent {
+  color: var(--accent);
+}
+
+.lesson-comparison-label {
+  color: var(--text);
+}
+
+.lesson-comparison-better {
+  font-weight: 600;
+  color: #22c55e;
+}
+
+.lesson-panel-footer {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}

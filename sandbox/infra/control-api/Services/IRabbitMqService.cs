@@ -31,4 +31,12 @@ public interface IRabbitMqService
     // that are genuinely redelivery-safe (checked for every current dead-letter producer before
     // this was built - see PLAN.md's own item 13). Null if the rabbitmq container isn't running.
     Task<DlqReplayResult?> ReplayDeadLetterQueueAsync(string deadQueueName, int count, CancellationToken ct);
+
+    // Live depth of one ordinary (non-dead-letter) queue by exact name, e.g.
+    // "shortener-service.link-created" - same fresh `rabbitmqctl list_queues` snapshot
+    // GetDeadLetterQueueStatsAsync reads, just filtered to one name instead of the ".dead" suffix.
+    // Lesson Mode polls this directly (not through TrafficReport - k6 has no idea RabbitMQ exists)
+    // to show consumer backlog building up in real time. Null means the rabbitmq container isn't
+    // running or no queue with that name currently exists.
+    Task<int?> GetQueueDepthAsync(string queueName, CancellationToken ct);
 }

@@ -46,6 +46,21 @@ public sealed class DlqStatsCapability(IRabbitMqService rabbitMq, ILogger<DlqSta
             }
         });
 
+        // GET, not POST - a plain read, safe to poll as often as a panel wants.
+        app.MapGet("/api/infra/queue-depth/{queue}", async (string queue, CancellationToken ct) =>
+        {
+            try
+            {
+                var depth = await rabbitMq.GetQueueDepthAsync(queue, ct);
+                return depth is null ? Results.NotFound() : Results.Ok(new { queue, messages = depth.Value });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Reading queue depth for {Queue} failed", queue);
+                return Results.Problem(ex.Message);
+            }
+        });
+
         // GET, not POST - this only peeks (ack_requeue_true, see RabbitMqService), never removes
         // anything, so it's safe to call as often as the panel wants without any cooldown.
         app.MapGet("/api/infra/dlq/{queue}/sample", async (string queue, int? count, CancellationToken ct) =>

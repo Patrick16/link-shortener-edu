@@ -1,0 +1,588 @@
+{
+  "chapters": [
+    { "id": "ch1", "title": "Baseline Traffic" },
+    { "id": "ch2", "title": "Scaling the Database" },
+    { "id": "ch3", "title": "Scaling Services" },
+    { "id": "ch4", "title": "Resilience" },
+    { "id": "ch5", "title": "The Right Tool for the Job" }
+  ],
+  "lessons": [
+    {
+      "id": "1.1",
+      "chapterId": "ch1",
+      "title": "Synchronous Write",
+      "nextLessonId": "1.2",
+      "problem": {
+        "summary": "LinkApi dispatches LinkCreatedEvent over a synchronous gRPC call - the HTTP response doesn't return until ShortenerService has actually persisted the row.",
+        "docLink": "sandbox/docs/scenarios/patterns/async-messaging.md"
+      },
+      "highlightNodeIds": ["link-api", "nginx", "shortener-service", "rabbitmq"],
+      "config": {
+        "start": { "infra": { "messagingMode": "grpc" } },
+        "target": { "infra": { "messagingMode": "rabbitmq" } }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
+        "vus": 300,
+        "durationSeconds": 60,
+        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms", "errorRatePct"],
+        "hints": [
+          { "kind": "observability-link", "label": "Aspire Dashboard", "note": "LinkApi's own span waits on ShortenerService.Persist in sync mode - watch its duration" }
+        ]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms, {{errorRatePct}}% errors - every request waits on a full synchronous round trip to ShortenerService.",
+        "afterRun2": "p95 {{p95Ms}}ms - LinkApi now returns the moment the event is published, persistence happens in the background."
+      },
+      "fix": {
+        "explanation": "Switch messaging transport from grpc to rabbitmq - LinkApi responds as soon as the event is published instead of waiting for ShortenerService to persist it."
+      }
+    },
+    {
+      "id": "1.2",
+      "chapterId": "ch1",
+      "title": "Cold Reads",
+      "nextLessonId": "1.3",
+      "problem": {
+        "summary": "With caching off, every single redirect hits links_db directly - there's nothing to amortize that cost across repeat visits.",
+        "docLink": "sandbox/docs/scenarios/patterns/caching.md"
+      },
+      "highlightNodeIds": ["redirect-api", "redis-master", "links-db"],
+      "config": {
+        "start": { "infra": { "redisEnabled": false } },
+        "target": { "infra": { "redisEnabled": true } }
+      },
+      "trigger": {
+        "kind": "traced-request",
+        "serviceId": "redirect-api",
+        "method": "GET",
+        "path": "/{{value}}",
+        "setup": {
+          "serviceId": "link-api",
+          "method": "POST",
+          "path": "/Links",
+          "body": "{\"originalLink\":\"https://example.com/lesson-1-2\"}",
+          "extractField": "shortenLink"
+        },
+        "description": "One redirect against a link created moments earlier, cold cache"
+      },
+      "watch": {
+        "metrics": ["latencyMs"],
+        "hints": [{ "kind": "trace-link", "label": "View this request's trace", "note": "See the Postgres span the cache miss triggered" }]
+      },
+      "conclusion": {
+        "afterRun1": "{{latencyMs}}ms - the trace shows a real Postgres round trip on a single redirect.",
+        "afterRun2": "{{latencyMs}}ms - same request, served from Redis, no database span in the trace at all."
+      },
+      "fix": {
+        "explanation": "Enable Redis - redirect-api becomes cache-first instead of hitting links_db on every visit."
+      }
+    },
+    {
+      "id": "1.3",
+      "chapterId": "ch1",
+      "title": "Cache Misses on Unknown Hashes",
+      "nextLessonId": "2.1",
+      "problem": {
+        "summary": "A request for a hash that was never created, and never will be, still reaches links_db on every attempt without a marker saying \"this doesn't exist\".",
+        "docLink": "sandbox/docs/scenarios/patterns/caching.md"
+      },
+      "highlightNodeIds": ["redirect-api", "redis-master", "links-db"],
+      "config": {
+        "start": { "infra": { "redisEnabled": true }, "negativeCacheEnabled": false },
+        "target": { "negativeCacheEnabled": true }
+      },
+      "trigger": {
+        "kind": "traced-request",
+        "serviceId": "redirect-api",
+        "method": "GET",
+        "path": "/lesson-unknown-hash",
+        "description": "One redirect against a hash that was never created"
+      },
+      "watch": {
+        "metrics": ["latencyMs"],
+        "hints": [{ "kind": "trace-link", "label": "View this request's trace", "note": "Check whether a Postgres lookup still happens for a hash that can never exist" }]
+      },
+      "conclusion": {
+        "afterRun1": "{{latencyMs}}ms - the trace shows Postgres gets queried even though this hash will never exist.",
+        "afterRun2": "{{latencyMs}}ms - the negative-cache marker answers \"not found\" without ever reaching Postgres."
+      },
+      "fix": {
+        "explanation": "Enable negative caching - a short-TTL \"not found\" marker ahead of Postgres stops a request for a non-existent hash from reaching the database at all."
+      }
+    },
+    {
+      "id": "2.1",
+      "chapterId": "ch2",
+      "title": "Connection Pool Exhaustion",
+      "nextLessonId": "2.2",
+      "problem": {
+        "summary": "Every service opens its own direct connection to Postgres. Under load, the total across every instance climbs toward max_connections.",
+        "docLink": "sandbox/docs/scenarios/patterns/pgcat-pooling.md"
+      },
+      "highlightNodeIds": ["link-api", "haproxy", "pgcat", "links-db"],
+      "config": {
+        "start": { "infra": { "pgcatEnabled": false, "haproxyEnabled": false, "postgresReplicasEnabled": false } },
+        "target": { "infra": { "pgcatEnabled": true, "haproxyEnabled": true, "postgresReplicasEnabled": false } }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
+        "vus": 300,
+        "durationSeconds": 60,
+        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms", "errorRatePct", "timeoutCount"],
+        "hints": [{ "kind": "node-link", "nodeId": "links-db", "linkLabel": "pgweb", "note": "Watch the active connection count climb toward the limit, or check logs for \"too many clients already\"" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms, {{timeoutCount}} timeouts - without a pooler every instance's connections add straight up against Postgres's own limit.",
+        "afterRun2": "p95 {{p95Ms}}ms, {{timeoutCount}} timeouts - pgcat multiplexes the same client load onto far fewer real connections."
+      },
+      "fix": {
+        "explanation": "Enable pgcat and haproxy - the pooler multiplexes dozens of client connections into a handful of real ones."
+      }
+    },
+    {
+      "id": "2.2",
+      "chapterId": "ch2",
+      "title": "Client-Side Pool (Npgsql)",
+      "nextLessonId": "2.3",
+      "problem": {
+        "summary": "pgcat is already enabled, but the .NET client (Npgsql) still enforces its own, much smaller connection pool before a query ever reaches pgcat.",
+        "docLink": "sandbox/docs/scenarios/patterns/pgcat-pooling.md"
+      },
+      "highlightNodeIds": ["link-api", "haproxy", "pgcat"],
+      "config": {
+        "start": { "infra": { "pgcatEnabled": true, "haproxyEnabled": true, "postgresReplicasEnabled": false }, "npgsqlPoolSize": 10 },
+        "target": { "npgsqlPoolSize": 100 }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
+        "vus": 300,
+        "durationSeconds": 60,
+        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms", "errorRatePct", "timeoutCount"],
+        "hints": [{ "kind": "observability-link", "label": "Aspire Dashboard", "note": "Watch Npgsql.ConnectionPool pending connections climb" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms, {{timeoutCount}} timeouts - even with pgcat enabled, the bottleneck is the client-side limit, not Postgres or the pooler.",
+        "afterRun2": "p95 {{p95Ms}}ms, {{timeoutCount}} timeouts - raising the client pool removed the real limit."
+      },
+      "fix": {
+        "explanation": "Raise npgsql-pool-size from 10 to 100 - pgcat can serve far more than the current client-side limit allows."
+      }
+    },
+    {
+      "id": "2.3",
+      "chapterId": "ch2",
+      "title": "Reads Starving Writes",
+      "nextLessonId": "3.1",
+      "problem": {
+        "summary": "pgcat routes every SELECT the same place it routes every write: the one primary. Mixed read/write load means reads and writes compete for the same server.",
+        "docLink": "sandbox/docs/scenarios/patterns/read-replicas.md"
+      },
+      "highlightNodeIds": ["pgcat", "links-db", "postgres-replica1", "postgres-replica2"],
+      "config": {
+        "start": { "infra": { "pgcatEnabled": true, "haproxyEnabled": true, "postgresReplicasEnabled": false }, "npgsqlPoolSize": 100 },
+        "target": { "infra": { "postgresReplicasEnabled": true } }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [
+          { "endpointId": "link-api.create", "pauseAfterSeconds": 2 },
+          { "endpointId": "redirect-api.resolve", "pauseAfterSeconds": 0 }
+        ],
+        "vus": 20,
+        "durationSeconds": 60,
+        "description": "Mixed create + redirect via nginx · 20 virtual users · 60 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms"],
+        "hints": [{ "kind": "observability-link", "label": "Aspire Dashboard", "note": "Compare the primary's own connection/CPU load before and after replicas start taking the SELECT traffic" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms - every SELECT and every write land on the same primary.",
+        "afterRun2": "p95 {{p95Ms}}ms - pgcat (already on) now routes plain SELECTs to the replicas automatically."
+      },
+      "fix": {
+        "explanation": "Enable Postgres read replicas - pgcat immediately starts routing plain SELECTs to them, taking that load off the primary."
+      }
+    },
+    {
+      "id": "3.1",
+      "chapterId": "ch3",
+      "title": "Single API Instance",
+      "nextLessonId": "3.2",
+      "problem": {
+        "summary": "link-api runs as a single container. Past a certain RPS, one instance's own CPU becomes the limit, not anything downstream.",
+        "docLink": "sandbox/docs/scenarios/patterns/service-scaling.md"
+      },
+      "highlightNodeIds": ["nginx", "link-api"],
+      "config": {
+        "start": { "replicas": { "link-api": 1 } },
+        "target": { "replicas": { "link-api": 3 } }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
+        "vus": 300,
+        "durationSeconds": 60,
+        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms"],
+        "hints": [{ "kind": "observability-link", "label": "Aspire Dashboard", "note": "Watch the single link-api container's own CPU saturate while RPS stays flat" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms - latency keeps climbing with RPS even though nothing downstream is the bottleneck.",
+        "afterRun2": "p95 {{p95Ms}}ms - nginx now balances the same load across 3 instances."
+      },
+      "fix": {
+        "explanation": "Scale link-api to 3 replicas - nginx re-resolves the service name and load-balances across all of them."
+      }
+    },
+    {
+      "id": "3.2",
+      "chapterId": "ch3",
+      "title": "Queue Outpacing the Worker",
+      "nextLessonId": "3.3",
+      "problem": {
+        "summary": "A single shortener-service instance can't drain link.created as fast as link-api publishes it under load - the queue backs up.",
+        "docLink": "sandbox/docs/scenarios/patterns/async-messaging.md"
+      },
+      "highlightNodeIds": ["rabbitmq", "shortener-service"],
+      "watchQueueName": "shortener-service.link-created",
+      "config": {
+        "start": { "infra": { "messagingMode": "rabbitmq" }, "replicas": { "shortener-service": 1 } },
+        "target": { "replicas": { "shortener-service": 3 } }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
+        "vus": 300,
+        "durationSeconds": 60,
+        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+      },
+      "watch": {
+        "metrics": ["queueDepth"],
+        "hints": [{ "kind": "node-link", "nodeId": "rabbitmq", "linkLabel": "RabbitMQ dashboard", "note": "Watch the shortener-service.link-created queue depth climb, then drain once scaled" }]
+      },
+      "conclusion": {
+        "afterRun1": "Queue depth {{queueDepth}} and still climbing - one consumer can't keep pace with publish rate.",
+        "afterRun2": "Queue depth {{queueDepth}} - three consumers drain the same queue fast enough to keep it near zero."
+      },
+      "fix": {
+        "explanation": "Scale shortener-service to 3 replicas - more consumers draining the same queue."
+      }
+    },
+    {
+      "id": "3.3",
+      "chapterId": "ch3",
+      "title": "Prefetch Starvation",
+      "nextLessonId": "4.1",
+      "problem": {
+        "summary": "RabbitMqConsumer batches deliveries for efficiency (up to BatchSize messages per flush), but BasicQos's PrefetchCount caps how many unacked messages RabbitMQ will ever hand over at once. With PrefetchCount (10) smaller than BatchSize (100), a batch can never fill past 10 - it just sits out the full batch timeout every cycle, capping real throughput far below what the database could actually sustain, no matter how many replicas are running.",
+        "docLink": "sandbox/docs/scenarios/patterns/async-messaging.md"
+      },
+      "highlightNodeIds": ["rabbitmq", "shortener-service"],
+      "watchQueueName": "shortener-service.link-created",
+      "config": {
+        "start": { "rabbitMqPrefetchCount": 10, "replicas": { "shortener-service": 1 } },
+        "target": { "rabbitMqPrefetchCount": 100, "replicas": { "shortener-service": 1 } }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [{ "endpointId": "link-api.create", "pauseAfterSeconds": 0 }],
+        "vus": 300,
+        "durationSeconds": 60,
+        "description": "POST /Links via nginx · 300 virtual users · 60 seconds"
+      },
+      "watch": {
+        "metrics": ["queueDepth"],
+        "hints": [{ "kind": "node-link", "nodeId": "rabbitmq", "linkLabel": "RabbitMQ dashboard", "note": "Same load as lesson 3.2, same single consumer - but watch it back up anyway. Prefetch, not instance count, is the ceiling here." }]
+      },
+      "conclusion": {
+        "afterRun1": "Queue depth {{queueDepth}} and still climbing - PrefetchCount (10) is smaller than BatchSize (100), so a batch can never fill past 10: the consumer waits out the full batch timeout every cycle instead of draining at real speed.",
+        "afterRun2": "Queue depth {{queueDepth}} - prefetch now covers a whole batch, so the one consumer drains it near real-time with no extra replicas at all."
+      },
+      "fix": {
+        "explanation": "Raise RabbitMq:PrefetchCount to at least match BatchSize (100) - the batching mechanism only drains at full speed once RabbitMQ is allowed to hand over a whole batch's worth of unacked messages at once. Scaling consumer replicas (lesson 3.2's fix) just multiplies the same artificially low per-instance ceiling instead of removing it."
+      }
+    },
+    {
+      "id": "4.1",
+      "chapterId": "ch4",
+      "title": "Circuit Breaker",
+      "nextLessonId": "4.2",
+      "problem": {
+        "summary": "Without a circuit breaker, a degraded dependency (Redis) just means every call sits waiting on its own timeout - under load, those pile up.",
+        "docLink": "sandbox/docs/scenarios/patterns/resilience.md"
+      },
+      "highlightNodeIds": ["link-api", "redirect-api", "redis-master"],
+      "config": {
+        "start": { "circuitBreakersEnabled": false },
+        "target": { "circuitBreakersEnabled": true }
+      },
+      "trigger": {
+        "kind": "chaos",
+        "action": "degrade",
+        "targetServiceId": "redis-master",
+        "description": "Degrade redis-master's network for the duration of the run"
+      },
+      "watch": {
+        "metrics": ["p95Ms", "errorRatePct"],
+        "hints": [{ "kind": "observability-link", "label": "Aspire Dashboard", "note": "Watch timeouts pile up against the degraded Redis call without a breaker" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms - every call still waits out its own timeout against the degraded dependency.",
+        "afterRun2": "p95 {{p95Ms}}ms - once the breaker trips, calls fail fast instead of piling up."
+      },
+      "fix": {
+        "explanation": "Enable circuit breakers - once Redis trips the breaker, calls fail fast instead of piling up waiting on a timeout."
+      }
+    },
+    {
+      "id": "4.2",
+      "chapterId": "ch4",
+      "title": "GeoIP Bulkhead",
+      "nextLessonId": "4.3",
+      "problem": {
+        "summary": "traffic-service's calls to the real ip-api.com have no concurrency limit of their own - a slow response from that one external dependency can tie up far more of the service than it should.",
+        "docLink": "sandbox/docs/scenarios/patterns/resilience.md"
+      },
+      "highlightNodeIds": ["traffic-service", "reporting-service"],
+      "config": {
+        "start": { "geoIpBulkheadLimit": 1000 },
+        "target": { "geoIpBulkheadLimit": 10 }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [
+          { "endpointId": "link-api.create", "pauseAfterSeconds": 1 },
+          { "endpointId": "redirect-api.resolve", "pauseAfterSeconds": 0 }
+        ],
+        "vus": 50,
+        "durationSeconds": 30,
+        "description": "Create + redirect (generates ClickTrackedEvent) · 50 virtual users · 30 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms"],
+        "hints": [{ "kind": "observability-link", "label": "Aspire Dashboard", "note": "Watch traffic-service's own concurrency against ip-api.com with no cap vs a sane one" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms - every click spawns its own unlimited call to the real ip-api.com.",
+        "afterRun2": "p95 {{p95Ms}}ms - capped concurrency keeps one slow external response from exhausting the service."
+      },
+      "fix": {
+        "explanation": "Lower the GeoIP bulkhead limit back down - caps how many concurrent calls to the real ip-api.com traffic-service will make at once."
+      }
+    },
+    {
+      "id": "4.3",
+      "chapterId": "ch4",
+      "title": "Redis Master Failure",
+      "nextLessonId": "4.4",
+      "problem": {
+        "summary": "redis-master is the only cache node. Nothing is watching it, and nothing is ready to take over if it stops.",
+        "docLink": "sandbox/docs/scenarios/patterns/ha-redis-sentinel.md"
+      },
+      "highlightNodeIds": ["redis-master", "redis-sentinel-1", "redis-sentinel-2", "redis-sentinel-3", "redis-replica1", "redis-replica2"],
+      "config": {
+        "start": { "infra": { "redisEnabled": true, "redisSentinelEnabled": false } },
+        "target": { "infra": { "redisSentinelEnabled": true } }
+      },
+      "trigger": { "kind": "chaos", "action": "stop", "targetServiceId": "redis-master", "description": "Stop the redis-master container" },
+      "watch": { "metrics": ["recoverySec", "errorRatePct"], "hints": [] },
+      "conclusion": {
+        "afterRun1": "Cache stayed down for {{recoverySec}}s - there's nothing left to promote.",
+        "afterRun2": "Recovered in {{recoverySec}}s - Sentinel promoted a replica automatically, no manual restart."
+      },
+      "fix": {
+        "explanation": "Enable Redis Sentinel - now there's a quorum watching redis-master and two replicas ready to take over automatically."
+      }
+    },
+    {
+      "id": "4.4",
+      "chapterId": "ch4",
+      "title": "RabbitMQ Outage",
+      "nextLessonId": "4.5",
+      "problem": {
+        "summary": "In sync (grpc) mode, LinkApi's response depends directly on ShortenerService being reachable - no fallback exists for that path. In async (rabbitmq) mode, the same dependency failing just means the event waits.",
+        "docLink": "sandbox/docs/scenarios/patterns/async-messaging.md"
+      },
+      "highlightNodeIds": ["link-api", "shortener-service", "rabbitmq"],
+      "config": {
+        "start": { "infra": { "messagingMode": "grpc" } },
+        "target": { "infra": { "messagingMode": "rabbitmq" } }
+      },
+      "trigger": { "kind": "chaos", "action": "stop", "targetServiceId": "shortener-service", "description": "Stop the shortener-service container" },
+      "watch": {
+        "metrics": ["errorRatePct"],
+        "hints": [{ "kind": "node-link", "nodeId": "link-api", "linkLabel": "SQLite fallback", "note": "In rabbitmq mode, POST /Links keeps succeeding - the event just waits for a consumer" }]
+      },
+      "conclusion": {
+        "afterRun1": "{{errorRatePct}}% errors - in grpc mode, POST /Links fails outright the moment shortener-service is unreachable.",
+        "afterRun2": "{{errorRatePct}}% errors - in rabbitmq mode, the same outage is invisible to the caller."
+      },
+      "fix": {
+        "explanation": "Switch messaging transport to rabbitmq - LinkApi's response no longer depends on shortener-service being up at all."
+      }
+    },
+    {
+      "id": "4.5",
+      "chapterId": "ch4",
+      "title": "Postgres Primary Failure",
+      "nextLessonId": "4.6",
+      "problem": {
+        "summary": "Unlike Redis or Mongo, nothing in this stack watches the Postgres primary or promotes a replica if it goes down - there's no repmgr/patroni here.",
+        "docLink": "sandbox/docs/scenarios/patterns/ha-postgres-replicas.md"
+      },
+      "highlightNodeIds": ["links-db", "postgres-replica1", "postgres-replica2"],
+      "config": { "start": {}, "target": {} },
+      "trigger": { "kind": "chaos", "action": "stop", "targetServiceId": "postgres", "description": "Stop the Postgres primary container" },
+      "watch": { "metrics": ["recoverySec"], "hints": [] },
+      "conclusion": {
+        "afterRun1": "Stayed down for the entire run - nothing in this stack promotes a replica automatically.",
+        "afterRun2": "Still down - this is a real, honest gap, not a dial to flip (see the fix note)."
+      },
+      "fix": {
+        "explanation": "There is no fix here. This stack has no automatic Postgres primary failover - promoting a replica by hand is a manual operation this sandbox deliberately doesn't automate."
+      }
+    },
+    {
+      "id": "4.6",
+      "chapterId": "ch4",
+      "title": "MongoDB Primary Failure",
+      "nextLessonId": "4.7",
+      "problem": {
+        "summary": "With only mongo1 running, there's no replica set to elect a new primary from - it's a single point of failure the same way an un-sentineled redis-master is.",
+        "docLink": "sandbox/docs/scenarios/patterns/ha-mongo-replica-set.md"
+      },
+      "highlightNodeIds": ["mongo1", "mongo2", "mongo3"],
+      "config": {
+        "start": { "infra": { "mongoReplicasEnabled": false } },
+        "target": { "infra": { "mongoReplicasEnabled": true } }
+      },
+      "trigger": { "kind": "chaos", "action": "stop", "targetServiceId": "mongo1", "description": "Stop the mongo1 container" },
+      "watch": { "metrics": ["recoverySec"], "hints": [] },
+      "conclusion": {
+        "afterRun1": "Stayed down for {{recoverySec}}s - with only mongo1, there's nothing to elect.",
+        "afterRun2": "Recovered in {{recoverySec}}s - rs0's remaining members elected a new primary on their own."
+      },
+      "fix": {
+        "explanation": "Enable Mongo replicas - rs0 becomes a real 3-node replica set that can elect a new primary."
+      }
+    },
+    {
+      "id": "4.7",
+      "chapterId": "ch4",
+      "title": "Pooler Loses an Instance",
+      "nextLessonId": "5.1",
+      "problem": {
+        "summary": "With haproxy off, there's exactly one pgcat instance - the pooler layer itself is a single point of failure, the same way an unreplicated database would be.",
+        "docLink": "sandbox/docs/scenarios/patterns/pooler-scaling.md"
+      },
+      "highlightNodeIds": ["haproxy", "pgcat"],
+      "config": {
+        "start": { "infra": { "pgcatEnabled": true, "haproxyEnabled": false } },
+        "target": { "infra": { "haproxyEnabled": true } }
+      },
+      "trigger": { "kind": "chaos", "action": "degrade", "targetServiceId": "pgcat", "description": "Degrade the pgcat container's network" },
+      "watch": {
+        "metrics": ["errorRatePct"],
+        "hints": [{ "kind": "node-link", "nodeId": "haproxy", "linkLabel": "HAProxy stats", "note": "Watch one backend server marked down while the others (once there are others) keep serving" }]
+      },
+      "conclusion": {
+        "afterRun1": "{{errorRatePct}}% errors - with one pgcat instance, degrading it degrades the whole pooler layer.",
+        "afterRun2": "{{errorRatePct}}% errors - with haproxy on, pgcat runs as 3 instances and its health check routes around the bad one."
+      },
+      "fix": {
+        "explanation": "Enable haproxy - pgcat scales to 3 replicas behind it, and haproxy's own health check routes around whichever one is degraded."
+      }
+    },
+    {
+      "id": "5.1",
+      "chapterId": "ch5",
+      "title": "Mongo Read Preference / Hedging",
+      "nextLessonId": "5.2",
+      "problem": {
+        "summary": "Reading from a secondary trades a little load on the primary for a window of possibly-stale data - how much that matters depends entirely on replication lag at read time.",
+        "docLink": "sandbox/docs/scenarios/patterns/ha-mongo-replica-set.md"
+      },
+      "highlightNodeIds": ["mongo1", "mongo2", "mongo3", "reporting-api"],
+      "config": {
+        "start": { "mongoReadPreference": "secondaryPreferred" },
+        "target": { "mongoReadPreference": "primary" }
+      },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [
+          { "endpointId": "auth-api.register", "pauseAfterSeconds": 0 },
+          { "endpointId": "auth-api.login", "pauseAfterSeconds": 0 },
+          { "endpointId": "link-api.create", "pauseAfterSeconds": 1 },
+          { "endpointId": "redirect-api.resolve", "pauseAfterSeconds": 1 },
+          { "endpointId": "reporting-api.recent-clicks", "pauseAfterSeconds": 0 }
+        ],
+        "vus": 50,
+        "durationSeconds": 30,
+        "description": "Register + login + create + redirect (generates the click) + recent-clicks lookup (Mongo-backed) · 50 virtual users · 30 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms"],
+        "hints": [{ "kind": "observability-link", "label": "Aspire Dashboard", "note": "Compare ReportingApi's own Mongo read latency (GET /reports/{hash}/clicks) between secondaryPreferred and primary" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms reading secondaryPreferred - fine as long as the data a request needs has already replicated.",
+        "afterRun2": "p95 {{p95Ms}}ms reading primary - always current, at the cost of a bit more load there."
+      },
+      "fix": {
+        "explanation": "Switch Mongo read preference back to primary - trades a little load on the primary for always-current data instead of a replication-lag window."
+      }
+    },
+    {
+      "id": "5.2",
+      "chapterId": "ch5",
+      "title": "CQRS / ClickHouse",
+      "nextLessonId": null,
+      "problem": {
+        "summary": "ReportingApi's per-link stats never touch Postgres or Mongo - it's a third, independent read model in ClickHouse, built straight off the raw ClickTrackedEvent, specifically so this kind of aggregating query doesn't compete with the OLTP path at all.",
+        "docLink": "sandbox/docs/scenarios/patterns/cqrs-clickhouse.md"
+      },
+      "highlightNodeIds": ["reporting-service", "reporting-api", "clickhouse", "traffic-service", "clicks-db"],
+      "config": { "start": {}, "target": {} },
+      "trigger": {
+        "kind": "load-test",
+        "steps": [
+          { "endpointId": "auth-api.register", "pauseAfterSeconds": 0 },
+          { "endpointId": "auth-api.login", "pauseAfterSeconds": 0 },
+          { "endpointId": "link-api.create", "pauseAfterSeconds": 1 },
+          { "endpointId": "redirect-api.resolve", "pauseAfterSeconds": 1 },
+          { "endpointId": "reporting-api.stats", "pauseAfterSeconds": 0 }
+        ],
+        "vus": 50,
+        "durationSeconds": 30,
+        "description": "Register + login + create + redirect + stats lookup · 50 virtual users · 30 seconds"
+      },
+      "watch": {
+        "metrics": ["p95Ms"],
+        "hints": [{ "kind": "observability-link", "label": "Aspire Dashboard", "note": "Compare ReportingApi's ClickHouse query latency against TrafficService's own write path - they never block each other" }]
+      },
+      "conclusion": {
+        "afterRun1": "p95 {{p95Ms}}ms - the aggregating stats query runs entirely on ClickHouse's own read model, never touching clicks_db.",
+        "afterRun2": "p95 {{p95Ms}}ms - same query again, same isolation: the OLTP write path and this read path share no lock, no table, no connection pool."
+      },
+      "fix": {
+        "explanation": "There's no toggle here - the point is the architecture itself: a third, independent consumer of the same event, built for exactly this kind of query, so it never has to compete with the write path."
+      }
+    }
+  ]
+}

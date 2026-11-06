@@ -33,6 +33,11 @@ public static class ControlPlaneServiceExtensions
         services.AddSingleton<K6ContainerRunner>();
         services.AddSingleton<DataPoolFetcher>();
         services.AddSingleton<ITrafficService, TrafficService>();
+        // Lesson Mode's traced-request endpoint is the only thing in this app that calls another
+        // backend service directly over HTTP (everything else shells out to Docker) - default
+        // factory, no named client needed for a single ad-hoc call per request.
+        services.AddHttpClient();
+        services.AddSingleton<ILessonTraceService, LessonTraceService>();
         services.AddSingleton<IContainerLifecycleService, ContainerLifecycleService>();
         services.AddSingleton<IScenarioStore, ScenarioStore>();
         services.AddSingleton<IPresetStore, PresetStore>();

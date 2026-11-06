@@ -17,17 +17,23 @@ import { TrafficResultPanel } from './components/TrafficResultPanel'
 import { RunHistoryPanel } from './components/RunHistoryPanel'
 import { PresetsModal } from './components/PresetsModal'
 import { TopologyPanel } from './components/TopologyPanel'
+import { LessonsModal } from './components/LessonsModal'
+import { LessonPanel } from './components/LessonPanel'
 import { filterArchitecture } from './utils/topologyFilter'
 import { observabilityLinks } from './utils/observabilityLinks'
 import { resolveServiceId } from './utils/resolveServiceId'
 import { applySystemConfig, runRequestToScenario } from './utils/reuseRunConfig'
+import lessonsData from './data/lessons.json'
 import type { ArchitectureData } from './types/architecture'
 import type { CustomScenario, RunSnapshot } from './types/controlApi'
+import type { LessonsFile } from './types/lessons'
 
 const data = architectureData as unknown as ArchitectureData
 const metaById = new Map(data.components.map((c) => [c.id, c]))
+const lessons = lessonsData as unknown as LessonsFile
+const lessonById = new Map(lessons.lessons.map((l) => [l.id, l]))
 
-type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index: number } | null
+type Selection = { kind: 'component'; id: string } | { kind: 'connection'; index: number } | { kind: 'lesson'; id: string } | null
 
 // Layout: the header shows whichever run is live or just finished, the graph owns the center, and
 // the (single, left) sidebar is a selection detail panel - a clicked node's own controls, or a
@@ -54,6 +60,7 @@ function App() {
   const [presetsOpen, setPresetsOpen] = useState(false)
   const [topologyOpen, setTopologyOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [lessonsOpen, setLessonsOpen] = useState(false)
   const sidebar = useResizableWidth('sidebar-width-left', 360, 260, 640, 1)
 
   const knownServiceIds = useMemo(() => new Set(Object.keys(containers)), [containers])
@@ -76,6 +83,14 @@ function App() {
   const selectedConnection = selection?.kind === 'connection' ? data.connections[selection.index] : undefined
   const selectedServiceId = selectedComponent ? resolveServiceId(selectedComponent, knownServiceIds) : null
   const selectedInstances = selectedServiceId ? (containers[selectedServiceId] ?? []) : []
+
+  // The open lesson's own highlightNodeIds, nothing else - the graph underneath is never redrawn
+  // or filtered for Lesson Mode (see ServiceNode.tsx's lessonHighlighted / .notes/PLAN.md).
+  const highlightedNodeIds = useMemo(() => {
+    if (selection?.kind !== 'lesson') return undefined
+    const lesson = lessonById.get(selection.id)
+    return lesson ? new Set(lesson.highlightNodeIds) : undefined
+  }, [selection])
 
   // Loads a past run's test sequence/ramp back into the config form and re-applies every
   // experimental infra control it was captured under, then jumps to the k6 panel so the loaded
@@ -120,6 +135,9 @@ function App() {
         <button className="app-header-presets-btn" onClick={() => setHistoryOpen(true)}>
           History
         </button>
+        <button className="app-header-presets-btn" onClick={() => setLessonsOpen(true)}>
+          Lessons
+        </button>
         <div className="app-header-observability">
           <span className="app-header-observability-label">Observability</span>
           {observabilityLinks.map((link) => (
@@ -151,9 +169,19 @@ function App() {
         />
       )}
       {historyOpen && <RunHistoryPanel lastSavedRunId={trafficRun.lastSavedRunId} onReuseRun={reuseRun} onClose={() => setHistoryOpen(false)} />}
+      {lessonsOpen && (
+        <LessonsModal
+          onClose={() => setLessonsOpen(false)}
+          onOpenLesson={(id) => {
+            setSelection({ kind: 'lesson', id })
+            setLessonsOpen(false)
+          }}
+          onInfraChanged={infraStatus.refresh}
+        />
+      )}
 
       <div className="app-body">
-        {(selectedComponent || selectedConnection) && (
+        {(selectedComponent || selectedConnection || selection?.kind === 'lesson') && (
           <>
             <aside className="app-sidebar-left" style={{ width: sidebar.width }}>
               {selectedComponent?.id === 'k6' && (
@@ -191,6 +219,23 @@ function App() {
                 />
               )}
               {selectedConnection && <ConnectionDetail connection={selectedConnection} onClose={() => setSelection(null)} />}
+              {selection?.kind === 'lesson' &&
+                (() => {
+                  const lesson = lessonById.get(selection.id)
+                  return lesson ? (
+                    <LessonPanel
+                      lesson={lesson}
+                      onClose={() => setSelection(null)}
+                      onBackToList={() => {
+                        setSelection(null)
+                        setLessonsOpen(true)
+                      }}
+                      onNavigate={(id) => setSelection({ kind: 'lesson', id })}
+                      onInfraChanged={infraStatus.refresh}
+                      trafficRun={trafficRun}
+                    />
+                  ) : null
+                })()}
             </aside>
             <div className="app-resizer" onPointerDown={sidebar.onPointerDown} />
           </>
@@ -211,6 +256,7 @@ function App() {
             resourceHistoryByContainer={resourceHistory}
             onUnpinMetric={pins.togglePin}
             edgeLabels={edgeLabels}
+            highlightedNodeIds={highlightedNodeIds}
           />
         </main>
       </div>

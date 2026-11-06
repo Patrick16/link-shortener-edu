@@ -62,6 +62,11 @@ public sealed class TrafficService : ITrafficService
             null,
             new Dictionary<string, string>(), ["hash", "token"],
             "Get click statistics for a short link (CQRS read model from ClickHouse) - owner-only, needs a Register+Login earlier in the sequence, same as link-api.delete"),
+        new(
+            "reporting-api.recent-clicks", "reporting-api", "GET", "/reports/{{hash}}/clicks",
+            null,
+            new Dictionary<string, string>(), ["hash", "token"],
+            "List recent raw click documents for a short link (Mongo-backed, HedgedClickMetaQueryService) - the one HTTP route that actually reads clicks_meta_db, unlike reporting-api.stats (ClickHouse); owner-only, needs a Register+Login earlier in the sequence, same as link-api.delete"),
     ];
 
     // flow.js reads STEPS_JSON's fields as plain camelCase JS property names (step.serviceId,

@@ -112,6 +112,24 @@ public sealed class RabbitMqService(IContainerRuntime runtime) : IRabbitMqServic
         return new DeadLetterQueueStats(deadQueues, deadQueues.Sum(q => q.MessageCount));
     }
 
+    public async Task<int?> GetQueueDepthAsync(string queueName, CancellationToken ct)
+    {
+        var container = await runtime.FindAsync("rabbitmq", ct);
+        if (container is null)
+        {
+            return null;
+        }
+
+        var (exitCode, output) = await runtime.ExecWithExitCodeAsync(container.ID, ["rabbitmqctl", "list_queues", "name", "messages", "--formatter=json"], ct);
+        if (exitCode != 0)
+        {
+            throw new InvalidOperationException($"rabbitmqctl exited {exitCode}: {output}");
+        }
+
+        var queue = ParseRabbitMqQueueList(output).FirstOrDefault(q => q.Name == queueName);
+        return queue?.Messages;
+    }
+
     public async Task<int?> ClearDeadLetterQueuesAsync(CancellationToken ct)
     {
         var container = await runtime.FindAsync("rabbitmq", ct);

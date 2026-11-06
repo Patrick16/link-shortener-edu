@@ -530,6 +530,28 @@ export interface RunSnapshot {
   negativeCacheEnabled?: boolean | null
 }
 
+// Lesson Mode's traced-request trigger - see TracedRequestInput/LessonTraceService on the backend.
+export interface TracedRequestSetup {
+  serviceId: string
+  method: string
+  path: string
+  body?: string
+  extractField: string
+}
+
+export interface TracedRequestInput {
+  serviceId: string
+  method: string
+  path: string
+  setup?: TracedRequestSetup
+}
+
+export interface TracedRequestResult {
+  statusCode: number
+  latencyMs: number
+  traceId: string
+}
+
 // Lightweight row for the history list - see RunSummary on the backend for why it's separate from
 // RunSnapshot (avoids pulling every run's full raw k6 output just to render a list).
 export interface RunSummary {

@@ -1,5 +1,6 @@
 import { controlApi } from '../api/controlApi'
-import type { InfraConfigSnapshot, ManagedContainer, ReplicaCount, ReplicationLagEntry } from '../types/controlApi'
+import type { InfraConfigSnapshot, InfraStatus, ManagedContainer, MongoReadPreference, ReplicaCount, ReplicationLagEntry } from '../types/controlApi'
+import type { ConfigPatch } from '../types/lessons'
 
 export interface ApplySystemConfigResult {
   applied: string[]
@@ -210,4 +211,119 @@ export function diffInfraConfig(current: InfraConfigSnapshot, desired: InfraConf
   }
 
   return rows
+}
+
+// --- Lesson Mode ---------------------------------------------------------------------------
+//
+// Lesson Mode reuses captureCurrentInfraConfig's InfraConfigSnapshot for everything it already
+// covers, plus three standalone dials (circuit breakers, geoIP bulkhead, Mongo hedge delay) that
+// InfraConfigSnapshot never captured - Presets/diffInfraConfig above never needed them (see that
+// record's own backend comment), but lessons 4.1/4.2/5.1 do. Kept as a separate capture rather
+// than widening InfraConfigSnapshot itself, which stays an exact mirror of the backend record on
+// purpose (see this file's own header comment).
+export interface LessonLiveConfig {
+  snapshot: InfraConfigSnapshot
+  replicaCounts: Map<string, number>
+  circuitBreakersEnabled: boolean | null
+  geoIpBulkheadLimit: number | null
+  mongoHedgeDelayMs: number | null
+}
+
+export async function captureLessonLiveConfig(): Promise<LessonLiveConfig> {
+  const [snapshot, containers, circuitBreakers, geoIpBulkhead, mongoHedgeDelay] = await Promise.all([
+    captureCurrentInfraConfig(),
+    controlApi.listContainers(),
+    controlApi.getCircuitBreakersEnabled().catch(() => null),
+    controlApi.getGeoIpBulkheadLimit().catch(() => null),
+    controlApi.getMongoHedgeDelay().catch(() => null),
+  ])
+
+  return {
+    snapshot,
+    replicaCounts: new Map(toReplicaCounts(containers).map((r) => [r.serviceId, r.count])),
+    circuitBreakersEnabled: circuitBreakers?.enabled ?? null,
+    geoIpBulkheadLimit: geoIpBulkhead?.limit ?? null,
+    mongoHedgeDelayMs: mongoHedgeDelay?.delayMs ?? null,
+  }
+}
+
+// Does the live stand satisfy a lesson's partial ConfigPatch? Only the keys the patch actually
+// declares are compared - never every field of `live`, or a toggle this lesson doesn't care about
+// would spuriously block its Run/Next buttons (the opposite problem diffInfraConfig above solves
+// for a full-snapshot Preset diff, where every field legitimately matters).
+export function matchesPatch(live: LessonLiveConfig, patch: ConfigPatch): boolean {
+  const { snapshot, replicaCounts } = live
+
+  if (patch.infra) {
+    for (const key of Object.keys(patch.infra) as (keyof InfraStatus)[]) {
+      if (snapshot.infra[key] !== patch.infra[key]) return false
+    }
+  }
+  if (patch.replicas) {
+    for (const [serviceId, count] of Object.entries(patch.replicas)) {
+      if ((replicaCounts.get(serviceId) ?? 1) !== count) return false
+    }
+  }
+  if (patch.rabbitMqPrefetchCount != null && snapshot.rabbitMqPrefetchCount !== patch.rabbitMqPrefetchCount) return false
+  if (patch.mongoReadPreference != null && snapshot.mongoReadPreference !== patch.mongoReadPreference) return false
+  if (patch.npgsqlPoolSize != null && snapshot.npgsqlPoolSize !== patch.npgsqlPoolSize) return false
+  if (patch.l1CacheEnabled != null && snapshot.l1CacheEnabled !== patch.l1CacheEnabled) return false
+  if (patch.negativeCacheEnabled != null && snapshot.negativeCacheEnabled !== patch.negativeCacheEnabled) return false
+  if (patch.circuitBreakersEnabled != null && live.circuitBreakersEnabled !== patch.circuitBreakersEnabled) return false
+  if (patch.geoIpBulkheadLimit != null && live.geoIpBulkheadLimit !== patch.geoIpBulkheadLimit) return false
+  if (patch.mongoHedgeDelayMs != null && live.mongoHedgeDelayMs !== patch.mongoHedgeDelayMs) return false
+
+  return true
+}
+
+// Applies only the keys a lesson's patch actually declares - deliberately NOT applyInfraConfig
+// above, which always re-applies all 9 InfraStatus toggles unconditionally (right for "restore a
+// full Preset snapshot," wasteful and container-churny for "flip the one or two things this
+// lesson teaches," since each is its own `docker compose --force-recreate`). Ordering mirrors
+// applyInfraConfig's own for every field that overlaps (Redis/Sentinel before caching, haproxy
+// after pooling).
+export async function applyConfigPatch(patch: ConfigPatch): Promise<ApplySystemConfigResult> {
+  const applied: string[] = []
+  const failed: string[] = []
+
+  async function step(label: string, run: () => Promise<unknown>) {
+    try {
+      await run()
+      applied.push(label)
+    } catch (err) {
+      console.error(`applyConfigPatch: "${label}" failed`, err)
+      failed.push(label)
+    }
+  }
+
+  const infra = patch.infra ?? {}
+  if (infra.nginxBypassed != null) await step('load balancing', () => controlApi.setNginxEnabled(!infra.nginxBypassed))
+  if (infra.pgcatEnabled != null) await step('connection pooling', () => controlApi.setPgcatEnabled(infra.pgcatEnabled!))
+  if (infra.redisEnabled != null) await step('redis', () => controlApi.setRedisEnabled(infra.redisEnabled!))
+  if (infra.redisSentinelEnabled != null) await step('redis sentinel', () => controlApi.setRedisSentinelEnabled(infra.redisSentinelEnabled!))
+  if (infra.cacheEnabled != null) await step('caching', () => controlApi.setCacheEnabled(infra.cacheEnabled!))
+  if (infra.messagingMode != null) await step('messaging transport', () => controlApi.setMessagingMode(infra.messagingMode!))
+  if (infra.haproxyEnabled != null) await step('haproxy', () => controlApi.setHaproxyEnabled(infra.haproxyEnabled!))
+  if (infra.postgresReplicasEnabled != null) await step('postgres replicas', () => controlApi.setPostgresReplicasEnabled(infra.postgresReplicasEnabled!))
+  if (infra.mongoReplicasEnabled != null) await step('mongo replicas', () => controlApi.setMongoReplicasEnabled(infra.mongoReplicasEnabled!))
+
+  if (patch.replicas) {
+    for (const [serviceId, count] of Object.entries(patch.replicas)) {
+      await step(`${serviceId} replicas`, async () => {
+        const result = await controlApi.scale(serviceId, count)
+        if (!result.success) throw new Error(result.output)
+      })
+    }
+  }
+
+  if (patch.rabbitMqPrefetchCount != null) await step('RabbitMQ prefetch', () => controlApi.setRabbitMqPrefetch(patch.rabbitMqPrefetchCount!))
+  if (patch.mongoReadPreference != null) await step('Mongo read preference', () => controlApi.setMongoReadPreference(patch.mongoReadPreference as MongoReadPreference))
+  if (patch.npgsqlPoolSize != null) await step('Npgsql pool size', () => controlApi.setNpgsqlPoolSize(patch.npgsqlPoolSize!))
+  if (patch.l1CacheEnabled != null) await step('L1 caching', () => controlApi.setL1CacheEnabled(patch.l1CacheEnabled!))
+  if (patch.negativeCacheEnabled != null) await step('Negative caching', () => controlApi.setNegativeCacheEnabled(patch.negativeCacheEnabled!))
+  if (patch.circuitBreakersEnabled != null) await step('Circuit breakers', () => controlApi.setCircuitBreakersEnabled(patch.circuitBreakersEnabled!))
+  if (patch.geoIpBulkheadLimit != null) await step('GeoIP bulkhead', () => controlApi.setGeoIpBulkheadLimit(patch.geoIpBulkheadLimit!))
+  if (patch.mongoHedgeDelayMs != null) await step('Mongo hedge delay', () => controlApi.setMongoHedgeDelay(patch.mongoHedgeDelayMs!))
+
+  return { applied, failed }
 }

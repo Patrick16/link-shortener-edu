@@ -70,5 +70,6 @@ app.MapScenarioEndpoints();
 app.MapPresetEndpoints();
 app.MapRunHistoryEndpoints();
 app.MapTraceEndpoints();
+app.MapLessonEndpoints();
 
 app.Run();
