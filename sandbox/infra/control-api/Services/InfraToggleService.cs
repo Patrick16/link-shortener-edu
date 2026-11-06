@@ -223,7 +223,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(RabbitMqConsumingServices, ct);
 
             logger.LogWarning("Switching RabbitMq__PrefetchCount for {Services} to {PrefetchCount}", string.Join(", ", RabbitMqConsumingServices), prefetchCount);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. RabbitMqConsumingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. RabbitMqConsumingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Setting RabbitMQ prefetch failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -243,7 +243,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             env["MONGO_READ_PREFERENCE"] = preference;
 
             logger.LogWarning("Switching traffic-service's Mongo readPreference to {Preference}", preference);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "traffic-service"], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", "traffic-service"], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Setting Mongo read preference failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -264,7 +264,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 
             logger.LogWarning("Switching Npgsql Maximum Pool Size for {Services} to {PoolSize}", string.Join(", ", DbTouchingServices), poolSize);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. DbTouchingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Setting Npgsql pool size failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -285,7 +285,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(GeoIpUsingServices, ct);
 
             logger.LogWarning("Switching GeoIp__MaxConcurrentRequests for {Services} to {Limit}", string.Join(", ", GeoIpUsingServices), limit);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. GeoIpUsingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. GeoIpUsingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Setting geo-IP bulkhead limit failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -306,7 +306,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(MongoReadingServices, ct);
 
             logger.LogWarning("Switching Mongo__HedgeDelayMs for {Services} to {DelayMs}", string.Join(", ", MongoReadingServices), delayMs);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. MongoReadingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. MongoReadingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Setting Mongo hedge delay failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -327,7 +327,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(CircuitBreakerUsingServices, ct);
 
             logger.LogWarning("Switching Resilience__CircuitBreakersEnabled for {Services} to {Enabled}", string.Join(", ", CircuitBreakerUsingServices), enabled);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CircuitBreakerUsingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. CircuitBreakerUsingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Toggling circuit breakers failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -401,7 +401,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 
             logger.LogWarning("Switching DB routing for {Services} to {Host} (pgcat enabled: {Enabled})", string.Join(", ", DbTouchingServices), env["DB_HOST"], enabled);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. DbTouchingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Toggling pgcat failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -477,7 +477,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         logger.LogWarning(
             "Switching Cache__Enabled/Cache__L1Enabled/Cache__NegativeEnabled for {Services} to {Enabled}/{L1Enabled}/{NegativeEnabled}",
             string.Join(", ", CacheUsingServices), _cacheEnabled, _l1CacheEnabled, _negativeCacheEnabled);
-        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. CacheUsingServices], env, ct);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. CacheUsingServices], env, ct);
         if (exitCode != 0)
         {
             logger.LogWarning("Toggling cache failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -502,7 +502,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(MessagingUsingServices, ct);
 
             logger.LogWarning("Switching Messaging__Mode for {Services} to {Mode}", string.Join(", ", MessagingUsingServices), mode);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. MessagingUsingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. MessagingUsingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Toggling messaging mode failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -595,7 +595,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             }
 
             logger.LogWarning("Switching DB routing for {Services} to {Host} (haproxy enabled: {Enabled})", string.Join(", ", DbTouchingServices), env["DB_HOST"], enabled);
-            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. DbTouchingServices], env, ct);
             if (exitCode != 0)
             {
                 logger.LogWarning("Toggling haproxy failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -916,7 +916,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         logger.LogWarning(
             "Switching ConnectionStrings__Redis for {Services} to {Conn} (cache enabled: {CacheEnabled})",
             string.Join(", ", RedisUsingServices), env["REDIS_CONN"], _cacheEnabled);
-        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. RedisUsingServices], env, ct);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", .. scaleArgs, .. RedisUsingServices], env, ct);
         if (exitCode != 0)
         {
             logger.LogWarning("Recreating Redis-using services failed (exit {ExitCode}): {Output}", exitCode, output);
@@ -1003,7 +1003,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         var env = CurrentStandingEnv();
 
         logger.LogWarning("Switching ConnectionStrings__Mongo host list for traffic-service to {Hosts}", env["MONGO_HOSTS"]);
-        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "traffic-service"], env, ct);
+        var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", "--wait", "--wait-timeout", "30", "traffic-service"], env, ct);
         if (exitCode != 0)
         {
             logger.LogWarning("Recreating traffic-service for Mongo host list failed (exit {ExitCode}): {Output}", exitCode, output);

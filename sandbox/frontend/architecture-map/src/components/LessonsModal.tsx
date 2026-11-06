@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import lessonsData from '../data/lessons.json'
 import { applyConfigPatch, captureLessonLiveConfig, matchesPatch, type LessonLiveConfig } from '../utils/infraConfig'
 import { loadLessonProgress } from '../utils/lessonProgress'
+import { warmUpIfTracedRequest } from './LessonPanel'
 import type { LessonsFile } from '../types/lessons'
 
 const data = lessonsData as unknown as LessonsFile
@@ -45,6 +46,7 @@ export function LessonsModal({ onClose, onOpenLesson, onInfraChanged }: Props) {
       // would skip the reason the lesson exists (see .notes/PLAN.md's Lesson Mode entry).
       await applyConfigPatch(lesson.config.start)
       onInfraChanged()
+      await warmUpIfTracedRequest(lesson)
       setLive(await captureLessonLiveConfig())
     } catch {
       setError('Failed to set this config - see the console for details.')

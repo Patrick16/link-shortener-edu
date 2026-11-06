@@ -74,6 +74,41 @@ async function runTracedRequest(trigger: Extract<Trigger, { kind: 'traced-reques
   return { metrics: { latencyMs: Math.round(result.latencyMs) }, traceId: result.traceId }
 }
 
+// A config change that touches any cache toggle recreates link-api/redirect-api/
+// shortener-service (see InfraToggleService's RecreateCacheUsingServicesAsync) - that fresh
+// container's first real request always eats a JIT/connection-pool warm-up cost of its own,
+// unrelated to whatever this lesson is actually teaching. A load-test lesson's hundreds of
+// requests average that one slow outlier away; a traced-request lesson measures exactly ONE
+// request with nothing to average it away, so without this, "Run 1"/"Run 2" can report whichever
+// side of the comparison happened to land on a cold container - found live (2026-11-06): lesson
+// 1.3 showed negative caching making a redirect *slower* (639ms vs 244ms), the inverse of its own
+// point, purely from this noise. One discarded warm-up call right after the config settles
+// absorbs the cold-start cost before the real, measured call.
+//
+// --wait on the recreate itself (InfraToggleService) already closes the "container not healthy
+// yet" window, but nginx's own upstream can still take one extra beat to notice a just-recreated
+// backend's new IP even once Docker calls it healthy - found live: an occasional 502 on the
+// warm-up call right after a toggle, gone on an immediate retry. One retry is enough; this has
+// never been seen to need a second.
+//
+// Exported (not a LessonPanel-local function) so LessonsModal's own "Set config" button - this
+// app's actual primary path into a lesson (Lessons list -> Set config -> Open -> Run 1) - gets the
+// exact same warm-up LessonPanel's own restart()/applyFix() do, instead of a second copy drifting.
+export async function warmUpIfTracedRequest(lesson: LessonDef): Promise<void> {
+  if (lesson.trigger.kind !== 'traced-request') return
+  const { trigger } = lesson
+  try {
+    const probe = async () => controlApi.tracedRequest({ serviceId: trigger.serviceId, method: trigger.method, path: trigger.path, setup: trigger.setup })
+    const first = await probe()
+    if (first.statusCode === 502 || first.statusCode === 503) {
+      await probe()
+    }
+  } catch {
+    // Not surfaced - the real call right after this still runs and reports its own error if the
+    // dependency is genuinely down.
+  }
+}
+
 // Chaos actions are the only trigger kind this panel resolves itself end-to-end (load-test defers
 // to the shared useTrafficRun/SignalR flow - see the effect below) - stop/degrade, then either
 // probe real traffic (when the lesson declares probeEndpointId) or poll for reachability, then
@@ -350,6 +385,7 @@ export function LessonPanel({ lesson, onClose, onBackToList, onNavigate, onInfra
     try {
       await applyConfigPatch(lesson.config.start)
       onInfraChanged()
+      await warmUpIfTracedRequest(lesson)
       refreshLive()
       setRun1(null)
       setRun2(null)
@@ -367,6 +403,7 @@ export function LessonPanel({ lesson, onClose, onBackToList, onNavigate, onInfra
     try {
       await applyConfigPatch(lesson.config.target)
       onInfraChanged()
+      await warmUpIfTracedRequest(lesson)
       refreshLive()
     } catch {
       setError('Failed to apply the fix - see the console for details.')
