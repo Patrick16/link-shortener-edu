@@ -49,11 +49,11 @@ other resolve, then asserts the button stays disabled throughout that whole wind
 would pass against the broken `&&` version the moment either fetch resolved is exactly the kind of
 test that would have caught this the first time.
 
-**This is a one-character diff with a two-sided lesson:** the bug class ("disable while *any* of N
-independent operations is pending" needs `||` over all N, not `&&`) is worth checking for anywhere
-else in a codebase a button's `disabled` state is computed from more than one independent loading
-flag — it reads correctly by accident whenever the two operations happen to resolve close enough
-together in practice, which is exactly what makes it easy to ship without noticing locally.
+**A one-character diff, worth checking for elsewhere:** the bug class ("disable while *any* of N
+independent operations is pending" needs `||` over all N, not `&&`) applies anywhere a button's
+`disabled` state is computed from more than one independent loading flag. It reads correctly by
+accident whenever the operations happen to resolve close together in practice — exactly what makes
+it easy to ship without noticing locally.
 
 (see `.notes/review-reports/2026-10-30-1520-close-10-review-bugs.md`, F1 — logged there as a plain
 `logic-bug` finding, but the actual failure mode is a genuine race between two independently-

@@ -20,10 +20,9 @@ ReconcileFromLiveContainersAsync` (see the companion pitfall,
 [cached control-plane state desyncing from live containers on restart](pitfall:infra-toggle-state-resets-on-restart-desyncs-live-containers),
 for why this method exists at all) looked for `CurrentStandingEnv()`'s own key names —
 `DB_HOST`, `CACHE_ENABLED`, and so on — directly on the inspected container. Every unit test for it
-passed, because the test doubles supplied exactly that shape. Against the real stack it silently
-matched nothing: toggling pgcat off, restarting control-api, and checking the reconciliation log
-line still showed `pgcat=True` — every field quietly fell back to its hardcoded default instead of
-picking up the real state, the opposite of what the method exists to do.
+passed, because the test doubles supplied exactly that shape; against the real stack it silently
+matched nothing, every field quietly falling back to its hardcoded default instead of picking up
+real state — the opposite of what the method exists to do.
 
 ⚠️ **Mistake** — reconstructed (no separate commit shows this broken version; it was caught and
 rewritten before `5637b49` was ever committed, so there is no diffable "before" hash — the
@@ -56,11 +55,11 @@ Caught only by live-verifying against the real stack, not by the unit test suite
 restart control-api, and check the log line — before the fix it said `pgcat=True` regardless; after,
 `pgcat=False`, correctly restored once pgcat was re-enabled.
 
-**The reusable lesson:** when code is going to read a container's *actual* environment (via
-`docker inspect`, `/proc/<pid>/environ`, or anything else that looks at the rendered process, not
-the compose file), verify the real key names against a real running container at least once — don't
-trust the compose-file-side name to also be the runtime-side name, and don't trust a test whose mock
-was written by the same person who wrote the (possibly wrong) assumption being tested.
+**The reusable lesson:** when code reads a container's *actual* environment (via `docker inspect`,
+`/proc/<pid>/environ`, or anything else looking at the rendered process, not the compose file),
+verify the real key names against a running container at least once — the compose-side name and
+the runtime-side name aren't guaranteed to match, and a mock-based test written against the same
+wrong assumption won't catch it.
 
 (not sourced from a `.notes/review-reports/` finding — caught and fixed pre-commit while building
 `5637b49`; recorded in `.notes/PLAN.md` as its own named lesson,

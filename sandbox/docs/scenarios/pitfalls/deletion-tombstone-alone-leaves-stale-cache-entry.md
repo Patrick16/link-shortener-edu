@@ -19,8 +19,8 @@ whatever was cached at write time, which for `ExpiresAt` is fine (it's immutable
 checking a stale copy against `now()` still works) but for `DeletedAt` is not: a `Link` cached
 *before* being deleted has `DeletedAt == null` baked in forever, regardless of what Postgres says
 now. The only thing that could catch that was the tombstone — and `RedisLinkDeletionMarkerStore`
-fails open (logs a warning, returns/continues) on any Redis error, by design, so the read path
-keeps working through a Redis hiccup. That same design meant a tombstone-confirm failure during,
+fails open (logs a warning, returns/continues) on any Redis error, by design. That same design
+meant a tombstone-confirm failure during,
 say, a brief Redis Sentinel failover window left an already-cached, now-deleted link resolving
 successfully for up to the main cache entry's full remaining TTL (up to an hour by default) — not
 the 60-second window the tombstone's own TTL would suggest.

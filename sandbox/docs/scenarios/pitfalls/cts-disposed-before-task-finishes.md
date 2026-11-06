@@ -108,14 +108,13 @@ if (cancellationToken.IsCancellationRequested)
 ```
 
 **Honestly flagged gap, worth knowing about this category of bug in general:** no unit test in this
-project reproduces the actual `ObjectDisposedException` either fix addresses. Three separate attempts
-(the original author, two review passes) tried to manufacture it with a mock/`TaskCompletionSource`
-repro and couldn't — the real trigger needs the actual driver's (here, MongoDB's) internal
-cancellation-token wiring, which a unit test's fakes don't have. Both fixes above were verified
-correct by careful line-by-line re-reading against a well-documented .NET hazard (a disposed CTS's
-token can still be observed mid-callback by code that registered against it first), not by a failing
-test turning green. When you hit this shape of bug yourself, don't assume a red/green test cycle will
-catch it reliably — plan to verify by reasoning about task-completion ordering instead, same as here.
+project reproduces the actual `ObjectDisposedException` either fix addresses — three separate
+attempts (the original author, two review passes) tried to manufacture it with a mock/
+`TaskCompletionSource` repro and couldn't; the real trigger needs the actual driver's (here,
+MongoDB's) internal cancellation-token wiring, which a unit test's fakes don't have. Both fixes were
+verified correct by reasoning about task-completion ordering against a well-documented .NET hazard
+(a disposed CTS's token can still be observed mid-callback by code already registered against it),
+not by a test turning green — don't assume a red/green cycle will catch this shape of bug.
 
 (see `.notes/review-reports/2026-10-29-2230-hedged-reads-feature.md` and
 `.notes/review-reports/2026-10-29-2244-hedged-mongo-reads-third-pass.md` — introduced in `da445ba`,

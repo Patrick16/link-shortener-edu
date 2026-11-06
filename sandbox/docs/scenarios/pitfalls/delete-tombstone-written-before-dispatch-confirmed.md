@@ -47,11 +47,6 @@ await _dispatcher.DispatchAsync(new LinkDeletedEvent { Hash = hash }, Topics.Lin
 await _deletionMarkers.TryMarkOptimisticallyAsync(hash, DeletedReason.Manual, cancellationToken);
 ```
 
-Harmless in the default async mode for the same reason the sibling click-counter-ordering mistake
-is — a dispatcher that essentially never throws hides the bug completely. It only starts mattering
-once a dispatcher implementation exists that can genuinely fail on the request's own call stack,
-which is exactly what the gRPC messaging-mode toggle introduced.
-
 (see `.notes/review-reports/2026-10-15-1437-link-deletion-and-expiration.md`, F1 — fixed in `437bd19`)
 
 ## Relatives
