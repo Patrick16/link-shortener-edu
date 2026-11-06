@@ -19,10 +19,10 @@ produce a synchronized wave of cache misses hitting Postgres all at once. When
 `Microsoft.Extensions.Caching.Hybrid`, its own class comment carefully enumerated every other
 behavioral gap from the original (no negative-cache TTL, no circuit breaker, no L1/negative
 sub-toggles) — but TTL jitter wasn't mentioned at all, because it wasn't on the interface and wasn't
-something the author was deliberately scoping out; it was just missing. Every one of this class's 7
-new unit tests passed regardless, since none of them asserted anything about TTL variance. The gap
-was only caught by a dedicated review pass reasoning about "what would a burst of same-time writes
-do under this backend," not by running anything.
+something the author was deliberately scoping out; it was just missing. Every one of this class's
+7 new unit tests passed regardless (none asserted anything about TTL variance) — the gap was caught
+only by a review pass reasoning about what a burst of same-time writes would do under this backend,
+not by running anything.
 
 ⚠️ **Mistake** — `src/backend/Shared/Common/HybridEntityCacheService.cs` (as shipped in `19bcf7a`):
 
@@ -63,10 +63,9 @@ private static double ApplyTtlJitter(int ttlSeconds) =>
 ```
 
 The reusable lesson: when a second implementation of an already-hardened interface exists, diff its
-*non-functional* behavior against the original too (timing distributions, retry/backoff shape,
-failure-mode handling), not just its functional contract — a parity gap in those dimensions produces
-no test failure and no wrong answer, only a load-shape regression that's easy to miss until it's
-live.
+*non-functional* behavior too (timing distributions, retry/backoff shape, failure-mode handling),
+not just the functional contract — these gaps produce no test failure, only a load-shape regression
+that surfaces live.
 
 (see `.notes/review-reports/2026-11-05-1420-hybridcache-backend-toggle.md`, F1 — fixed in `abe36ea`)
 

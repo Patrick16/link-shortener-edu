@@ -2,11 +2,10 @@
 
 **Category:** infrastructure-bug **Status:** fixed
 
-By default, a load balancer that resolves a backend's hostname does it once, at config-parse time.
-That's fine for a name that's already resolvable the instant the process starts — it's a race
-against a container's DNS registration appearing when the balancer and the backend it points at are
-created by the same `docker compose up`, with no guaranteed ordering between "container exists" and
-"container registered in Docker's embedded DNS."
+By default, a load balancer resolves a backend's hostname once, at config-parse time — fine if the
+name is already resolvable the instant the process starts. But when the balancer and its backend
+are created by the same `docker compose up`, there's no guaranteed ordering between "container
+exists" and "container registered in Docker's embedded DNS," so startup becomes a race.
 
 **Concrete instance in this project:** HAProxy's `pgcat_back` backend pointed at `pgcat-1`/`pgcat-2`/
 `pgcat-3` (3 separately-named services, from [Pooler scaling](pattern:pooler-scaling)'s first

@@ -18,9 +18,8 @@ HAProxy's `pgcat_back` backend still had 3 static `server pgcat-1 pgcat-1:6432` 
 hosts pgcat-1` returned nothing at all — not a transient failure, a name that simply doesn't exist
 once `pgcat-1` isn't a real service, just a replica of one — while `getent hosts pgcat` returned all
 3 replicas' IPs as separate A records. Every static `server` line went to `MAINT (resolution)`.
-[A previous fix](pitfall:haproxy-static-resolve-races-docker-dns) (the `resolvers` section) made the
-*timing* of resolution robust; it couldn't fix a hostname that was never going to resolve to begin
-with — a different failure mode than the one that fix targeted.
+[A previous fix](pitfall:haproxy-static-resolve-races-docker-dns) fixed resolution *timing*; it
+couldn't fix a hostname that was never going to resolve at all — a different failure mode.
 
 Mistake (static per-replica `server` lines, broken by the service-shape change):
 

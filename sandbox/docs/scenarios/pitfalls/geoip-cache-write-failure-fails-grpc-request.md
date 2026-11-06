@@ -24,8 +24,7 @@ request. Live-testing that mode surfaced a real `StackExchange.Redis.RedisServer
 NOREPLICAS Not enough good replicas to write` from the cache write — the click row had already been
 committed to `clicks_db` (confirmed via direct `SELECT`), but the uncaught exception turned into
 `RpcException(Unknown, "Exception was thrown by handler.")`, which `GlobalExceptionHandler`
-correctly mapped to a 502 — "correct" handling of an exception that a pure caching optimization
-should never have let escape in the first place.
+correctly mapped to a 502.
 
 ⚠️ **Mistake** — reconstructed; no diffable pre-fix commit exists (this feature was reviewed and
 fixed before its first commit, so there's no separate buggy commit to diff against):

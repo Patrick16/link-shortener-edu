@@ -2,21 +2,20 @@
 
 **Category:** concurrency **Status:** fixed
 
-A standing toggle that mirrors real container state (not just an env var) is tempting to back with a
-plain in-memory bool, written wherever the toggle's own code starts/stops the container. That's safe
-only if the toggle's own gated path is the *only* way that container's state ever changes. In a
-system that already gives every node generic Start/Stop controls for free — exactly what this
-project's `ContainerEndpoints`/`ServiceControls.tsx` does for every container, independent of any
-component-specific capability — that assumption is false by construction: the generic path calls the
-same Docker API, on the same container, with no allowlist and no knowledge that a specific toggle
-also claims to own that container's state. The moment anyone uses the generic Stop/Start button on a
-node that also has its own standing toggle, the cached bool silently stops reflecting reality, and
-every fail-safe guard built on top of that bool (here: "don't let haproxy report OFF while pgcat
-depends on it" and "don't let haproxy report ON while pgcat is disabled") now protects against a
-state that doesn't exist, while the actually-dangerous state goes unflagged. Watch for this any time
-a new standing toggle wraps a container that *also* sits on a generic/shared control surface — the
-two paths will fight over the same resource unless the "current state" is derived from the resource
-itself rather than cached by only one of them.
+A standing toggle that mirrors real container state is tempting to back with a plain in-memory bool,
+set wherever the toggle's own code starts/stops the container. That's safe only if the toggle's
+gated path is the *only* way the container's state ever changes. It usually isn't: this project
+already gives every node generic Start/Stop controls for free (`ContainerEndpoints`/
+`ServiceControls.tsx`), which call the same Docker API on the same container with no allowlist and
+no knowledge that a specific toggle also claims to own that state.
+
+The moment anyone uses the generic Stop/Start button on a node that also has its own standing
+toggle, the cached bool silently stops reflecting reality — and every fail-safe guard built on top
+of it (here: "don't let haproxy report OFF while pgcat depends on it" and "don't let haproxy report
+ON while pgcat is disabled") now protects against a state that doesn't exist, while the actually-
+dangerous state goes unflagged. Watch for this any time a new standing toggle wraps a container that
+also sits on a generic/shared control surface — the two paths fight over the same resource unless
+"current state" is derived from the resource itself rather than cached by only one of them.
 
 ⚠️ **Mistake** — `sandbox/infra/control-api/Services/InfraToggleService.cs` (as shipped in `4c789d3`):
 
