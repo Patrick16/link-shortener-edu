@@ -101,6 +101,8 @@ by hand. No clean "turn HA off, see a plain single node, turn it back on" path e
   (resilience-gap) — fixed
 - ⚠️ [Assuming the first host in a replica-set connection string is always the primary](pitfall:mongo-hedge-static-primary-assumption)
   (architecture-bug) — fixed
+- ⚠️ [A hedge pool pinned to a secondary still needs to say so — `directConnection` alone isn't enough](pitfall:mongo-hedge-missing-read-preference-secondary)
+  (architecture-bug) — fixed
 - ⚠️ [Reclaiming a node back to "master" is only safe if nothing else already holds that role](pitfall:sentinel-toggle-reclaim-causes-two-masters)
   (resilience-gap) — fixed
 - ⚠️ [A control-plane process's in-memory cache of "what's currently toggled" has no source of truth once it restarts](pitfall:infra-toggle-state-resets-on-restart-desyncs-live-containers)

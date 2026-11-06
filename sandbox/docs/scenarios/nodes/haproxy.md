@@ -99,6 +99,8 @@ stateDiagram-v2
   (concurrency) — fixed
 - ⚠️ [A docker compose up --scale call without --no-deps silently restarts whatever it depends on](pitfall:pgcat-scale-missing-no-deps-restarts-stopped-replicas)
   (infrastructure-bug) — fixed
+- ⚠️ [A derived env value only accounted for one of two toggles that affect it](pitfall:haproxy-toggle-leaves-db-host-pointed-at-stopped-container)
+  (architecture-bug) — fixed
 
 ## Relatives
 

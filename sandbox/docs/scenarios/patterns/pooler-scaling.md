@@ -137,6 +137,8 @@ backend pgcat_back
   (architecture-bug) — fixed
 - ⚠️ [A docker-compose `${VAR}` substitution name never appears on the running container — only the real, rendered env var does](pitfall:control-api-reads-compose-substitution-names-not-rendered-env)
   (infrastructure-bug) — fixed
+- ⚠️ [A derived env value only accounted for one of two toggles that affect it](pitfall:haproxy-toggle-leaves-db-host-pointed-at-stopped-container)
+  (architecture-bug) — fixed
 
 ## Relatives
 

@@ -254,6 +254,10 @@ bug — see this node's Pitfalls for both it and the nginx keepalive/hashing iss
   (concurrency) — fixed
 - ⚠️ [Assuming the first host in a replica-set connection string is always the primary](pitfall:mongo-hedge-static-primary-assumption)
   (architecture-bug) — fixed
+- ⚠️ [A hedge pool pinned to a secondary still needs to say so — `directConnection` alone isn't enough](pitfall:mongo-hedge-missing-read-preference-secondary)
+  (architecture-bug) — fixed
+- ⚠️ [A hedge race kept firing its second branch after the caller had already disconnected](pitfall:hedge-race-fires-second-query-after-caller-is-already-gone)
+  (performance) — fixed
 
 ## Relatives
 
