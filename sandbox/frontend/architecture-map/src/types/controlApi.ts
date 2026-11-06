@@ -556,7 +556,6 @@ export interface TracedRequestResult {
 export interface ChaosProbeInput {
   endpointId: string
   count: number
-  intervalMs?: number
 }
 
 export interface ChaosProbeResult {

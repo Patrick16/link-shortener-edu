@@ -25,51 +25,22 @@ public class LessonProbeService(ITrafficService traffic, IHttpClientFactory http
         client.Timeout = TimeSpan.FromSeconds(8);
 
         var totalRequests = Math.Max(1, input.Count);
-        var latencies = new List<double>(totalRequests);
-        var successCount = 0;
 
-        for (var i = 0; i < totalRequests; i++)
-        {
-            // A fresh random suffix per attempt, same reason flow.js seeds a new `rand` per
-            // iteration - a probe that always posted the exact same email/originalLink would
-            // either collide (auth-api.register) or mask a cache hit as a "success" that didn't
-            // actually need the degraded dependency at all.
-            var rand = Guid.NewGuid().ToString("N")[..8];
-            var path = Substitute(endpoint.PathTemplate, rand);
-            var body = Substitute(endpoint.BodyTemplate, rand);
+        // Concurrent, not sequential - found in review (2026-11-06): a sequential loop with
+        // Count*IntervalMs of pacing plus up to Count*client.Timeout of worst-case waiting could
+        // run well past the chaos trigger's own fixed-duration window (runChaos's
+        // RECOVERY_WINDOW_MS/Pumba's own durationSeconds), so Pumba had already self-healed by
+        // the time later requests ran, understating the real failure rate. Firing every attempt
+        // at once bounds this probe's total wall-clock time at roughly client.Timeout regardless
+        // of Count, which comfortably fits inside that window - and incidentally exercises the
+        // more realistic failure mode anyway (a burst of concurrent callers hitting a degraded
+        // dependency at once, not one at a time). HttpClient itself is safe to share across
+        // concurrent requests like this.
+        var attempts = await Task.WhenAll(Enumerable.Range(0, totalRequests)
+            .Select(_ => RunOneAttemptAsync(client, baseUrl, endpoint, ct)));
 
-            var stopwatch = Stopwatch.StartNew();
-            try
-            {
-                using var request = new HttpRequestMessage(new HttpMethod(endpoint.Method), $"{baseUrl}{path}");
-                if (body is not null)
-                {
-                    request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-                }
-
-                using var response = await client.SendAsync(request, ct);
-                stopwatch.Stop();
-                latencies.Add(stopwatch.Elapsed.TotalMilliseconds);
-                if ((int)response.StatusCode is >= 200 and < 400)
-                {
-                    successCount++;
-                }
-            }
-            catch (Exception) when (!ct.IsCancellationRequested)
-            {
-                // A connection refused/reset/timeout against a genuinely stopped/degraded
-                // dependency IS the failure this probe exists to detect, not an error to
-                // propagate - counted exactly like any other non-2xx/3xx response.
-                stopwatch.Stop();
-                latencies.Add(stopwatch.Elapsed.TotalMilliseconds);
-            }
-
-            if (i < totalRequests - 1 && input.IntervalMs > 0)
-            {
-                await Task.Delay(input.IntervalMs, ct);
-            }
-        }
-
+        var successCount = attempts.Count(a => a.Succeeded);
+        var latencies = attempts.Select(a => a.LatencyMs).ToList();
         var failureCount = totalRequests - successCount;
         return new ChaosProbeResult(
             totalRequests,
@@ -77,6 +48,41 @@ public class LessonProbeService(ITrafficService traffic, IHttpClientFactory http
             failureCount,
             Math.Round(failureCount * 100.0 / totalRequests, 1),
             Math.Round(Percentile95(latencies), 1));
+    }
+
+    private readonly record struct Attempt(bool Succeeded, double LatencyMs);
+
+    private static async Task<Attempt> RunOneAttemptAsync(HttpClient client, string baseUrl, EndpointDefinition endpoint, CancellationToken ct)
+    {
+        // A fresh random suffix per attempt, same reason flow.js seeds a new `rand` per
+        // iteration - a probe that always posted the exact same email/originalLink would either
+        // collide (auth-api.register) or mask a cache hit as a "success" that didn't actually
+        // need the degraded dependency at all.
+        var rand = Guid.NewGuid().ToString("N")[..8];
+        var path = Substitute(endpoint.PathTemplate, rand);
+        var body = Substitute(endpoint.BodyTemplate, rand);
+
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var request = new HttpRequestMessage(new HttpMethod(endpoint.Method), $"{baseUrl}{path}");
+            if (body is not null)
+            {
+                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            }
+
+            using var response = await client.SendAsync(request, ct);
+            stopwatch.Stop();
+            return new Attempt((int)response.StatusCode is >= 200 and < 400, stopwatch.Elapsed.TotalMilliseconds);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // A connection refused/reset/timeout against a genuinely stopped/degraded dependency
+            // IS the failure this probe exists to detect, not an error to propagate - counted
+            // exactly like any other non-2xx/3xx response.
+            stopwatch.Stop();
+            return new Attempt(false, stopwatch.Elapsed.TotalMilliseconds);
+        }
     }
 
     // Only the two placeholders every current probe target's templates actually use

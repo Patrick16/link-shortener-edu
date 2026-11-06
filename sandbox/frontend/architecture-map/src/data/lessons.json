@@ -337,7 +337,7 @@
         "action": "degrade",
         "targetServiceId": "redis-master",
         "probeEndpointId": "link-api.create",
-        "probeCount": 8,
+        "probeCount": 12,
         "description": "Degrade redis-master's network for the duration of the run"
       },
       "watch": {

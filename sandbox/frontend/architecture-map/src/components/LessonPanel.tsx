@@ -96,7 +96,7 @@ async function runChaos(trigger: Extract<Trigger, { kind: 'chaos' }>): Promise<R
   }
 
   if (trigger.probeEndpointId) {
-    const probe = await controlApi.chaosProbe({ endpointId: trigger.probeEndpointId, count: trigger.probeCount ?? 5, intervalMs: 1000 })
+    const probe = await controlApi.chaosProbe({ endpointId: trigger.probeEndpointId, count: trigger.probeCount ?? 5 })
     if (trigger.action === 'stop') {
       await controlApi.start(trigger.targetServiceId).catch(() => {})
     }
