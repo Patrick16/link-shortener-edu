@@ -126,6 +126,17 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // what this method reads directly instead.
     private bool _nginxBypassed;
     private bool _pgcatEnabled = true;
+
+    // Drives DB_HOST below the same "cached, recreate-with-a-different-env-var-value" way
+    // _pgcatEnabled does, NOT the live-container-state InfraStatus.HaproxyEnabled reads (see that
+    // field's own comment) - this is specifically "which hostname did we last tell DbTouchingServices
+    // to connect through", so SetHaproxyEnabledAsync's env-rewrite stays in sync with whether the
+    // haproxy container it just stopped is still the thing DB_HOST names. Found live (2026-11-06):
+    // without this, turning haproxy off left DB_HOST pointing at the now-stopped "haproxy" hostname
+    // unconditionally - every DB-touching request hung until the connection attempt itself timed
+    // out, regardless of whether the single remaining pgcat instance was healthy or degraded, which
+    // is the opposite of lesson 4.7's own "one instance, no failover" story.
+    private bool _haproxyEnabled = true;
     private bool _cacheEnabled = true;
     // Mirrors EntityCacheService's own default (Cache:L1Enabled, no key set => enabled).
     private bool _l1CacheEnabled = true;
@@ -171,9 +182,12 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     // re-applies every other toggle's current value too instead of quietly undoing it.
     internal Dictionary<string, string> CurrentStandingEnv() => new()
     {
-        // "haproxy" (not "pgcat") since the Pooler Scaling feature (2026-10-09) - haproxy is the
-        // single entry point in front of the 3 pgcat instances now, see docker-compose.yml.
-        ["DB_HOST"] = _pgcatEnabled ? "haproxy" : "postgres",
+        // "haproxy" when it's actually fronting the pool (the Pooler Scaling feature, 2026-10-09);
+        // "pgcat" (the bare service name, which Compose round-robins across however many replicas
+        // are actually running - just the one, pgcat-1, whenever haproxy is off) when pgcat is on
+        // but haproxy isn't - see ResolveDbHost's own comment for why this can't just always say
+        // "haproxy".
+        ["DB_HOST"] = ResolveDbHost(_pgcatEnabled, _haproxyEnabled),
         ["DB_PORT"] = _pgcatEnabled ? "6432" : "5432",
         ["CACHE_ENABLED"] = _cacheEnabled ? "true" : "false",
         ["L1_CACHE_ENABLED"] = _l1CacheEnabled ? "true" : "false",
@@ -188,6 +202,15 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         ["MONGO_HEDGE_DELAY_MS"] = _mongoHedgeDelayMs.ToString(),
         ["CIRCUIT_BREAKERS_ENABLED"] = _circuitBreakersEnabled ? "true" : "false",
     };
+
+    // pgcat off always means "postgres" (bypass pooling entirely, see SetPgcatEnabledAsync).
+    // Otherwise: "haproxy" while it's actually up and fronting the pool, "pgcat" (the bare
+    // service name - Compose round-robins it across however many replicas are currently running,
+    // just pgcat-1 whenever haproxy is off) when it isn't. Never falls back to naming a container
+    // that was just stopped - see this class's own comment on _haproxyEnabled for the live bug
+    // that shape caused.
+    private static string ResolveDbHost(bool pgcatEnabled, bool haproxyEnabled) =>
+        !pgcatEnabled ? "postgres" : haproxyEnabled ? "haproxy" : "pgcat";
 
     public int GetRabbitMqPrefetch() => _rabbitMqPrefetch;
 
@@ -368,8 +391,12 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
     public Task<InfraStatus> SetPgcatEnabledAsync(bool enabled, CancellationToken ct) =>
         runtime.RunExclusiveToggleAsync(async ct =>
         {
+            // Disabling pgcat forces haproxy off too (below); enabling it leaves haproxy exactly
+            // as it was - re-enabling haproxy on top is still its own explicit action, same rule
+            // as every other toggle in this class (see the comment a few lines down).
+            var targetHaproxyEnabled = enabled && _haproxyEnabled;
             var env = CurrentStandingEnv();
-            env["DB_HOST"] = enabled ? "haproxy" : "postgres";
+            env["DB_HOST"] = ResolveDbHost(enabled, targetHaproxyEnabled);
             env["DB_PORT"] = enabled ? "6432" : "5432";
             var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
 
@@ -382,6 +409,7 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             }
 
             _pgcatEnabled = enabled;
+            _haproxyEnabled = targetHaproxyEnabled;
 
             // One-directional, deliberately: disabling pgcat means the whole pooler layer is off, so
             // it also stops haproxy rather than leaving it dangling in front of nothing. Re-enabling
@@ -533,16 +561,16 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         return $"{mount.Source}/pgcat.toml";
     }
 
-    // DB_HOST/DB_PORT stay pointed at "haproxy" the whole time this toggles (see InfraStatus's own
-    // comment on HaproxyEnabled), so stopping it while pgcat routing is still live genuinely takes
-    // the pooler layer's single entry point down, same as degrading/stopping any other node here.
-    // Only legal to turn ON while pgcat is enabled - SetPgcatEnabledAsync(false) already forces this
-    // off as a side effect (nothing routes through haproxy once pgcat is bypassed), so allowing a
-    // standalone "turn it back on" here while pgcat stays off would just leave a load balancer in
-    // front of nothing. Turning it OFF is always allowed, including while pgcat is already off, so
-    // SetPgcatEnabledAsync and this method never fight over a legal value. Shares the same exclusive
-    // gate as the env-rewriting toggles purely for consistency - nothing else here reads or writes
-    // haproxy's container state outside that gate, so there's no actual race to prevent.
+    // DB_HOST has to actually move with this toggle now - "pgcat" (the bare, round-robinned
+    // service name) while this is off, "haproxy" once it's back up fronting the pool - rather
+    // than staying hardcoded at "haproxy" the way it used to (see _haproxyEnabled's own comment
+    // for the live bug that caused: every DB-touching request hanging on a dead hostname the
+    // moment this toggled off, regardless of whether the one remaining pgcat instance was healthy
+    // or degraded). Only legal to turn ON while pgcat is enabled - SetPgcatEnabledAsync(false)
+    // already forces this off as a side effect (nothing routes through haproxy once pgcat is
+    // bypassed), so allowing a standalone "turn it back on" here while pgcat stays off would just
+    // leave a load balancer in front of nothing. Turning it OFF is always allowed, including while
+    // pgcat is already off, so SetPgcatEnabledAsync and this method never fight over a legal value.
     public Task<InfraStatus> SetHaproxyEnabledAsync(bool enabled, CancellationToken ct) =>
         runtime.RunExclusiveToggleAsync(async ct =>
         {
@@ -551,11 +579,40 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
                 throw new InvalidOperationException("Cannot turn haproxy on while connection pooling (pgcat) is disabled - nothing routes through it.");
             }
 
-            await SyncHaproxyContainerAsync(enabled, ct);
-            // See SyncPgcatReplicaCountAsync's own comment - symmetric with this toggle itself
-            // (unlike the one-directional pgcat->haproxy cascade above), since both directions here
-            // just restore or collapse a count that's always meant to track haproxy's own state.
-            await SyncPgcatReplicaCountAsync(enabled ? 3 : 1, ct);
+            var env = CurrentStandingEnv();
+            env["DB_HOST"] = ResolveDbHost(_pgcatEnabled, enabled);
+            var scaleArgs = await runtime.BuildPreserveScaleArgsAsync(DbTouchingServices, ct);
+
+            // Enabling: bring haproxy (and the other two pgcat replicas) up FIRST, then point
+            // DbTouchingServices at it - otherwise there's a window where DB_HOST already says
+            // "haproxy" but nothing is listening there yet. Disabling: the reverse order, so
+            // DbTouchingServices is already pointed at "pgcat" before haproxy's container actually
+            // stops, instead of a window where DB_HOST still says "haproxy" right as it goes down.
+            if (enabled)
+            {
+                await SyncHaproxyContainerAsync(true, ct);
+                await SyncPgcatReplicaCountAsync(3, ct);
+            }
+
+            logger.LogWarning("Switching DB routing for {Services} to {Host} (haproxy enabled: {Enabled})", string.Join(", ", DbTouchingServices), env["DB_HOST"], enabled);
+            var (exitCode, output) = await runtime.RunComposeAsync(["up", "-d", "--force-recreate", "--no-deps", .. scaleArgs, .. DbTouchingServices], env, ct);
+            if (exitCode != 0)
+            {
+                logger.LogWarning("Toggling haproxy failed (exit {ExitCode}): {Output}", exitCode, output);
+                throw new InvalidOperationException($"docker compose exited {exitCode}: {output}");
+            }
+
+            if (!enabled)
+            {
+                await SyncHaproxyContainerAsync(false, ct);
+                // See SyncPgcatReplicaCountAsync's own comment - symmetric with this toggle itself
+                // (unlike the one-directional pgcat->haproxy cascade elsewhere), since both
+                // directions here just restore or collapse a count that's always meant to track
+                // haproxy's own state.
+                await SyncPgcatReplicaCountAsync(1, ct);
+            }
+
+            _haproxyEnabled = enabled;
             return await GetInfraStatusAsync(ct);
         }, ct);
 
@@ -1000,7 +1057,10 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
             // against the real stack, not just by a passing unit test).
             if (linkApiEnv.TryGetValue("ConnectionStrings__Postgres", out var postgresConnStr))
             {
-                _pgcatEnabled = postgresConnStr.Contains("Host=haproxy", StringComparison.OrdinalIgnoreCase);
+                // "pgcat" (bare service name, haproxy off) counts as pgcat enabled same as
+                // "haproxy" does - only "postgres" (pooling bypassed entirely) means pgcat is off.
+                _haproxyEnabled = postgresConnStr.Contains("Host=haproxy", StringComparison.OrdinalIgnoreCase);
+                _pgcatEnabled = _haproxyEnabled || postgresConnStr.Contains("Host=pgcat", StringComparison.OrdinalIgnoreCase);
                 var poolSize = ParseConnectionStringValue(postgresConnStr, "Maximum Pool Size");
                 if (poolSize is not null && int.TryParse(poolSize, out var npgsqlPoolSize)) _npgsqlPoolSize = npgsqlPoolSize;
             }
@@ -1052,8 +1112,8 @@ public class InfraToggleService(IContainerRuntime runtime, IPgcatService pgcat, 
         }
 
         logger.LogWarning(
-            "Reconciled standing toggle state from live container env vars: pgcat={Pgcat} cache={Cache} l1Cache={L1Cache} negativeCache={NegativeCache} messaging={Messaging} npgsqlPool={NpgsqlPool} circuitBreakers={CircuitBreakers} redisViaSentinel={RedisViaSentinel} mongoReadPreference={MongoReadPreference} geoIpBulkhead={GeoIpBulkhead} mongoIncludesReplicas={MongoIncludesReplicas} rabbitMqPrefetch={RabbitMqPrefetch} mongoHedgeDelayMs={MongoHedgeDelayMs}",
-            _pgcatEnabled, _cacheEnabled, _l1CacheEnabled, _negativeCacheEnabled, _messagingMode, _npgsqlPoolSize, _circuitBreakersEnabled,
+            "Reconciled standing toggle state from live container env vars: pgcat={Pgcat} haproxy={Haproxy} cache={Cache} l1Cache={L1Cache} negativeCache={NegativeCache} messaging={Messaging} npgsqlPool={NpgsqlPool} circuitBreakers={CircuitBreakers} redisViaSentinel={RedisViaSentinel} mongoReadPreference={MongoReadPreference} geoIpBulkhead={GeoIpBulkhead} mongoIncludesReplicas={MongoIncludesReplicas} rabbitMqPrefetch={RabbitMqPrefetch} mongoHedgeDelayMs={MongoHedgeDelayMs}",
+            _pgcatEnabled, _haproxyEnabled, _cacheEnabled, _l1CacheEnabled, _negativeCacheEnabled, _messagingMode, _npgsqlPoolSize, _circuitBreakersEnabled,
             _redisConnectionViaSentinel, _mongoReadPreference, _geoIpBulkheadLimit, _mongoConnectionIncludesReplicas, _rabbitMqPrefetch, _mongoHedgeDelayMs);
     }
 
