@@ -4,16 +4,16 @@
 
 Watch for this any time a client holds a short-lived access token backed by a rotating refresh
 token with reuse detection (each refresh call invalidates the previous refresh token; replaying an
-already-used one revokes the whole session as a suspected theft). The naive fix for "a request got
-a 401 because the access token expired" is: catch the 401, call refresh, retry the request. That
-looks correct for *one* request. It breaks the moment **more than one** request is in flight when
-the token expires — which, for any real UI making several calls close together (a dashboard
-loading several panels at once, say), is the common case, not the edge case. Each request
-independently catches its own 401 and independently calls refresh; the rotation's own reuse
-detection sees the second (and third, and...) refresh call as a replay of an already-consumed
-token and revokes the session — the exact failure the retry logic was trying to prevent, just
-moved one step later and now affecting every concurrent caller, not only the one that happened to
-race.
+already-used one revokes the whole session as a suspected theft).
+
+The naive fix for "a request got a 401 because the access token expired" — catch the 401, call
+refresh, retry — looks correct for one request, but breaks the moment **more than one** is in
+flight when the token expires. That's the common case, not the edge case, for any UI making several
+calls close together (a dashboard loading several panels at once, say). Each request independently
+catches its own 401 and calls refresh; the rotation's own reuse detection sees the second (and
+third...) call as a replay of an already-consumed token and revokes the session — the exact failure
+the retry logic was meant to prevent, now hitting every concurrent caller, not only the one that
+happened to race.
 
 A second version of the same race exists even with a single always-refreshing caller: if a
 *proactive*, timer-based refresh (scheduled ahead of the token's own `exp`) fires at the same moment

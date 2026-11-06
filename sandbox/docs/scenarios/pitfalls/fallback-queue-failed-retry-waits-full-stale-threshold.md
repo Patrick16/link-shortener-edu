@@ -2,26 +2,25 @@
 
 **Category:** resilience-gap **Status:** fixed
 
-Watch for this any time a retry mechanism uses a claim/lease to stop two workers from picking up the
-same row, and that claim is designed to clear in exactly two ways: the happy path deletes the row
-outright, and a stale-claim timeout recovers from a worker that died mid-attempt with no chance to
-clean up. It's easy to stop there and assume every case is covered — but "the attempt ran to
-completion and failed" is a third case, distinct from both, and if nothing explicitly releases the
-claim on that path, a merely-failed attempt silently inherits the crash-recovery timeout as its own
-retry backoff, which is usually far longer than intended.
+Watch for this any time a retry mechanism uses a claim/lease to stop two workers picking up the same
+row, with the claim designed to clear only two ways: the happy path deletes the row, and a
+stale-claim timeout recovers a worker that died mid-attempt. It's easy to assume that covers every
+case — but "the attempt ran to completion and failed" is a third case. If nothing explicitly
+releases the claim on that path, a merely-failed attempt silently inherits the crash-recovery
+timeout as its own retry backoff, usually far longer than intended.
 
 **Concrete instance in this project:** the SQLite fallback queue's row claiming (`GetPendingAsync`'s
 atomic `UPDATE ... RETURNING`, built specifically to stop two `link-api`/`redirect-api` replicas
 sharing the fallback file from double-publishing the same row — see the companion pitfall,
 [scaling link-api/redirect-api made the SQLite fallback queue republish messages twice](pitfall:rabbitmq-fallback-store-shared-file-race))
-only ever cleared a claim two ways: `DeleteAsync` on a successful republish, or `GetPendingAsync`'s
-own `WHERE ClaimedAt IS NULL OR ClaimedAt <= $staleThreshold` treating a 2-minutes-old claim as
-claimable again — a deliberate crash-recovery fallback for a replica that dies mid-tick with no
-chance to clean up after itself. An ordinary failed republish attempt (the broker still down, no
-crash at all — the actual common case for this queue) fell through neither path: the row stayed
-claimed until that same 2-minute threshold aged it out, even though `RabbitMqRetryWorker`'s own poll
-interval is only ~15s average (full jitter over 30s). A transient failure was backing off roughly 8x
-longer than the worker's own polling cadence implies, every time.
+only cleared a claim two ways: `DeleteAsync` on success, or `GetPendingAsync`'s own
+`WHERE ClaimedAt IS NULL OR ClaimedAt <= $staleThreshold` treating a 2-minute-old claim as claimable
+again — a crash-recovery fallback for a replica that dies mid-tick with no chance to clean up. An
+ordinary failed republish attempt (broker still down, no crash at all — the actual common case for
+this queue) fell through neither path: the row stayed claimed until that same 2-minute threshold
+aged it out, even though `RabbitMqRetryWorker`'s own poll interval is only ~15s average (full
+jitter over 30s) — a transient failure backed off roughly 8x longer than the worker's own polling
+cadence implies, every time.
 
 ⚠️ **Mistake** — `src/backend/Shared/Infrastructure/RabbitMqRetryWorker.cs` (before `5c8475b`): the
 failure branch only logs, it never tells the store this attempt is over:

@@ -3,12 +3,11 @@
 **Category:** resilience-gap **Status:** fixed
 
 Watch for this any time a backend endpoint adds idempotency-key support — it closes the "client
-timeout + automatic/manual retry creates a duplicate" hole only for callers that actually send the
-header. The server-side half (claim/complete/replay, TTL, the 256-char cap, whatever else) can be
-fully built and fully tested and still protect nothing in practice, because the feature is opt-in
-from the caller's side by construction — nothing forces a client to send it, and nothing on the
-server can tell "a genuinely new request" apart from "a retry that just forgot the key" once it
-arrives without one.
+timeout + retry creates a duplicate" hole only for callers that actually send the header. The
+server-side half (claim/complete/replay, TTL, the 256-char cap, whatever else) can be fully built
+and fully tested and still protect nothing in practice: the feature is opt-in by construction,
+nothing forces a client to send it, and nothing on the server can tell a genuinely new request
+apart from a retry that just forgot the key.
 
 **Concrete instance in this project:** `LinkApi`'s `LinksController.CreateLink` has supported an
 `Idempotency-Key` header since the Resilience & Scale-Out Backlog's item 4 — see

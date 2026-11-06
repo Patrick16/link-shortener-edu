@@ -3,14 +3,15 @@
 **Category:** coupling **Status:** fixed
 
 Watch for this once two independently deployed services need to agree on *how* they talk to a
-shared piece of infrastructure — not just that they both talk to it. A Redis-backed cache only
-actually dedupes work between two consumers if both register it identically: same instance
-address, same `Redis:InstanceName` (so key prefixes line up), same wrapping class. If that
-registration is copy-pasted into each service's own startup code instead of factored into one
-shared place, nothing stops the two copies from drifting the next time either one is touched —
-and the failure mode is silent: the services still start, still run, the cache just quietly stops
-being shared, and the exact problem it was built to fix (see the companion pitfall below) comes
-back without anyone changing the behavior they meant to.
+shared piece of infrastructure, not just that they both talk to it. A Redis-backed cache only
+dedupes work between two consumers if both register it identically: same instance address, same
+`Redis:InstanceName` (so key prefixes line up), same wrapping class.
+
+If that registration is copy-pasted into each service's own startup code instead of factored into
+one shared place, nothing stops the two copies drifting the next time either is touched. The
+failure mode is silent: both services still start and run, the cache just quietly stops being
+shared, and the exact problem it was built to fix (see the companion pitfall below) comes back
+without anyone changing the behavior they meant to.
 
 **Concrete instance in this project:** once `CachingGeoIpResolver` was introduced to let
 `TrafficService` and `ReportingService` share one Redis-backed geo-IP cache instead of each hitting

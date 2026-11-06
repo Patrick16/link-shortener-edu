@@ -47,16 +47,15 @@ behaviour was verified by reading the code.
 
 ## Second concrete instance: a generic catch swallowing cancellation, not just the wrong exception type
 
-The same underlying mistake — a catch filter that doesn't match every exception type a dependency
-can actually throw — recurs with a different exception and a different call site once a per-request
-deadline enters the picture. `EntityCacheService.GetCachedAsync`/`IsNegativelyCachedAsync` both had
-a bare `catch (Exception ex)` around their Redis reads, added for the ordinary fail-open case (a
-real Redis error should degrade to "treat as a cache miss," never fail the request). Once
-[RedirectApi](node:redirect-api) gained a per-request budget, that same broad catch also caught the
-`OperationCanceledException` the budget raises when it trips
-— logging a misleading "failed to read cache" warning and returning `null`/`false` as if it were a
-normal fail-open miss, instead of letting the cancellation propagate so the controller could shed
-the request cleanly with a `503`.
+The same mistake — a catch filter that doesn't match every exception type a dependency can throw —
+recurs with a different exception once a per-request deadline enters the picture.
+`EntityCacheService.GetCachedAsync`/`IsNegativelyCachedAsync` both had a bare `catch (Exception ex)`
+around their Redis reads, added for the ordinary fail-open case (a real Redis error should degrade
+to "treat as a cache miss," never fail the request). Once [RedirectApi](node:redirect-api) gained a
+per-request budget, that same broad catch also caught the `OperationCanceledException` the budget
+raises when it trips — logging a misleading "failed to read cache" warning and returning
+`null`/`false` as a normal miss, instead of letting the cancellation propagate so the controller
+could shed the request cleanly with a `503`.
 
 ⚠️ **Mistake** — `src/backend/Shared/Common/EntityCacheService.cs` (commit `6174662`):
 

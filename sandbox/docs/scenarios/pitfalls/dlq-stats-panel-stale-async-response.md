@@ -8,36 +8,32 @@ dead-letter queues — see [Async messaging](pattern:async-messaging)'s dead-let
 worth watching for in any component that fires an async request from an event handler and later
 calls `setState` with the result.
 
-**1. A `mountedRef`-style guard that's only ever set `true` once, at `useRef`'s initializer, and
-never re-armed inside the effect body.** React 18 `StrictMode` double-invokes effects once in
-development — mount, run cleanup, mount again — without ever really unmounting the component. A
-guard ref whose cleanup sets it `false` but whose *mount* path never sets it back to `true` latches
-to `false` permanently after that first simulated cycle, even though the component is still alive
-and will run for the rest of its life. Every later async handler's `setState`, gated behind
-`if (mountedRef.current) ...`, silently becomes a no-op from that point on — not a crash, not a
-warning, just a UI that quietly stops updating itself, in development only, which makes it
-especially easy to miss if dev testing didn't happen to catch it.
+**1. A `mountedRef` guard set `true` only once, at the `useRef` initializer, and never re-armed in
+the effect body.** React 18 `StrictMode` double-invokes effects in development (mount → cleanup →
+mount again) without truly unmounting. If cleanup sets the ref `false` but the mount path never
+resets it `true`, the ref latches `false` permanently — every later async handler's `setState`,
+gated behind `if (mountedRef.current) ...`, silently becomes a no-op. No crash, no warning: the UI
+just quietly stops updating itself, in dev only, easy to miss.
 
-**2. An in-flight async request has no way to tell whether it's still "the one currently being
-shown"** unless something tracks that explicitly. Disabling a button while its own request is
-in-flight (as this panel's Replay button already did) only prevents *that* button from firing
-twice — it says nothing about a *different* button's request landing late and overwriting state
-that's now showing something else entirely. Reading a piece of component state like
-`expandedQueue` from inside the async closure doesn't help either — it's the value from when the
-closure was created, not a live read of what's currently selected.
+**2. An in-flight async request can't tell whether it's still "the one currently being shown"**
+unless something tracks that explicitly. Disabling a button while its own request is in flight (as
+Replay already did) only stops that button from firing twice — it doesn't stop a *different*
+button's request landing late and overwriting state that now shows something else. Reading
+component state like `expandedQueue` from the async closure doesn't help either: it's the value
+captured when the closure was created, not a live read of what's currently selected.
 
-**Concrete instances in this project:** `DlqStatsPanel.tsx`'s pre-existing `mountedRef` (used by
-every async handler, including the long-standing `clearDlq`) was only ever set `true` at
-`useRef(true)`'s initializer; its cleanup set it `false` on unmount, but nothing set it back to
-`true` on a later mount. The result: `clearDlq` likely never visibly updated its own result/error
-state in a `StrictMode` dev build even before this feature — only live-verified once Sample/
-Replay's own `setState` calls stopped landing too, leaving the panel stuck on "Sampling...".
-Separately, the new Sample button's `toggleSample(queueName)` set `expandedQueue`/`sampling`/
-`sampleResult` before awaiting the response, then applied that response unconditionally — unlike
-Replay, which disables itself globally while in flight, Sample buttons on *other* rows stayed
-clickable. A slow response for queue A landing after the operator had already clicked Sample on
-queue B would render A's message contents under B's now-expanded row, mislabeling one queue's
-dead-lettered payloads as another's.
+**Concrete instances in this project**, both in `DlqStatsPanel.tsx`:
+
+- **The `mountedRef` gap** predates this feature: used by every async handler including the
+  long-standing `clearDlq`, it was only ever set `true` at `useRef(true)`'s initializer, with
+  cleanup setting it `false` on unmount and nothing re-arming it. `clearDlq` likely never visibly
+  updated its own result/error state in a `StrictMode` dev build — only caught once Sample/Replay's
+  own `setState` calls stopped landing too, leaving the panel stuck on "Sampling...".
+- **The `toggleSample` race:** `toggleSample(queueName)` set `expandedQueue`/`sampling`/
+  `sampleResult` before awaiting the response, then applied it unconditionally. Unlike Replay
+  (disabled globally while in flight), Sample buttons on *other* rows stayed clickable — a slow
+  response for queue A landing after the operator clicked Sample on queue B would render A's
+  payload under B's now-expanded row, mislabeling one queue's dead letters as another's.
 
 ⚠️ **Mistake** — `sandbox/frontend/architecture-map/src/components/DlqStatsPanel.tsx` (before
 commit `253bd94` for the `toggleSample` race; the `mountedRef` re-arm gap predates this feature
@@ -129,10 +125,6 @@ async function toggleSample(queueName: string) {
   }
 }
 ```
-
-The `mountedRef` re-arm fix is more general than this one panel — it silently fixed the
-pre-existing `clearDlq` handler's own result/error state too, which most likely never visibly
-updated in a `StrictMode` dev build before this commit landed.
 
 **Provenance:** the `mountedRef` re-arm was found and fixed pre-commit, during manual live-testing
 ahead of commit `79d520e` (no separate buggy commit exists to diff for that part — reconstructed as
