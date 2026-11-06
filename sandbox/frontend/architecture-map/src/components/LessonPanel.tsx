@@ -450,7 +450,7 @@ export function LessonPanel({ lesson, onClose, onBackToList, onNavigate, onInfra
         <div className="lesson-card">
           <div className="lesson-card-label">WHERE ELSE TO LOOK</div>
           {lesson.watch.hints.map((hint, i) => (
-            <WatchHintView key={i} hint={hint} traceId={(run1 ?? run2)?.traceId} />
+            <WatchHintView key={i} hint={hint} traceId={(run2 ?? run1)?.traceId} />
           ))}
         </div>
       )}
