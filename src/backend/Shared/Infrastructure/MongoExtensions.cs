@@ -58,8 +58,14 @@ public static class MongoExtensions
             // driver would discover the whole replica set from that one seed and route the query
             // via its OWN server-selection logic again, silently undoing the "pin this call to
             // exactly this physical node" point of hedging.
+            //
+            // readPreference=secondary is just as required - found live (2026-11-06, lesson 5.1's
+            // first real run): a driver's default ReadPreference is Primary regardless of
+            // directConnection, so without this every single hedge query failed with
+            // MongoNotPrimaryException the moment it reached a node that (correctly) isn't the
+            // primary - the exact nodes this list exists to target.
             var hedgeNodes = url.Servers
-                .Select(server => $"mongodb://{server.Host}:{server.Port}/{url.DatabaseName}?directConnection=true")
+                .Select(server => $"mongodb://{server.Host}:{server.Port}/{url.DatabaseName}?directConnection=true&readPreference=secondary")
                 .Where(directConnectionString => !IsCurrentPrimary(directConnectionString))
                 .Select(directConnectionString => (IClickMetaQueryService)new MongoClickMetaQueryService(directConnectionString))
                 .ToList();
