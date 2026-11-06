@@ -277,6 +277,20 @@ export function LessonPanel({ lesson, onClose, onBackToList, onNavigate, onInfra
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lesson.id])
 
+  // `live` otherwise only ever refreshes after THIS panel's own Restart/Apply-fix buttons - found
+  // live (2026-11-06): dialing a lesson's config in by hand (Topology panel, a node's own control,
+  // Presets) leaves it stale, so matchesStart/matchesTarget keep failing even once the real infra
+  // genuinely matches, and Run 1/Run 2/Next lesson all stay stuck disabled until the user goes
+  // through this panel's own "Apply for me" instead. A lesson's config can span almost any toggle
+  // this app has (replicas, prefetch, pool sizes, read preference, ...), so there's no single other
+  // hook's state to subscribe to instead - a light poll while this panel is open is simpler and
+  // catches every case, same "no polling elsewhere, so poll here" tradeoff useInfraStatus's own
+  // comment already accepts for its narrower 4-field slice.
+  useEffect(() => {
+    const id = setInterval(refreshLive, 3000)
+    return () => clearInterval(id)
+  }, [])
+
   function finishPhase(phase: Phase, result: RunResult) {
     if (phase === 'run1') {
       setRun1(result)
