@@ -55,11 +55,18 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=users_db;Username=postgres;Password=postgres"
+      # AddAuthRateLimiting (AuthApiServiceExtensions.cs) requires this unconditionally at startup
+      # (AddRedisMultiplexer -> ConfigurationOptions.Parse) - without it the container crashes
+      # immediately with "ArgumentException: is empty". No InstanceName override needed here:
+      # AuthApi only uses the raw multiplexer (rate limiting), never LinkCacheService's keyspace.
+      ConnectionStrings__Redis: "redis:6379"
       Jwt__SigningKey: "dev-only-signing-key-do-not-use-in-production-1234567890"
     ports:
       - "8080"
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
