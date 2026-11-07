@@ -55,11 +55,6 @@ private ObjectResult BuildReplayResult(IdempotencyRecord existing)
 }
 ```
 
-Every other field in a replayed response is correctly identical to the first attempt's — that's
-the entire point of idempotency. `traceId` is the one deliberate exception: it identifies *this*
-HTTP exchange's own trace, not the logical operation's outcome, so it has to be re-derived on every
-replay even though nothing else about the response changes.
-
 **Provenance:** found by `feature-review` on commit `05934eb`, fixed in `05f0754`.
 
 ## Relatives

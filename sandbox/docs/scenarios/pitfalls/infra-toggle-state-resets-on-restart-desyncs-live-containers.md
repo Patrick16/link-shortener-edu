@@ -14,10 +14,8 @@ cache instead of the real world.
 read live from Docker on every call (`HaproxyEnabled`, by design, per its own comment and the
 `haproxy-toggle-cached-state-bypassed-by-generic-controls` pitfall below), and roughly a dozen
 private fields (`_pgcatEnabled`, `_cacheEnabled`, `_messagingMode`, `_redisConnectionViaSentinel`,
-`_mongoConnectionIncludesReplicas`, `_npgsqlPoolSize`, `_circuitBreakersEnabled`,
-`_geoIpBulkheadLimit`, `_rabbitMqPrefetch`, `_mongoHedgeDelayMs`, `_l1CacheEnabled`,
-`_negativeCacheEnabled`) that are plain in-memory defaults, reset on every control-api process
-restart. `CurrentStandingEnv()` — used by *every* "recreate this container" call the control plane
+and about eight more of the same shape — full list in the snippet below) that are plain in-memory
+defaults, reset on every control-api process restart. `CurrentStandingEnv()` — used by *every* "recreate this container" call the control plane
 makes, for *any* toggle, not just the one that just changed — builds its env vars from those cached
 fields. So after a control-api restart, the next unrelated toggle flip (say, just switching
 messaging mode) silently recreates every other service using the stale hardcoded defaults for every

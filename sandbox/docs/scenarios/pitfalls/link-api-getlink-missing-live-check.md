@@ -3,14 +3,13 @@
 **Category:** architecture-bug
 **Status:** fixed
 
-When "is this record still live" isn't a column you can filter in one place but a check repeated
-by hand at every endpoint that reads the record, each new read path has to remember to re-derive
-it independently — and nothing enforces that it does. Watch for this whenever a cache-aside entity
-carries its own soft-delete/expiry fields (`DeletedAt`, `ExpiresAt`) instead of a query the
-database itself can filter: a listing endpoint that already excludes gone records and a
-single-item endpoint that fetches the exact same entity are an obvious pair to keep in sync, but
-nothing short of actually reading both call sites side by side catches a forgotten check in one of
-them.
+Watch for this whenever a cache-aside entity carries its own soft-delete/expiry fields
+(`DeletedAt`, `ExpiresAt`) instead of a query the database itself can filter: "is this record still
+live" becomes a check repeated by hand at every endpoint that reads the record, and nothing
+enforces that each new read path re-derives it. A listing endpoint that already excludes gone
+records and a single-item endpoint fetching the exact same entity are an obvious pair to keep in
+sync — but nothing short of reading both call sites side by side catches a forgotten check in one
+of them.
 
 **Concrete instance in this project:** `LinkApi`'s `GetLinks` (the "my links" listing) already
 filtered out deleted and expired links. `GetLink` (`GET /Links/{hash}`, a single-hash lookup

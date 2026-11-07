@@ -17,9 +17,7 @@ legitimately run past it: `CreateWithAliasAsync` (custom aliases) always makes a
 call to `ShortenerService` with no deadline of its own, and so does the plain-hash path when
 `Messaging:Mode=grpc`. Their real duration is whatever the downstream dependency takes — including
 this sandbox's own chaos tooling (Pumba-injected latency/partition) deliberately pushing it past a
-few seconds on purpose, to demonstrate degraded conditions. If the claim expired while the original
-request was still genuinely in flight, a legitimate retry would silently start a *second*
-concurrent execution instead of getting `409`/replay.
+few seconds on purpose, to demonstrate degraded conditions.
 
 ⚠️ **Mistake** — `src/backend/Shared/Infrastructure/IdempotencyStore.cs` (commit `05934eb`):
 

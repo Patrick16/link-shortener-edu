@@ -14,11 +14,10 @@ every *other* replica's copy of the same key.
 `GetOrFetch`) is local to each process. `InvalidateCacheAsync` evicts the local L1 entry
 unconditionally, in addition to the pre-existing Redis `RemoveAsync` — but only on whichever
 replica's process actually ran the invalidation. With `link-api`/`redirect-api` scaled to 2+
-replicas, a delete or update that lands on replica A clears Redis and replica A's own L1 copy;
-replica B's L1 copy of that same key is untouched and keeps serving the pre-delete/update value
-until its own local TTL expires. A request that happens to land on replica B within that window
-sees a link that was just deleted, or the link's old destination, even though the authoritative
-(Redis/Postgres) state has already moved on.
+replicas, a delete or update landing on replica A clears Redis and replica A's own L1 copy —
+replica B's L1 copy of that same key is untouched, so a request landing there within the TTL
+window still sees the just-deleted link or its old destination, even though Redis/Postgres have
+already moved on.
 
 **Why no fix was built:** closing this would need a cross-process invalidation channel (Redis
 pub/sub broadcasting "evict key X" to every replica's L1, or similar) — a real subscriber cost paid
