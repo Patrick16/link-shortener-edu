@@ -4,7 +4,7 @@ EXPOSE 8080
 # curl is used by the docker-compose healthcheck to hit /health/live - not in the base image.
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY ["src/backend/Services/ReportingService/ReportingService.csproj", "src/backend/Services/ReportingService/"]
 COPY ["src/backend/Shared/Contracts/Contracts.csproj", "src/backend/Shared/Contracts/"]
