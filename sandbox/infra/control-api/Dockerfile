@@ -7,7 +7,7 @@ EXPOSE 8080
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:27-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:11.0 AS build
 WORKDIR /src
 COPY ["sandbox/infra/control-api/ControlApi.csproj", "sandbox/infra/control-api/"]
 # Central package management: csproj files have no Version attribute, so restore needs this
