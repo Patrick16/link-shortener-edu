@@ -19,6 +19,7 @@
 		     (deliberately absent from ServiceDefaults, see the comment in its csproj). -->
 		<PackageReference Include="Grpc.Core.Api" />
 		<PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
 		<PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" />
 		<PackageReference Include="Scalar.AspNetCore" />
 		<!-- JwtAuthenticationExtensions.AddJwtBearerAuthentication - shared JWT Bearer setup for every
