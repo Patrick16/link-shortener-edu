@@ -17,6 +17,7 @@
 		<PackageReference Include="Grpc.AspNetCore" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" VersionOverride="10.0.13" />
 		<PackageReference Include="Microsoft.Extensions.Configuration" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection" />
 		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
 		<PackageReference Include="RabbitMQ.Client" />
 		<PackageReference Include="Microsoft.Data.Sqlite" />
